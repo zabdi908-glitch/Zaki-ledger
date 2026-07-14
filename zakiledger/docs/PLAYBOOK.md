@@ -191,6 +191,8 @@ exact shape of our product is a signal the wedge is right.
 turn hours of founder admin into minutes, for the price of a coffee.
 
 **Do this:** Build the Outreach GPT before the first cold wave; reuse it every batch of 8–10.
+The reusable prompts are written and ready in [`docs/prompts/`](./prompts/) — the Master Prompt
+plus a 4R cold-outreach System Prompt.
 
 ### 5.2 — "How to Actually Make Money Online" (the PSL + trust-first video)
 **What it is:** Win attention with the **PSL** content format — **Point** (the exact pain your
