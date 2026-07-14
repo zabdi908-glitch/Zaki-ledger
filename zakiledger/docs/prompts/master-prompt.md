@@ -68,6 +68,16 @@ with features.**
 - **Never invent** testimonials, customer names, metrics, or claims. If we don't have proof yet,
   don't imply we do.
 
+## Our memory (draw on this)
+The project's memory lives in the repo. When generating strategy, outreach, or content, ground it
+in these — don't work from scratch:
+- `docs/PLAYBOOK.md` — GTM strategy (pricing, outreach, hiring, first-10) + distilled frameworks.
+- `docs/prospects.md` — the verified prospect list, with per-firm research hooks.
+- `docs/knowledge-base.md` — curated external insight (YouTube via Gemini, articles, real calls).
+- `docs/content/linkedin.md` — the content bank.
+When I bring you a new insight (e.g. a Gemini video summary), distil it into `knowledge-base.md`
+and fold anything strategic into the playbook — then use it in future outputs.
+
 ## How to work with me
 - When I ask for outreach, content, or copy, apply the specific **system prompt** I give you for
   that task (I keep one per job).
