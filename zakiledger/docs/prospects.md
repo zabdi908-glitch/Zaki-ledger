@@ -127,6 +127,41 @@ outreach system prompt after "I noticed…".
 
 ---
 
+## Batch 2 sourcing — screened 2026-07-14
+
+A 23-firm batch was screened against the ICP. **Result: 1 fit, 1 duplicate, 1 conflict, 20 rejected.**
+The batch came from broad "accounting firm" directories, which swept in US CPAs and large UK
+practices — hence the low hit rate.
+
+**ICP filter — apply BEFORE adding any firm:** UK-based (`.co.uk` / a UK town) · bookkeeping-led ·
+sole trader up to ~10 staff · ideally owner-named. **Auto-exclude** if you see: `CPA`, `LLP`,
+`LLC`, `Inc`, `.ca` or a US address, "Top-40 firm", "audit / registered auditor", 50+ staff,
+"all 50 states", or VA-staffing / fractional-CFO companies.
+
+**Added (fits ICP):**
+| # | Firm | Location | Contact | Email | Hook ("I noticed…") |
+|---|------|----------|---------|-------|---------------------|
+| 41 | UKZ Accountancy Services | Birmingham | — | info@ukzaccountancy.com | you're an e-commerce and landlord-focused accountancy firm in Birmingham |
+> ⚠️ #41 is borderline — an accountancy firm, but small and does bookkeeping for sole traders,
+> e-commerce and landlords. Fine for a test send; not a pure bookkeeper.
+
+**Not added:**
+- **Duplicate:** Solely Bookkeeping (already #1).
+- **Conflict — resolve before use:** Acenteus (`hi@acenteus-cca.com` vs `enquiries@acenteus.com`).
+- **Too big / chartered-audit (UK):** Harold Sharp (50+ staff, since 1927), DJH Manchester
+  (Top-40 group, 90+ staff), Reflex Accounting (chartered + audit), Agile Accountants
+  (chartered certified).
+- **US / Canada (different market + law — parked, not pursued):** Avenues Financial (Utah),
+  George Dimov CPA, indinero, Zenbooks (`.ca`), Safe Harbor LLP, Mandel & King CPAs,
+  Osaghae & Associates, William P Connor CPA, Ravix Group, Clarity Tax Group, B.O.L. Global,
+  Custom Accounting Inc, Noble Accounting LLC, BELAY, Attivo Partners, Pacific Accounting
+  (non-UK/outsourcing).
+
+**Decision (2026-07-14):** staying **UK small-firm only**. US/international is a separate future
+campaign (needs US-compliant email + its own sending domain) — not mixed into these waves.
+
+---
+
 ## Outreach status tracker
 _Update as you go. Reply-rate is the signal that tells us when to scale volume._
 
