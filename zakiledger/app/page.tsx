@@ -3,7 +3,12 @@
 import { useState } from "react";
 import { REVIEWABLE_FIELDS, type InvoiceExtraction, type ReviewableField } from "@/lib/schema";
 
-type ExtractResponse = { extraction: InvoiceExtraction; arithmeticMismatch: boolean; demo?: boolean };
+type ExtractResponse = {
+  extraction: InvoiceExtraction;
+  arithmeticMismatch: boolean;
+  demo?: boolean;
+  refinedForSupplier?: string | null;
+};
 
 /** Below this, a field is "low confidence" and gets flagged for the human. */
 const CONFIDENCE_THRESHOLD = 0.85;
@@ -74,6 +79,13 @@ export default function Home() {
         <p style={demoStyle}>
           🧪 Demo mode — this is a sample invoice (no API key set). Add
           <code> ANTHROPIC_API_KEY</code> to extract from real uploads.
+        </p>
+      )}
+
+      {result?.refinedForSupplier && (
+        <p style={learnedStyle}>
+          🧠 Refined using what we&apos;ve learned from past corrections for{" "}
+          <strong>{result.refinedForSupplier}</strong>.
         </p>
       )}
 
@@ -157,6 +169,15 @@ const demoStyle: React.CSSProperties = {
   background: "#eef2ff",
   border: "1px solid #c7d2fe",
   color: "#3730a3",
+  padding: "8px 12px",
+  borderRadius: 8,
+  fontSize: 14,
+};
+const learnedStyle: React.CSSProperties = {
+  marginTop: 20,
+  background: "#e8f8f0",
+  border: "1px solid #a9dfbf",
+  color: "#1e6b45",
   padding: "8px 12px",
   borderRadius: 8,
   fontSize: 14,

@@ -85,7 +85,9 @@ Deploy to **Vercel** (it auto-detects Next.js — no config needed):
 ## Next steps (mirrors the roadmap)
 
 - [x] Wire the correction ledger to Supabase (`lib/store.ts` is now Supabase-backed, with an in-memory fallback when keys are absent; `/api/approve` also persists the approved invoice)
-- [ ] Add supplier-specific few-shot retrieval (learn per vendor)
+- [x] Add supplier-specific few-shot retrieval (learn per vendor) — `/api/extract` now does a
+  two-pass read: pass 1 identifies the supplier, then if we hold corrections for that supplier it
+  re-extracts with their targeted hints (second call only fires when supplier history exists)
 - [ ] Add the Xero OAuth flow + "post to Xero" action
 - [ ] Bulk approve + full audit-log view
 - [ ] Receipts (not just invoices)
