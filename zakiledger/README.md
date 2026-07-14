@@ -61,7 +61,7 @@ One table, two payoffs. It is populated from invoice #1 — never bolt it on lat
 
 ## Next steps (mirrors the roadmap)
 
-- [ ] Wire the correction ledger to Supabase (currently an in-memory stub in `lib/store.ts`)
+- [x] Wire the correction ledger to Supabase (`lib/store.ts` is now Supabase-backed, with an in-memory fallback when keys are absent; `/api/approve` also persists the approved invoice)
 - [ ] Add supplier-specific few-shot retrieval (learn per vendor)
 - [ ] Add the Xero OAuth flow + "post to Xero" action
 - [ ] Bulk approve + full audit-log view

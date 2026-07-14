@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { recordCorrection } from "@/lib/store";
+import { recordCorrection, saveApprovedInvoice } from "@/lib/store";
 import { REVIEWABLE_FIELDS, type InvoiceExtraction } from "@/lib/schema";
+
+/** Parse a human-facing string into a number, or null when it isn't one. */
+function toNumber(s: string): number | null {
+  const n = parseFloat(s);
+  return Number.isFinite(n) ? n : null;
+}
 
 /**
  * POST /api/approve
@@ -18,15 +24,34 @@ export async function POST(req: NextRequest) {
       edited: Record<string, string>;
     };
 
-    const supplierName = edited.supplierName ?? extraction.supplierName.value;
-    const corrections = [];
+    // The approved final value for a field: the human's edit if present,
+    // otherwise the AI's proposed value.
+    const finalOf = (field: string) =>
+      edited[field] ?? String((extraction as any)[field].value);
 
+    const supplierName = finalOf("supplierName");
+
+    // Persist the human-approved invoice first, so corrections can link to it.
+    const invoiceId = await saveApprovedInvoice({
+      supplierName,
+      invoiceNumber: finalOf("invoiceNumber"),
+      invoiceDate: finalOf("invoiceDate") || null,
+      currency: finalOf("currency"),
+      subtotal: toNumber(finalOf("subtotal")),
+      tax: toNumber(finalOf("tax")),
+      total: toNumber(finalOf("total")),
+      overallConfidence: extraction.overallConfidence,
+    });
+
+    // Feed the moat: append a ledger row for every field the human changed.
+    const corrections = [];
     for (const field of REVIEWABLE_FIELDS) {
       const aiValue = String((extraction as any)[field].value);
       const humanValue = edited[field];
       if (humanValue !== undefined && humanValue !== aiValue) {
         corrections.push(
-          recordCorrection({
+          await recordCorrection({
+            invoiceId: invoiceId ?? undefined,
             supplierName,
             field,
             aiValue,
@@ -40,6 +65,7 @@ export async function POST(req: NextRequest) {
     // TODO (Month 3): post the approved invoice to Xero here.
     return NextResponse.json({
       status: "approved",
+      invoiceId,
       correctionsRecorded: corrections.length,
       corrections,
     });

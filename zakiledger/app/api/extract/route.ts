@@ -21,7 +21,7 @@ export async function POST(req: NextRequest) {
     const mediaType = file.type || "application/pdf";
 
     // Learning loop: inject hints from past corrections (cross-supplier on first pass).
-    const hints = buildHints();
+    const hints = await buildHints();
 
     const extraction = await extractInvoice(base64, mediaType, hints);
 
