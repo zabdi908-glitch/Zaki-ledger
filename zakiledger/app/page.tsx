@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { REVIEWABLE_FIELDS, type InvoiceExtraction, type ReviewableField } from "@/lib/schema";
 
-type ExtractResponse = { extraction: InvoiceExtraction; arithmeticMismatch: boolean };
+type ExtractResponse = { extraction: InvoiceExtraction; arithmeticMismatch: boolean; demo?: boolean };
 
 /** Below this, a field is "low confidence" and gets flagged for the human. */
 const CONFIDENCE_THRESHOLD = 0.85;
@@ -69,6 +69,13 @@ export default function Home() {
       </label>
 
       {error && <p style={{ color: "#c0392b" }}>{error}</p>}
+
+      {result?.demo && (
+        <p style={demoStyle}>
+          🧪 Demo mode — this is a sample invoice (no API key set). Add
+          <code> ANTHROPIC_API_KEY</code> to extract from real uploads.
+        </p>
+      )}
 
       {result && (
         <section style={cardStyle}>
@@ -144,6 +151,15 @@ const cardStyle: React.CSSProperties = {
   background: "#fff",
   borderRadius: 12,
   boxShadow: "0 1px 3px rgba(0,0,0,0.08)",
+};
+const demoStyle: React.CSSProperties = {
+  marginTop: 20,
+  background: "#eef2ff",
+  border: "1px solid #c7d2fe",
+  color: "#3730a3",
+  padding: "8px 12px",
+  borderRadius: 8,
+  fontSize: 14,
 };
 const warnStyle: React.CSSProperties = {
   background: "#fef9e7",

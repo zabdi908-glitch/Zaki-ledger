@@ -48,20 +48,43 @@ One table, two payoffs. It is populated from invoice #1 — never bolt it on lat
 - **Tailwind + shadcn/ui** for the review UI (add as you flesh out the front end)
 - **Xero API** as the first accounting integration (Month 3)
 
-## Running it
+## Running it — three tiers of testing
 
-> ⚠️ **Honest note:** this is a working skeleton, not a finished, tested app. It needs
-> real API keys and a Postgres/Supabase database to run end-to-end. It has **not** been
-> executed here (no keys in this environment). Treat it as the scaffold to build on.
+You can test at three levels, from zero-setup to fully wired. All of them are the
+same app; each tier just adds a capability.
 
-1. `cd zaki-ledger/app && npm install`
-2. Copy `.env.example` to `.env.local` and fill in the keys.
-3. Create the database tables: run `db/schema.sql` against your Postgres/Supabase DB.
-4. `npm run dev` → open http://localhost:3000
+```
+cd zakiledger
+npm install
+npm run dev          # → http://localhost:3000
+```
+
+**Tier 1 — Demo mode (no keys, no database).** Just run it. With no
+`ANTHROPIC_API_KEY` set, uploading *any* file returns a realistic sample invoice
+so you can click the whole flow: review → edit a flagged field → approve → see
+"correction recorded." Corrections live in memory (reset on restart). Perfect for
+showing an accountant the UX in 30 seconds.
+
+**Tier 2 — Real extraction.** Copy `.env.example` to `.env.local` and set
+`ANTHROPIC_API_KEY`. Now uploads are read by Claude vision — real invoices, real
+confidence scores. Corrections still in memory unless you add tier 3.
+
+**Tier 3 — Real persistence.** Also set `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY`,
+and run `db/schema.sql` in your Supabase project's SQL editor. Now approved
+invoices and the correction ledger persist across restarts — the moat is live.
+
+### Testing it on a URL (share with a real accountant)
+
+Deploy to **Vercel** (it auto-detects Next.js — no config needed):
+1. Push this repo (done) and import it at vercel.com → set the root directory to
+   `zakiledger`.
+2. Deploy with **no env vars** → you get a public URL running in demo mode.
+3. Add `ANTHROPIC_API_KEY` (and optionally the Supabase vars) in Vercel → Settings
+   → Environment Variables, then redeploy to go from demo to real.
 
 ## Next steps (mirrors the roadmap)
 
-- [ ] Wire the correction ledger to Supabase (currently an in-memory stub in `lib/store.ts`)
+- [x] Wire the correction ledger to Supabase (`lib/store.ts` is now Supabase-backed, with an in-memory fallback when keys are absent; `/api/approve` also persists the approved invoice)
 - [ ] Add supplier-specific few-shot retrieval (learn per vendor)
 - [ ] Add the Xero OAuth flow + "post to Xero" action
 - [ ] Bulk approve + full audit-log view

@@ -12,10 +12,10 @@ import { recentCorrections, correctionsForSupplier, type Correction } from "./st
  * FIRST pass uses recent cross-supplier corrections; a future refinement re-runs
  * with supplier-specific corrections once the supplier is known (see README).
  */
-export function buildHints(supplierName?: string): string | undefined {
+export async function buildHints(supplierName?: string): Promise<string | undefined> {
   const corrections: Correction[] = supplierName
-    ? correctionsForSupplier(supplierName)
-    : recentCorrections();
+    ? await correctionsForSupplier(supplierName)
+    : await recentCorrections();
 
   if (corrections.length === 0) return undefined;
 
