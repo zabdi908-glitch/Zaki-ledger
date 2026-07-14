@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { extractInvoice } from "@/lib/anthropic";
 import { buildHints } from "@/lib/learning";
 import { arithmeticMismatch } from "@/lib/schema";
+import { sampleExtraction } from "@/lib/demo";
 
 /**
  * POST /api/extract
@@ -16,20 +17,27 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "No file uploaded." }, { status: 400 });
     }
 
-    const buffer = Buffer.from(await file.arrayBuffer());
-    const base64 = buffer.toString("base64");
-    const mediaType = file.type || "application/pdf";
+    // Demo mode: with no Anthropic key, return a realistic sample so the full
+    // review → approve → learn flow works with zero setup. Real key = real Claude.
+    const demo = !process.env.ANTHROPIC_API_KEY;
 
-    // Learning loop: inject hints from past corrections (cross-supplier on first pass).
-    const hints = await buildHints();
-
-    const extraction = await extractInvoice(base64, mediaType, hints);
+    let extraction;
+    if (demo) {
+      extraction = sampleExtraction();
+    } else {
+      const buffer = Buffer.from(await file.arrayBuffer());
+      const base64 = buffer.toString("base64");
+      const mediaType = file.type || "application/pdf";
+      // Learning loop: inject hints from past corrections (cross-supplier on first pass).
+      const hints = await buildHints();
+      extraction = await extractInvoice(base64, mediaType, hints);
+    }
 
     // Consistency check — flag internally-inconsistent extractions for a human,
     // regardless of the model's stated confidence.
     const mismatch = arithmeticMismatch(extraction);
 
-    return NextResponse.json({ extraction, arithmeticMismatch: mismatch });
+    return NextResponse.json({ extraction, arithmeticMismatch: mismatch, demo });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Extraction failed.";
     return NextResponse.json({ error: message }, { status: 500 });
