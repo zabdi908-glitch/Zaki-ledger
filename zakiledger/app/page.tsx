@@ -65,7 +65,8 @@ export default function Home() {
     <main style={{ maxWidth: 720, margin: "0 auto", padding: "48px 20px" }}>
       <h1 style={{ marginBottom: 4 }}>Zaki Ledger</h1>
       <p style={{ color: "#667", marginTop: 0 }}>
-        Upload an invoice. The AI drafts, you approve, it learns.
+        Upload an invoice. The AI drafts, you approve, it learns.{" "}
+        <a href="/corrections" style={{ color: "#1a2b4a" }}>View the correction ledger →</a>
       </p>
 
       <label style={btnStyle}>

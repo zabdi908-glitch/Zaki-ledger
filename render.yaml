@@ -1,0 +1,27 @@
+# Render Blueprint — deploy Zaki Ledger.
+#
+# In Render:  New +  →  Blueprint  →  connect this repo  →  Apply.
+# Then set the secret env vars (marked sync:false) in the dashboard when prompted:
+#   - ANTHROPIC_API_KEY          (required to test real extraction + learning)
+#   - SUPABASE_URL               (optional — for persistence across restarts)
+#   - SUPABASE_SERVICE_ROLE_KEY  (optional)
+#
+# With NO keys it still boots in demo mode. With ANTHROPIC_API_KEY set, it does
+# real extraction and the per-supplier learning loop.
+services:
+  - type: web
+    name: zaki-ledger
+    runtime: node
+    rootDir: zakiledger
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
