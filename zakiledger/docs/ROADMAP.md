@@ -196,4 +196,28 @@ Get the rails in place before building.
 
 ---
 
+## 10. Path to 10 clients (how we handle traction)
+
+Two sides — people and product.
+
+**People (doable solo — and the point):**
+- Onboard **one firm at a time** using `docs/onboarding-sop.md`. High-touch is intentional early.
+- Support is **founder-led and personal** — every request is a product insight.
+- ~30 min/week per firm at first. First hire (an **assistant**, per PLAYBOOK §3) only when admin
+  reliably steals your build/sell hours — around real revenue, not before.
+
+**Product (build when usage demands it, not before):**
+- Today's MVP has **no auth** and **no per-firm data separation** — fine for manual, one-at-a-time
+  design partners; not fine for 10 concurrent logins.
+- Before 10 concurrent firms, build: (1) **accounts/auth**; (2) **multi-tenancy** — an `org_id` on
+  every row + Postgres **row-level security** so no firm ever sees another's data; (3) **per-firm
+  isolation** of the correction-ledger learning.
+- **Volume is a non-issue** — 10 firms of invoices is trivial for Postgres + the Claude API. The
+  work is isolation, not scale.
+
+**Trigger & sequence:** onboard first design partners manually now → when **2–3 use it weekly
+(Month 2–3)**, build auth + tenant isolation → then scale to 10.
+
+---
+
 *This is a living document — review and update it every Friday.*
