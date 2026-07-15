@@ -13,6 +13,17 @@ type ExtractResponse = {
 /** Below this, a field is "low confidence" and gets flagged for the human. */
 const CONFIDENCE_THRESHOLD = 0.85;
 
+/** Human-readable labels — bookkeepers should never see raw field keys. */
+const FIELD_LABELS: Record<ReviewableField, string> = {
+  supplierName: "Supplier",
+  invoiceNumber: "Invoice number",
+  invoiceDate: "Invoice date",
+  currency: "Currency",
+  subtotal: "Subtotal",
+  tax: "Tax",
+  total: "Total",
+};
+
 export default function Home() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<ExtractResponse | null>(null);
@@ -39,7 +50,6 @@ export default function Home() {
       return;
     }
     setResult(data);
-    // Pre-fill the editable form with the AI's proposed values.
     const initial: Record<string, string> = {};
     for (const f of REVIEWABLE_FIELDS) initial[f] = String((data.extraction as any)[f].value);
     setEdited(initial);
@@ -62,24 +72,61 @@ export default function Home() {
   }
 
   return (
-    <main style={{ maxWidth: 720, margin: "0 auto", padding: "48px 20px" }}>
-      <h1 style={{ marginBottom: 4 }}>Zaki Ledger</h1>
-      <p style={{ color: "#667", marginTop: 0 }}>
-        Upload an invoice. The AI drafts, you approve, it learns.{" "}
-        <a href="/corrections" style={{ color: "#1a2b4a" }}>View the correction ledger →</a>
+    <main style={{ maxWidth: 680, margin: "0 auto", padding: "40px 20px 64px" }}>
+      <header style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
+        <span style={markStyle}>ZL</span>
+        <div>
+          <div style={{ fontSize: 20, fontWeight: 700, color: "#1a2b4a", lineHeight: 1.1 }}>
+            Zaki Ledger
+          </div>
+          <div style={{ fontSize: 13, color: "#8892a0" }}>
+            AI invoice entry for bookkeepers
+          </div>
+        </div>
+      </header>
+
+      <p style={{ color: "#556", marginTop: 0, marginBottom: 24 }}>
+        The AI drafts every field with a confidence score. You check and approve in one click —
+        nothing is saved without you.{" "}
+        <a href="/corrections" style={{ color: "#1a2b4a", fontWeight: 600 }}>
+          View the correction ledger →
+        </a>
       </p>
 
-      <label style={btnStyle}>
-        {loading ? "Reading invoice…" : "Upload invoice (PDF or image)"}
+      <label style={loading ? { ...btnStyle, opacity: 0.7 } : btnStyle}>
+        {loading ? "Reading invoice…" : "＋ Upload invoice (PDF or image)"}
         <input type="file" accept="application/pdf,image/*" onChange={onUpload} hidden disabled={loading} />
       </label>
 
-      {error && <p style={{ color: "#c0392b" }}>{error}</p>}
+      {error && <p style={{ color: "#c0392b", marginTop: 16 }}>{error}</p>}
+
+      {/* Cold-open explainer — helps a first-time visitor understand it instantly. */}
+      {!result && !loading && !error && (
+        <section style={howCardStyle}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#8892a0", letterSpacing: 0.4 }}>
+            HOW IT WORKS
+          </div>
+          <ol style={{ margin: "12px 0 0", paddingLeft: 0, listStyle: "none" }}>
+            {[
+              ["1", "Upload", "Drop in an invoice or receipt — PDF or a photo."],
+              ["2", "Review", "Each field is scored: green means sure, amber means check. Fix anything wrong."],
+              ["3", "Approve & it learns", "One click. Every correction makes the next read sharper."],
+            ].map(([n, t, d]) => (
+              <li key={n} style={{ display: "flex", gap: 12, marginBottom: 12 }}>
+                <span style={stepNumStyle}>{n}</span>
+                <span style={{ fontSize: 14, color: "#445" }}>
+                  <strong style={{ color: "#1a2b4a" }}>{t}.</strong> {d}
+                </span>
+              </li>
+            ))}
+          </ol>
+        </section>
+      )}
 
       {result?.demo && (
         <p style={demoStyle}>
-          🧪 Demo mode — this is a sample invoice (no API key set). Add
-          <code> ANTHROPIC_API_KEY</code> to extract from real uploads.
+          🧪 <strong>Demo mode</strong> — this is a sample invoice. Add an API key to extract from
+          your own uploads.
         </p>
       )}
 
@@ -92,6 +139,9 @@ export default function Home() {
 
       {result && (
         <section style={cardStyle}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#8892a0", letterSpacing: 0.4, marginBottom: 16 }}>
+            REVIEW &amp; APPROVE
+          </div>
           {result.arithmeticMismatch && (
             <p style={warnStyle}>
               ⚠️ Subtotal + tax doesn&apos;t equal total — please double-check the amounts.
@@ -100,14 +150,14 @@ export default function Home() {
           {REVIEWABLE_FIELDS.map((f) => (
             <Field
               key={f}
-              name={f}
+              label={FIELD_LABELS[f]}
               confidence={(result.extraction as any)[f].confidence}
               value={edited[f] ?? ""}
               onChange={(v) => setEdited((prev) => ({ ...prev, [f]: v }))}
             />
           ))}
-          <button style={approveBtn} onClick={onApprove}>Approve</button>
-          {approved && <p style={{ color: "#1e8449", fontWeight: 600 }}>{approved}</p>}
+          <button style={approveBtn} onClick={onApprove}>✓ Approve</button>
+          {approved && <p style={{ color: "#1e8449", fontWeight: 600, marginBottom: 0 }}>{approved}</p>}
         </section>
       )}
     </main>
@@ -115,12 +165,12 @@ export default function Home() {
 }
 
 function Field({
-  name,
+  label,
   value,
   confidence,
   onChange,
 }: {
-  name: ReviewableField;
+  label: string;
   value: string;
   confidence: number;
   onChange: (v: string) => void;
@@ -128,9 +178,9 @@ function Field({
   const low = confidence < CONFIDENCE_THRESHOLD;
   return (
     <div style={{ marginBottom: 14 }}>
-      <label style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "#556" }}>
-        <span>{name}</span>
-        <span style={{ color: low ? "#c0392b" : "#1e8449" }}>
+      <label style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13, color: "#556", marginBottom: 4 }}>
+        <span style={{ fontWeight: 600 }}>{label}</span>
+        <span style={low ? chipLow : chipOk}>
           {low ? "⚠ check" : "✓"} {(confidence * 100).toFixed(0)}%
         </span>
       </label>
@@ -139,24 +189,62 @@ function Field({
         onChange={(e) => onChange(e.target.value)}
         style={{
           width: "100%",
-          padding: "8px 10px",
-          borderRadius: 6,
+          padding: "10px 12px",
+          borderRadius: 8,
+          fontSize: 15,
+          boxSizing: "border-box",
           border: `1px solid ${low ? "#e6b0aa" : "#d5dbdb"}`,
           background: low ? "#fdf2f0" : "#fff",
+          outline: "none",
         }}
       />
     </div>
   );
 }
 
-const btnStyle: React.CSSProperties = {
-  display: "inline-block",
-  padding: "12px 18px",
+const markStyle: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  width: 40,
+  height: 40,
+  borderRadius: 10,
   background: "#1a2b4a",
   color: "#fff",
-  borderRadius: 8,
+  fontWeight: 700,
+  fontSize: 15,
+  letterSpacing: 0.5,
+};
+const btnStyle: React.CSSProperties = {
+  display: "inline-block",
+  padding: "12px 20px",
+  background: "#1a2b4a",
+  color: "#fff",
+  borderRadius: 10,
   cursor: "pointer",
   fontWeight: 600,
+  fontSize: 15,
+};
+const howCardStyle: React.CSSProperties = {
+  marginTop: 24,
+  padding: 24,
+  background: "#fff",
+  borderRadius: 12,
+  boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
+  border: "1px solid #eef1f4",
+};
+const stepNumStyle: React.CSSProperties = {
+  flexShrink: 0,
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  width: 24,
+  height: 24,
+  borderRadius: "50%",
+  background: "#eef2ff",
+  color: "#1a2b4a",
+  fontWeight: 700,
+  fontSize: 13,
 };
 const cardStyle: React.CSSProperties = {
   marginTop: 24,
@@ -164,13 +252,14 @@ const cardStyle: React.CSSProperties = {
   background: "#fff",
   borderRadius: 12,
   boxShadow: "0 1px 3px rgba(0,0,0,0.08)",
+  border: "1px solid #eef1f4",
 };
 const demoStyle: React.CSSProperties = {
   marginTop: 20,
   background: "#eef2ff",
   border: "1px solid #c7d2fe",
   color: "#3730a3",
-  padding: "8px 12px",
+  padding: "10px 14px",
   borderRadius: 8,
   fontSize: 14,
 };
@@ -179,24 +268,43 @@ const learnedStyle: React.CSSProperties = {
   background: "#e8f8f0",
   border: "1px solid #a9dfbf",
   color: "#1e6b45",
-  padding: "8px 12px",
+  padding: "10px 14px",
   borderRadius: 8,
   fontSize: 14,
 };
 const warnStyle: React.CSSProperties = {
   background: "#fef9e7",
   border: "1px solid #f7dc6f",
-  padding: "8px 12px",
-  borderRadius: 6,
+  padding: "10px 14px",
+  borderRadius: 8,
   fontSize: 14,
+  marginTop: 0,
+};
+const chipOk: React.CSSProperties = {
+  background: "#e8f8f0",
+  color: "#1e8449",
+  padding: "2px 8px",
+  borderRadius: 999,
+  fontSize: 12,
+  fontWeight: 600,
+};
+const chipLow: React.CSSProperties = {
+  background: "#fdecea",
+  color: "#c0392b",
+  padding: "2px 8px",
+  borderRadius: 999,
+  fontSize: 12,
+  fontWeight: 600,
 };
 const approveBtn: React.CSSProperties = {
   marginTop: 8,
-  padding: "10px 20px",
+  marginBottom: 12,
+  padding: "11px 22px",
   background: "#1e8449",
   color: "#fff",
   border: "none",
-  borderRadius: 8,
+  borderRadius: 10,
   cursor: "pointer",
   fontWeight: 600,
+  fontSize: 15,
 };
