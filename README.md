@@ -16,7 +16,7 @@ See `zakiledger/docs/FOCUS.md` for the full strategy.
 
 ## 📊 Current Status
 
-**Last updated:** 2026-07-16 (Day 1 of Wave 1 outreach)
+**Last updated:** 2026-07-17 (Infrastructure live, Wave 1 ready to send)
 
 ### ✅ What's Done
 - Invoice extraction with confidence scores (Claude vision)
@@ -26,14 +26,18 @@ See `zakiledger/docs/FOCUS.md` for the full strategy.
 - Demo mode (runs with no API keys)
 - Polished, branded UI
 - `render.yaml` deployment blueprint ready
-- Domain `zakiledger.co.uk` live + email verified
+- **Domain `zakiledger.co.uk` purchased & live** ✓
+- **Email `zachi@zakiledger.co.uk` set up in Proton Mail** ✓
+- **DNS records fully verified** (SPF, DKIM, DMARC, MX, Addresses all green) ✓
 - Wave 1: 9 personalized cold emails ready to send
+- README created (handoff doc for any session/developer)
+- 2-day Routine set up to auto-update README with progress
 
 ### 📍 What's Next (This Week)
-1. **Send Wave 1** (20 mins, spaced 15–30 min apart, starting tomorrow)
-2. **Get first reply** (watch for bookkeeper responses)
-3. **Book a 20-min call** (show the demo, ask how they work)
-4. **Get approval** (one person tries it, confirms it saves time)
+1. **Send Wave 1 emails** (starting today, spaced 15–30 min apart; domain warmed up after 24h test)
+2. **Get first reply** (watch Proton Mail inbox over next 3–5 days)
+3. **Book a 20-min call** (show demo, watch how they work)
+4. **Get approval** (one person tries it, confirms it saves time — target hit)
 
 ### ⏸️ Parked (After Believer #1)
 - Bulk approve, receipts, posting into Xero/QuickBooks
