@@ -16,7 +16,7 @@ See `zakiledger/docs/FOCUS.md` for the full strategy.
 
 ## 📊 Current Status
 
-**Last updated:** 2026-07-17 (Infrastructure live, Wave 1 ready to send)
+**Last updated:** 2026-07-19 (Wave 1 sent, monitoring for replies)
 
 ### ✅ What's Done
 - Invoice extraction with confidence scores (Claude vision)
@@ -27,17 +27,17 @@ See `zakiledger/docs/FOCUS.md` for the full strategy.
 - Polished, branded UI
 - `render.yaml` deployment blueprint ready
 - **Domain `zakiledger.co.uk` purchased & live** ✓
-- **Email `zachi@zakiledger.co.uk` set up in Proton Mail** ✓
+- **Email `zachi@zakiledger.co.uk` set up in Gmail** ✓
 - **DNS records fully verified** (SPF, DKIM, DMARC, MX, Addresses all green) ✓
-- Wave 1: 9 personalized cold emails ready to send
+- **Wave 1: All 9 personalized cold emails sent** ✓ (spaced 15–30 min apart)
 - README created (handoff doc for any session/developer)
 - 2-day Routine set up to auto-update README with progress
 
-### 📍 What's Next (This Week)
-1. **Send Wave 1 emails** (starting today, spaced 15–30 min apart; domain warmed up after 24h test)
-2. **Get first reply** (watch Proton Mail inbox over next 3–5 days)
-3. **Book a 20-min call** (show demo, watch how they work)
-4. **Get approval** (one person tries it, confirms it saves time — target hit)
+### 📍 What's Next (Right Now — This Week)
+1. **Monitor Gmail inbox** (first replies land in 24–72 hours, usually by day 3–5)
+2. **Reply fast** (within same day; offer 20-min demo call)
+3. **Book first call** (show demo, watch how they work, validate pain)
+4. **Get approval** (one person tries it, confirms "that saved me time" — target hit)
 
 ### ⏸️ Parked (After Believer #1)
 - Bulk approve, receipts, posting into Xero/QuickBooks
