@@ -16,7 +16,7 @@ See `zakiledger/docs/FOCUS.md` for the full strategy.
 
 ## 📊 Current Status
 
-**Last updated:** 2026-07-19 (Wave 1 sent, monitoring for replies)
+**Last updated:** 2026-07-21 (First warm lead engaged on LinkedIn)
 
 ### ✅ What's Done
 - Invoice extraction with confidence scores (Claude vision)
@@ -30,14 +30,17 @@ See `zakiledger/docs/FOCUS.md` for the full strategy.
 - **Email `zachi@zakiledger.co.uk` set up in Gmail** ✓
 - **DNS records fully verified** (SPF, DKIM, DMARC, MX, Addresses all green) ✓
 - **Wave 1: All 9 personalized cold emails sent** ✓ (spaced 15–30 min apart)
+- **First warm lead:** Muhammad Waris Raees (Xero specialist, LinkedIn) — interested, wants explanation ✓
+- LinkedIn strategy active (3x/week posts, high-engagement content)
 - README created (handoff doc for any session/developer)
 - 2-day Routine set up to auto-update README with progress
 
 ### 📍 What's Next (Right Now — This Week)
-1. **Monitor Gmail inbox** (first replies land in 24–72 hours, usually by day 3–5)
-2. **Reply fast** (within same day; offer 20-min demo call)
-3. **Book first call** (show demo, watch how they work, validate pain)
-4. **Get approval** (one person tries it, confirms "that saved me time" — target hit)
+1. **Send explanation to Muhammad** (via LinkedIn, explain what Zaki does, mention Phase 1 + future)
+2. **Post on LinkedIn** (3x/week strategy: problem/story posts, questions, founder updates)
+3. **Book first call with Muhammad** (after explanation, ask for 20-min demo)
+4. **Monitor Wave 1 emails** (watch for other replies in Gmail)
+5. **Get approval** (first person tries it, confirms "that saved me time" — target hit)
 
 ### ⏸️ Parked (After Believer #1)
 - Bulk approve, receipts, posting into Xero/QuickBooks
