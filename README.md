@@ -16,7 +16,7 @@ See `zakiledger/docs/FOCUS.md` for the full strategy.
 
 ## 📊 Current Status
 
-**Last updated:** 2026-07-23 (Two warm leads engaged, market validation complete, roadmap clarified)
+**Last updated:** 2026-07-23 (Product rebuild decision made, Phase 1+3 is critical path)
 
 ### ✅ What's Done
 - Invoice extraction with confidence scores (Claude vision)
@@ -29,26 +29,27 @@ See `zakiledger/docs/FOCUS.md` for the full strategy.
 - **Domain `zakiledger.co.uk` purchased & live** ✓
 - **Email `zachi@zakiledger.co.uk` set up in Gmail** ✓
 - **DNS records fully verified** (SPF, DKIM, DMARC, MX, Addresses all green) ✓
-- **Wave 1: All 9 personalized cold emails sent** ✓ (spaced 15–30 min apart)
-- **Two warm leads engaged on LinkedIn:** Muhammad Waris Raees (Xero specialist) + Matthew Dumbleton (bookkeeper) ✓
-- **Market validation:** 3 bookkeepers confirmed bank reconciliation is #1 pain (not invoices) ✓
-- **Roadmap clarified:** Phase 1 is foundation, Phase 4 (bank reconciliation) is the real game-changer ✓
+- **Wave 1: All 9 personalized cold emails sent** ✓
+- **Market validation complete:** Bank reconciliation is #1 pain, but customers won't test invoice extraction alone — must include Xero/QB posting ✓
+- **Product decision made:** Build Phase 1 + Phase 3 together (extract + auto-post), not Phase 1 alone ✓
+- **Xero API confirmed:** 100% free to use, no cost ✓
+- **Visual mockups created:** Phase 1+2+3 flow + Phase 4 (bank reconciliation) for customer demos ✓
 - LinkedIn strategy active (3x/week posts, high-engagement content)
 - README created (handoff doc for any session/developer)
-- 2-day Routine set up to auto-update README with progress
 
 ### 📍 What's Next (This Week — Critical Path)
 1. **Thursday:** Get Anthropic API key (payday) → add credits
-2. **Friday:** Deploy to Render + test live extraction
-3. **Monday:** Give Muhammad + Matthew early access to Phase 1
-4. **Wed–Fri:** They test, give feedback → book first calls
-5. **Next week:** Live demo calls, get first "saved me time" signal (target hit)
+2. **Friday:** Deploy Phase 1+3 to Render + test live extraction with real Xero API
+3. **Next week (Mon–Fri):** Send Wave 2 outreach to 8–10 new prospects from the 40-firm list
+4. **Week 3:** Run demo calls, book 3–5 testers
+5. **Week 4:** Get first "saved me time" signal from at least one real bookkeeper (target hit)
 
 ### ⏸️ Parked (After Believer #1)
-- Bulk approve, receipts, posting into Xero/QuickBooks
+- Phase 2 (receipts + bulk approve) — build after Phase 1+3 is tested
+- Phase 4 (bank reconciliation) — roadmap Month 4
 - Multi-tenancy, advanced auth
-- Dual-model cost optimization (OpenAI gpt-4o-mini + Claude fallback — will drop operating costs from £400/month to £30/month)
-- Additional outreach waves, more leads
+- Dual-model cost optimization
+- Additional outreach waves beyond Wave 2
 
 ---
 
