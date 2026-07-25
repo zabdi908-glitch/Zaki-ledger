@@ -16,7 +16,7 @@ See `zakiledger/docs/FOCUS.md` for the full strategy.
 
 ## 📊 Current Status
 
-**Last updated:** 2026-07-23 (Product rebuild decision made, Phase 1+3 is critical path)
+**Last updated:** 2026-07-25 (Customer research complete. Phase 1+3 ready to deploy Friday. Francisco is warm lead.)
 
 ### ✅ What's Done
 - Invoice extraction with confidence scores (Claude vision)
@@ -29,20 +29,22 @@ See `zakiledger/docs/FOCUS.md` for the full strategy.
 - **Domain `zakiledger.co.uk` purchased & live** ✓
 - **Email `zachi@zakiledger.co.uk` set up in Gmail** ✓
 - **DNS records fully verified** (SPF, DKIM, DMARC, MX, Addresses all green) ✓
-- **Wave 1: All 9 personalized cold emails sent** ✓
-- **Market validation complete:** Bank reconciliation is #1 pain, but customers won't test invoice extraction alone — must include Xero/QB posting ✓
-- **Product decision made:** Build Phase 1 + Phase 3 together (extract + auto-post), not Phase 1 alone ✓
-- **Xero API confirmed:** 100% free to use, no cost ✓
-- **Visual mockups created:** Phase 1+2+3 flow + Phase 4 (bank reconciliation) for customer demos ✓
+- **Wave 1: All 9 personalized cold emails sent** ✓ (Muhammad & Matthew disengaged, not pursuing)
+- **Market validation:** Bookkeepers reject Phase 1 alone; require Xero/QB posting + extraction. Phase 4 (reconciliation) is #1 pain after extraction. ✓
+- **Product rebuild:** Phase 1+3 together is critical path (extract + auto-post). Phase 2+4+5 come after believers. ✓
+- **Xero & QB APIs confirmed:** 100% free. Claude extraction ~$0.03/invoice. Dual-model (GPT fallback) reduces to $0.004–0.03/invoice. ✓
+- **Warm lead identified:** Francisco Javier Te Sierra (QB cleanup specialist). Wants Phase 1-4 complete before testing. Serious prospect. ✓
+- **Visual mockups created:** Phase 1+2+3 workflow + Phase 4 reconciliation + Phase 5 ledger org. Interactive, swipeable, ready for LinkedIn/demos. ✓
+- Session handoff docs created: SESSION_SUMMARY_2026-07-23.md + ACTION_ITEMS.md ✓
 - LinkedIn strategy active (3x/week posts, high-engagement content)
-- README created (handoff doc for any session/developer)
 
 ### 📍 What's Next (This Week — Critical Path)
-1. **Thursday:** Get Anthropic API key (payday) → add credits
-2. **Friday:** Deploy Phase 1+3 to Render + test live extraction with real Xero API
-3. **Next week (Mon–Fri):** Send Wave 2 outreach to 8–10 new prospects from the 40-firm list
-4. **Week 3:** Run demo calls, book 3–5 testers
-5. **Week 4:** Get first "saved me time" signal from at least one real bookkeeper (target hit)
+1. **Friday (TODAY):** Get Anthropic API key (payday) → test $5 credit on 10–20 real invoices
+2. **Friday:** Deploy Phase 1+3 to Render + verify extraction + Xero posting end-to-end
+3. **Monday:** Send Wave 2 outreach via cold calls (not emails) to 8–10 new prospects
+4. **Week 2 (Mon–Fri):** Run live demos, book 3–5 real testers from Wave 2
+5. **Week 3:** Testers use Phase 1+3 on real invoices. Start building Phase 4 in parallel.
+6. **Week 4:** Get first "saved me time" signal from at least one real bookkeeper (target hit)
 
 ### ⏸️ Parked (After Believer #1)
 - Phase 2 (receipts + bulk approve) — build after Phase 1+3 is tested
