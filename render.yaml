@@ -5,9 +5,15 @@
 #   - ANTHROPIC_API_KEY          (required to test real extraction + learning)
 #   - SUPABASE_URL               (optional — for persistence across restarts)
 #   - SUPABASE_SERVICE_ROLE_KEY  (optional)
+#   - XERO_CLIENT_ID             (optional — to connect Xero for draft bills)
+#   - XERO_CLIENT_SECRET         (optional)
+#   - QUICKBOOKS_CLIENT_ID       (optional — to connect QuickBooks for bills)
+#   - QUICKBOOKS_CLIENT_SECRET   (optional)
 #
 # With NO keys it still boots in demo mode. With ANTHROPIC_API_KEY set, it does
-# real extraction and the per-supplier learning loop.
+# real extraction and the per-supplier learning loop. With the Xero/QuickBooks
+# client credentials set, approved invoices post as draft bills to the connected
+# platform.
 services:
   - type: web
     name: zaki-ledger
@@ -24,4 +30,12 @@ services:
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: XERO_CLIENT_ID
+        sync: false
+      - key: XERO_CLIENT_SECRET
+        sync: false
+      - key: QUICKBOOKS_CLIENT_ID
+        sync: false
+      - key: QUICKBOOKS_CLIENT_SECRET
         sync: false

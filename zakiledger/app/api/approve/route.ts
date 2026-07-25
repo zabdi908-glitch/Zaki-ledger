@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { recordCorrection, saveApprovedInvoice } from "@/lib/store";
 import { REVIEWABLE_FIELDS, type InvoiceExtraction } from "@/lib/schema";
+import { postApprovedBill, type PostedBill } from "@/lib/accounting";
 
 /** Parse a human-facing string into a number, or null when it isn't one. */
 function toNumber(s: string): number | null {
@@ -62,12 +63,36 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // TODO (Month 3): post the approved invoice to Xero here.
+    // Post the approved invoice as a draft bill to whichever accounting platform
+    // is connected (Xero ACCPAY / QuickBooks Bill). When neither is connected —
+    // the default demo state — `posted` is null and approval still succeeds.
+    // A failure here shouldn't lose the human's approval, so it's non-fatal: we
+    // report it back rather than throwing.
+    let posted: PostedBill | null = null;
+    let billError: string | undefined;
+    try {
+      posted = await postApprovedBill({
+        supplierName,
+        invoiceNumber: finalOf("invoiceNumber"),
+        invoiceDate: finalOf("invoiceDate") || null,
+        currency: finalOf("currency"),
+        subtotal: toNumber(finalOf("subtotal")),
+        tax: toNumber(finalOf("tax")),
+        total: toNumber(finalOf("total")),
+        lineItems: extraction.lineItems,
+      });
+    } catch (err) {
+      billError = err instanceof Error ? err.message : "Failed to post bill.";
+    }
+
     return NextResponse.json({
       status: "approved",
       invoiceId,
       correctionsRecorded: corrections.length,
       corrections,
+      billId: posted?.billId ?? null,
+      billPlatform: posted?.platform ?? null,
+      billError: billError ?? null,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Approve failed.";

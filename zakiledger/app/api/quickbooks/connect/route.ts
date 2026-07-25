@@ -1,0 +1,34 @@
+import { NextRequest, NextResponse } from "next/server";
+import { appBaseUrl } from "@/lib/oauth-store";
+import { isQuickBooksConfigured, quickbooksAuthorizeUrl } from "@/lib/quickbooks";
+
+/**
+ * GET /api/quickbooks/connect
+ * Starts the QuickBooks Online OAuth flow: generates a CSRF `state`, stashes it
+ * in an httpOnly cookie, and redirects to Intuit's authorize URL.
+ *
+ * In demo mode (no QUICKBOOKS_CLIENT_ID) there's nothing to connect to, so we
+ * return a friendly 200 rather than erroring.
+ */
+export async function GET(req: NextRequest) {
+  if (!isQuickBooksConfigured()) {
+    return NextResponse.json({
+      connected: false,
+      demo: true,
+      message:
+        "QuickBooks is not configured. Set QUICKBOOKS_CLIENT_ID and QUICKBOOKS_CLIENT_SECRET to enable the connection.",
+    });
+  }
+
+  const redirectUri = `${appBaseUrl(req)}/api/quickbooks/callback`;
+  const state = crypto.randomUUID();
+  const res = NextResponse.redirect(quickbooksAuthorizeUrl(redirectUri, state));
+  res.cookies.set("quickbooks_oauth_state", state, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax",
+    path: "/",
+    maxAge: 600, // 10 minutes to complete the flow
+  });
+  return res;
+}

@@ -64,11 +64,21 @@ export default function Home() {
     });
     const data = await res.json();
     if (!res.ok) return setError(data.error ?? "Approve failed.");
-    setApproved(
+
+    const base =
       data.correctionsRecorded > 0
         ? `Approved. ${data.correctionsRecorded} correction(s) recorded — the tool just got smarter.`
-        : "Approved. No corrections needed — the AI got it all right.",
-    );
+        : "Approved. No corrections needed — the AI got it all right.";
+
+    // Surface where the invoice landed once an accounting platform is connected.
+    let bill = "";
+    if (data.billId) {
+      const platform = data.billPlatform === "quickbooks" ? "QuickBooks" : "Xero";
+      bill = ` Posted as a draft bill to ${platform} (ID ${data.billId}).`;
+    } else if (data.billError) {
+      bill = ` (Couldn't post to the accounting platform: ${data.billError})`;
+    }
+    setApproved(base + bill);
   }
 
   return (

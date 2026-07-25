@@ -46,3 +46,19 @@ create table if not exists corrections (
 -- Fast lookups when building few-shot hints for the next extraction.
 create index if not exists corrections_supplier_idx
   on corrections (lower(supplier_name), created_at desc);
+
+-- =========================================================================
+-- Accounting-platform OAuth connections (Xero, QuickBooks).
+-- One row per provider (single-tenant MVP). Access tokens are short-lived and
+-- get overwritten on every refresh; the refresh token keeps the link alive.
+-- Falls back to an in-memory store when Supabase isn't configured — see
+-- lib/oauth-store.ts.
+-- =========================================================================
+create table if not exists oauth_connections (
+  provider      text primary key,        -- 'xero' | 'quickbooks'
+  access_token  text not null,
+  refresh_token text not null,
+  expires_at    timestamptz not null,    -- when the access token expires
+  org_id        text,                    -- Xero tenantId / QuickBooks realmId
+  updated_at    timestamptz not null default now()
+);
