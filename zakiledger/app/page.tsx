@@ -2,13 +2,31 @@
 
 import { useState } from "react";
 import { REVIEWABLE_FIELDS, type InvoiceExtraction, type ReviewableField } from "@/lib/schema";
-import { checkTotals } from "@/lib/validation";
+import { checkTotals, gateApproval } from "@/lib/validation";
 
 /** Parse a review-field string into a number, or null when it isn't one. */
 function parseNum(s: string | undefined): number | null {
   if (s === undefined) return null;
   const n = parseFloat(s);
   return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * Effective confidence per field for the approval gate: a field the human has
+ * edited counts as verified (100%), which is what lets a blocked form unlock
+ * live as the accountant corrects a flagged field — no re-submit needed.
+ */
+function effectiveConfidences(
+  extraction: InvoiceExtraction,
+  edited: Record<string, string>,
+): Record<ReviewableField, number> {
+  const out = {} as Record<ReviewableField, number>;
+  for (const f of REVIEWABLE_FIELDS) {
+    const original = String((extraction as any)[f].value);
+    const wasEdited = edited[f] !== undefined && edited[f] !== original;
+    out[f] = wasEdited ? 1 : (extraction as any)[f].confidence;
+  }
+  return out;
 }
 
 type ExtractResponse = {
@@ -31,6 +49,12 @@ const FIELD_LABELS: Record<ReviewableField, string> = {
   tax: "Tax",
   total: "Total",
 };
+
+/** e.g. "Invoice date not detected (0%)" or "Tax low confidence (34%)". */
+function reasonText(field: ReviewableField, confidence: number): string {
+  const pct = Math.round(confidence * 100);
+  return `${FIELD_LABELS[field]} ${pct === 0 ? "not detected" : "low confidence"} (${pct}%)`;
+}
 
 export default function Home() {
   const [loading, setLoading] = useState(false);
@@ -88,6 +112,9 @@ export default function Home() {
     }
     setApproved(base + bill);
   }
+
+  // Recomputed every render, so editing a flagged field re-evaluates live.
+  const gate = result ? gateApproval(effectiveConfidences(result.extraction, edited)) : null;
 
   return (
     <main style={{ maxWidth: 680, margin: "0 auto", padding: "40px 20px 64px" }}>
@@ -184,7 +211,27 @@ export default function Home() {
               </div>
             );
           })}
-          <button style={approveBtn} onClick={onApprove}>✓ Approve</button>
+          {/* Confidence gate — sits alongside the arithmetic check above. */}
+          {gate && gate.status !== "ready" && (
+            <div style={gate.status === "blocked" ? gateBlockedStyle : gateReviewStyle}>
+              <div style={{ fontWeight: 700 }}>
+                {gate.status === "blocked" ? "❌ Human Review Required" : "⚠ Review Required"}
+              </div>
+              <ul style={{ margin: "6px 0 0", paddingLeft: 20 }}>
+                {gate.reasons.map((r) => (
+                  <li key={r.field}>{reasonText(r.field, r.confidence)}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* Blocked hides the button entirely — a critical field must be fixed
+              first. "review" still lets the human override ("Approve anyway"). */}
+          {gate?.status !== "blocked" && (
+            <button style={approveBtn} onClick={onApprove}>
+              {gate?.status === "review" ? "Approve anyway" : "✓ Approve"}
+            </button>
+          )}
           {approved && <p style={{ color: "#1e8449", fontWeight: 600, marginBottom: 0 }}>{approved}</p>}
         </section>
       )}
@@ -315,6 +362,24 @@ const totalsBadStyle: React.CSSProperties = {
   color: "#c0392b",
   fontSize: 13,
   fontWeight: 600,
+};
+const gateBlockedStyle: React.CSSProperties = {
+  margin: "4px 0 16px",
+  padding: "12px 14px",
+  background: "#fdecea",
+  border: "1px solid #e6b0aa",
+  borderRadius: 8,
+  color: "#c0392b",
+  fontSize: 14,
+};
+const gateReviewStyle: React.CSSProperties = {
+  margin: "4px 0 16px",
+  padding: "12px 14px",
+  background: "#fef9e7",
+  border: "1px solid #f7dc6f",
+  borderRadius: 8,
+  color: "#7d6608",
+  fontSize: 14,
 };
 const chipOk: React.CSSProperties = {
   background: "#e8f8f0",

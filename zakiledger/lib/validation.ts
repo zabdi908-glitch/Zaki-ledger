@@ -1,10 +1,77 @@
 /**
- * Client-side invoice arithmetic validation for the review screen.
+ * Client-side invoice validation for the review screen.
  *
- * Pure calculation on numbers we already hold — no API calls, no AI calls, so it
- * recomputes instantly as the human edits the amounts. We flag inconsistencies;
- * we never gate approval. The accountant stays the human in the loop.
+ * Two independent checks, both pure calculations on numbers we already hold — no
+ * API calls, no AI calls, so they recompute instantly as the human edits:
+ *   1. `checkTotals`   — does subtotal + tax reconcile to the total?
+ *   2. `gateApproval`  — do we trust the extracted fields enough to approve?
+ * They catch different problems and can both fire at once. Neither ever hard-
+ * locks a human out of approving; the accountant stays in the loop.
  */
+import type { ReviewableField } from "./schema";
+
+// --- Confidence-based approval gating ---------------------------------------
+
+/** Fields that must be trustworthy before approval — a low score here blocks. */
+export const CRITICAL_FIELDS: ReviewableField[] = [
+  "supplierName",
+  "invoiceNumber",
+  "invoiceDate",
+  "total",
+];
+
+/** Fields that warrant a warning (but not a block) when low confidence. */
+export const IMPORTANT_FIELDS: ReviewableField[] = ["tax", "currency"];
+
+/** A Critical field below this confidence blocks approval. */
+export const CRITICAL_THRESHOLD = 0.8;
+
+/** An Important field below this confidence warns but still allows approval. */
+export const IMPORTANT_THRESHOLD = 0.6;
+
+export type ApprovalStatus = "ready" | "review" | "blocked";
+
+/** A single field that fell short, with the confidence that triggered it. */
+export interface ApprovalReason {
+  field: ReviewableField;
+  confidence: number;
+}
+
+export interface ApprovalGate {
+  status: ApprovalStatus;
+  /** Which field(s) triggered a "review" or "blocked" status (empty when ready). */
+  reasons: ApprovalReason[];
+}
+
+/**
+ * Classify whether an extraction is trustworthy enough to approve, given the
+ * effective confidence per field. Rules evaluate in order — a Critical failure
+ * blocks outright before Important fields are even considered:
+ *   1. any Critical field  < CRITICAL_THRESHOLD  → "blocked"
+ *   2. any Important field < IMPORTANT_THRESHOLD → "review"
+ *   3. otherwise                                 → "ready"
+ *
+ * "Effective" confidence means the caller should pass 1 (100%) for any field the
+ * human has edited — a human-entered value is verified, which is what lets a
+ * blocked form unlock live as the accountant corrects the flagged field.
+ */
+export function gateApproval(
+  confidenceByField: Record<ReviewableField, number>,
+): ApprovalGate {
+  const critical = CRITICAL_FIELDS.filter((f) => confidenceByField[f] < CRITICAL_THRESHOLD);
+  if (critical.length > 0) {
+    return { status: "blocked", reasons: critical.map((f) => ({ field: f, confidence: confidenceByField[f] })) };
+  }
+
+  const important = IMPORTANT_FIELDS.filter((f) => confidenceByField[f] < IMPORTANT_THRESHOLD);
+  if (important.length > 0) {
+    return { status: "review", reasons: important.map((f) => ({ field: f, confidence: confidenceByField[f] })) };
+  }
+
+  return { status: "ready", reasons: [] };
+}
+
+// --- Arithmetic reconciliation ----------------------------------------------
 
 /** Rounding tolerance (in currency units) when checking subtotal + tax = total. */
 export const TOTALS_TOLERANCE = 0.01;
