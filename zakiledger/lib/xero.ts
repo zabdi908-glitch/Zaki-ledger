@@ -23,9 +23,11 @@ const API_BASE = "https://api.xero.com/api.xro/2.0";
 
 // `offline_access` is required to receive a refresh token — without it the
 // connection would die when the 30-minute access token expires, which the
-// approval flow can't tolerate. `accounting.transactions` covers reading/writing
-// bills (ACCPAY invoices).
-const SCOPE = "offline_access accounting.transactions";
+// approval flow can't tolerate. `accounting.invoices` is Xero's granular scope
+// covering reading/writing invoices and bills (ACCPAY). Apps created after
+// 2026-03-02 only support these granular scopes — the old broad
+// `accounting.transactions` scope returns invalid_scope for them.
+const SCOPE = "accounting.invoices offline_access";
 
 /** True when the client id is present. Secret is additionally needed to exchange codes. */
 export function isXeroConfigured(): boolean {
