@@ -2,6 +2,14 @@
 
 import { useState } from "react";
 import { REVIEWABLE_FIELDS, type InvoiceExtraction, type ReviewableField } from "@/lib/schema";
+import { checkTotals } from "@/lib/validation";
+
+/** Parse a review-field string into a number, or null when it isn't one. */
+function parseNum(s: string | undefined): number | null {
+  if (s === undefined) return null;
+  const n = parseFloat(s);
+  return Number.isFinite(n) ? n : null;
+}
 
 type ExtractResponse = {
   extraction: InvoiceExtraction;
@@ -152,20 +160,30 @@ export default function Home() {
           <div style={{ fontSize: 13, fontWeight: 700, color: "#8892a0", letterSpacing: 0.4, marginBottom: 16 }}>
             REVIEW &amp; APPROVE
           </div>
-          {result.arithmeticMismatch && (
-            <p style={warnStyle}>
-              ⚠️ Subtotal + tax doesn&apos;t equal total — please double-check the amounts.
-            </p>
-          )}
-          {REVIEWABLE_FIELDS.map((f) => (
-            <Field
-              key={f}
-              label={FIELD_LABELS[f]}
-              confidence={(result.extraction as any)[f].confidence}
-              value={edited[f] ?? ""}
-              onChange={(v) => setEdited((prev) => ({ ...prev, [f]: v }))}
-            />
-          ))}
+          {REVIEWABLE_FIELDS.map((f) => {
+            // After the Total field, show a live subtotal + tax = total check.
+            // It recomputes from the edited values, so fixing a number clears it.
+            const totals = f === "total" ? checkTotals(parseNum(edited.subtotal), parseNum(edited.tax), parseNum(edited.total)) : null;
+            return (
+              <div key={f}>
+                <Field
+                  label={FIELD_LABELS[f]}
+                  confidence={(result.extraction as any)[f].confidence}
+                  value={edited[f] ?? ""}
+                  onChange={(v) => setEdited((prev) => ({ ...prev, [f]: v }))}
+                />
+                {totals &&
+                  (totals.ok ? (
+                    <p style={totalsOkStyle}>✓ Totals check out</p>
+                  ) : (
+                    <p style={totalsBadStyle}>
+                      ❌ Totals don&apos;t add up — expected {totals.expected.toFixed(2)}, found{" "}
+                      {totals.found.toFixed(2)}
+                    </p>
+                  ))}
+              </div>
+            );
+          })}
           <button style={approveBtn} onClick={onApprove}>✓ Approve</button>
           {approved && <p style={{ color: "#1e8449", fontWeight: 600, marginBottom: 0 }}>{approved}</p>}
         </section>
@@ -282,13 +300,21 @@ const learnedStyle: React.CSSProperties = {
   borderRadius: 8,
   fontSize: 14,
 };
-const warnStyle: React.CSSProperties = {
-  background: "#fef9e7",
-  border: "1px solid #f7dc6f",
-  padding: "10px 14px",
+const totalsOkStyle: React.CSSProperties = {
+  margin: "-6px 0 14px",
+  color: "#1e8449",
+  fontSize: 13,
+  fontWeight: 600,
+};
+const totalsBadStyle: React.CSSProperties = {
+  margin: "-6px 0 14px",
+  padding: "8px 12px",
+  background: "#fdecea",
+  border: "1px solid #e6b0aa",
   borderRadius: 8,
-  fontSize: 14,
-  marginTop: 0,
+  color: "#c0392b",
+  fontSize: 13,
+  fontWeight: 600,
 };
 const chipOk: React.CSSProperties = {
   background: "#e8f8f0",
