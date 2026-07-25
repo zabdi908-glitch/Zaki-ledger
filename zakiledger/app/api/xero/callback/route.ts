@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { appBaseUrl, saveConnection } from "@/lib/oauth-store";
+import { appBaseUrl, callbackUrl } from "@/lib/config";
+import { saveConnection } from "@/lib/oauth-store";
 import { exchangeXeroCode, fetchXeroTenantId, isXeroConfigured } from "@/lib/xero";
 
 /**
@@ -31,13 +32,13 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const redirectUri = `${appBaseUrl(req)}/api/xero/callback`;
+    const redirectUri = callbackUrl("/api/xero/callback");
     const tokens = await exchangeXeroCode(code, redirectUri);
     const tenantId = await fetchXeroTenantId(tokens.accessToken);
     await saveConnection("xero", tokens, tenantId);
 
     // Land the user back on the app with a success flag; clear the state cookie.
-    const res = NextResponse.redirect(`${appBaseUrl(req)}/?connected=xero`);
+    const res = NextResponse.redirect(`${appBaseUrl()}/?connected=xero`);
     res.cookies.delete("xero_oauth_state");
     return res;
   } catch (err) {

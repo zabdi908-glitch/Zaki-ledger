@@ -1,5 +1,5 @@
-import { NextRequest, NextResponse } from "next/server";
-import { appBaseUrl } from "@/lib/oauth-store";
+import { NextResponse } from "next/server";
+import { callbackUrl } from "@/lib/config";
 import { isQuickBooksConfigured, quickbooksAuthorizeUrl } from "@/lib/quickbooks";
 
 /**
@@ -10,7 +10,7 @@ import { isQuickBooksConfigured, quickbooksAuthorizeUrl } from "@/lib/quickbooks
  * In demo mode (no QUICKBOOKS_CLIENT_ID) there's nothing to connect to, so we
  * return a friendly 200 rather than erroring.
  */
-export async function GET(req: NextRequest) {
+export async function GET() {
   if (!isQuickBooksConfigured()) {
     return NextResponse.json({
       connected: false,
@@ -20,7 +20,7 @@ export async function GET(req: NextRequest) {
     });
   }
 
-  const redirectUri = `${appBaseUrl(req)}/api/quickbooks/callback`;
+  const redirectUri = callbackUrl("/api/quickbooks/callback");
   const state = crypto.randomUUID();
   const res = NextResponse.redirect(quickbooksAuthorizeUrl(redirectUri, state));
   res.cookies.set("quickbooks_oauth_state", state, {

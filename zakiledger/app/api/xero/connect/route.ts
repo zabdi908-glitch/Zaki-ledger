@@ -1,5 +1,5 @@
-import { NextRequest, NextResponse } from "next/server";
-import { appBaseUrl } from "@/lib/oauth-store";
+import { NextResponse } from "next/server";
+import { callbackUrl } from "@/lib/config";
 import { isXeroConfigured, xeroAuthorizeUrl } from "@/lib/xero";
 
 /**
@@ -11,7 +11,7 @@ import { isXeroConfigured, xeroAuthorizeUrl } from "@/lib/xero";
  * friendly 200 explaining that — consistent with the rest of the app degrading
  * gracefully when keys are absent, rather than erroring.
  */
-function start(req: NextRequest): NextResponse {
+function start(): NextResponse {
   if (!isXeroConfigured()) {
     return NextResponse.json({
       connected: false,
@@ -21,7 +21,7 @@ function start(req: NextRequest): NextResponse {
     });
   }
 
-  const redirectUri = `${appBaseUrl(req)}/api/xero/callback`;
+  const redirectUri = callbackUrl("/api/xero/callback");
   const state = crypto.randomUUID();
   const res = NextResponse.redirect(xeroAuthorizeUrl(redirectUri, state));
   res.cookies.set("xero_oauth_state", state, {
@@ -34,10 +34,10 @@ function start(req: NextRequest): NextResponse {
   return res;
 }
 
-export async function GET(req: NextRequest) {
-  return start(req);
+export async function GET() {
+  return start();
 }
 
-export async function POST(req: NextRequest) {
-  return start(req);
+export async function POST() {
+  return start();
 }

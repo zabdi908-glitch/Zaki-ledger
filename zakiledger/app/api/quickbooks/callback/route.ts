@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { appBaseUrl, saveConnection } from "@/lib/oauth-store";
+import { appBaseUrl, callbackUrl } from "@/lib/config";
+import { saveConnection } from "@/lib/oauth-store";
 import { exchangeQuickBooksCode, isQuickBooksConfigured } from "@/lib/quickbooks";
 
 /**
@@ -38,11 +39,11 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const redirectUri = `${appBaseUrl(req)}/api/quickbooks/callback`;
+    const redirectUri = callbackUrl("/api/quickbooks/callback");
     const tokens = await exchangeQuickBooksCode(code, redirectUri);
     await saveConnection("quickbooks", tokens, realmId);
 
-    const res = NextResponse.redirect(`${appBaseUrl(req)}/?connected=quickbooks`);
+    const res = NextResponse.redirect(`${appBaseUrl()}/?connected=quickbooks`);
     res.cookies.delete("quickbooks_oauth_state");
     return res;
   } catch (err) {

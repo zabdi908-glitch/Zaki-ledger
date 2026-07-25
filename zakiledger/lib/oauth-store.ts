@@ -1,4 +1,3 @@
-import type { NextRequest } from "next/server";
 import { getSupabase } from "./supabase";
 
 /**
@@ -137,15 +136,4 @@ export async function getConnection(
 /** True when the access token is expired (or within a 60s safety buffer). */
 export function isExpired(conn: OAuthConnection): boolean {
   return Date.parse(conn.expiresAt) - Date.now() <= 60_000;
-}
-
-/**
- * The public base URL of this deployment, used to build OAuth redirect URIs.
- * Honours an APP_BASE_URL override (set it when the request origin isn't the
- * externally-registered URL), else derives it from the incoming request — which
- * works for both `localhost` in dev and the Render URL in production.
- */
-export function appBaseUrl(req: NextRequest): string {
-  const override = process.env.APP_BASE_URL;
-  return (override ?? req.nextUrl.origin).replace(/\/$/, "");
 }
