@@ -13,8 +13,12 @@ function parseNum(s: string | undefined): number | null {
 
 /**
  * Effective confidence per field for the approval gate: a field the human has
- * edited counts as verified (100%), which is what lets a blocked form unlock
- * live as the accountant corrects a flagged field — no re-submit needed.
+ * corrected counts as verified (100%), which is what lets a blocked form unlock
+ * live as the accountant fixes a flagged field — no re-submit needed.
+ *
+ * A field edited to blank is NOT verified — an empty Critical/Important value is
+ * clearly not real data (and can happen by accident) — so it keeps its original
+ * AI confidence and still gates approval.
  */
 function effectiveConfidences(
   extraction: InvoiceExtraction,
@@ -23,8 +27,9 @@ function effectiveConfidences(
   const out = {} as Record<ReviewableField, number>;
   for (const f of REVIEWABLE_FIELDS) {
     const original = String((extraction as any)[f].value);
-    const wasEdited = edited[f] !== undefined && edited[f] !== original;
-    out[f] = wasEdited ? 1 : (extraction as any)[f].confidence;
+    const value = edited[f];
+    const verified = value !== undefined && value !== original && value.trim() !== "";
+    out[f] = verified ? 1 : (extraction as any)[f].confidence;
   }
   return out;
 }
@@ -113,8 +118,10 @@ export default function Home() {
     setApproved(base + bill);
   }
 
-  // Recomputed every render, so editing a flagged field re-evaluates live.
-  const gate = result ? gateApproval(effectiveConfidences(result.extraction, edited)) : null;
+  // Recomputed every render, so editing a flagged field re-evaluates live —
+  // both the gate below and the per-field confidence badges read from this map.
+  const confidences = result ? effectiveConfidences(result.extraction, edited) : null;
+  const gate = confidences ? gateApproval(confidences) : null;
 
   return (
     <main style={{ maxWidth: 680, margin: "0 auto", padding: "40px 20px 64px" }}>
@@ -195,7 +202,7 @@ export default function Home() {
               <div key={f}>
                 <Field
                   label={FIELD_LABELS[f]}
-                  confidence={(result.extraction as any)[f].confidence}
+                  confidence={confidences ? confidences[f] : (result.extraction as any)[f].confidence}
                   value={edited[f] ?? ""}
                   onChange={(v) => setEdited((prev) => ({ ...prev, [f]: v }))}
                 />
