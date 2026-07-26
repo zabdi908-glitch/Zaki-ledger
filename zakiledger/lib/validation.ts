@@ -29,6 +29,30 @@ export const CRITICAL_THRESHOLD = 0.8;
 /** An Important field below this confidence warns but still allows approval. */
 export const IMPORTANT_THRESHOLD = 0.6;
 
+/**
+ * A field's effective confidence for the approval gate. Two human actions count
+ * as verified (→ 1.0), both of which clear the gate:
+ *   - editing the value to something new and non-empty (a correction), or
+ *   - explicitly affirming the value as-is ("confirm as-is") without changing it.
+ *
+ * The affirm path is what breaks the deadlock: a correct-but-low-confidence field
+ * (e.g. an invoice number the model reads right but timidly) can clear the gate
+ * WITHOUT an edit — so the approve route records it as a confirmation, not a
+ * correction, and its calibration trend accumulates instead of resetting.
+ * Otherwise the model's raw confidence stands.
+ */
+export function effectiveConfidence(
+  rawConfidence: number,
+  original: string,
+  editedValue: string | undefined,
+  affirmed: boolean,
+): number {
+  const changedNonEmpty =
+    editedValue !== undefined && editedValue !== original && editedValue.trim() !== "";
+  const affirmedAsIs = affirmed && (editedValue === undefined || editedValue === original);
+  return changedNonEmpty || affirmedAsIs ? 1 : rawConfidence;
+}
+
 export type ApprovalStatus = "ready" | "review" | "blocked";
 
 /** A single field that fell short, with the confidence that triggered it. */

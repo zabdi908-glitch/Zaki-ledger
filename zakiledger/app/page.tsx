@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { REVIEWABLE_FIELDS, type InvoiceExtraction, type ReviewableField } from "@/lib/schema";
-import { checkTotals, gateApproval } from "@/lib/validation";
+import { checkTotals, effectiveConfidence, gateApproval } from "@/lib/validation";
 
 type PlatformStatus = { configured: boolean; connected: boolean };
 type ConnectionsStatus = { xero: PlatformStatus; quickbooks: PlatformStatus };
@@ -26,13 +26,12 @@ function parseNum(s: string | undefined): number | null {
 function effectiveConfidences(
   extraction: InvoiceExtraction,
   edited: Record<string, string>,
+  affirmed: Record<string, boolean>,
 ): Record<ReviewableField, number> {
   const out = {} as Record<ReviewableField, number>;
   for (const f of REVIEWABLE_FIELDS) {
     const original = String((extraction as any)[f].value);
-    const value = edited[f];
-    const verified = value !== undefined && value !== original && value.trim() !== "";
-    out[f] = verified ? 1 : (extraction as any)[f].confidence;
+    out[f] = effectiveConfidence((extraction as any)[f].confidence, original, edited[f], affirmed[f] === true);
   }
   return out;
 }
@@ -83,6 +82,11 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   // The human explicitly chose to proceed past a duplicate warning.
   const [proceedDuplicate, setProceedDuplicate] = useState(false);
+  // Fields the human affirmed as-is (correct despite low confidence) — clears the
+  // gate without an edit, so approve records a confirmation, not a correction.
+  const [affirmed, setAffirmed] = useState<Record<string, boolean>>({});
+  // A duplicate discovered at approve time (on the final, human-approved values).
+  const [approveDuplicate, setApproveDuplicate] = useState<ExtractResponse["duplicate"] | null>(null);
   const [connections, setConnections] = useState<ConnectionsStatus | null>(null);
   // Set to "xero"/"quickbooks" right after returning from a successful OAuth flow.
   const [justConnected, setJustConnected] = useState<string | null>(null);
@@ -113,6 +117,8 @@ export default function Home() {
     setApproved(null);
     setError(null);
     setProceedDuplicate(false);
+    setAffirmed({});
+    setApproveDuplicate(null);
   }
 
   async function onUpload(e: React.ChangeEvent<HTMLInputElement>) {
@@ -123,6 +129,8 @@ export default function Home() {
     setResult(null);
     setApproved(null);
     setProceedDuplicate(false);
+    setAffirmed({});
+    setApproveDuplicate(null);
 
     const form = new FormData();
     form.append("file", file);
@@ -140,15 +148,24 @@ export default function Home() {
     setEdited(initial);
   }
 
-  async function onApprove() {
+  async function onApprove(forceProceed = false) {
     if (!result) return;
+    const proceed = forceProceed || proceedDuplicate;
     const res = await fetch("/api/approve", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ extraction: result.extraction, edited }),
+      body: JSON.stringify({ extraction: result.extraction, edited, proceedDuplicate: proceed }),
     });
     const data = await res.json();
     if (!res.ok) return setError(data.error ?? "Approve failed.");
+
+    // Approve-time duplicate: the final (human-corrected) values matched an existing
+    // invoice the raw extraction missed. Prompt, don't save — the human decides.
+    if (data.status === "duplicate") {
+      setApproveDuplicate(data.duplicate);
+      return;
+    }
+    setApproveDuplicate(null);
 
     const base =
       data.correctionsRecorded > 0
@@ -168,7 +185,7 @@ export default function Home() {
 
   // Recomputed every render, so editing a flagged field re-evaluates live —
   // both the gate below and the per-field confidence badges read from this map.
-  const confidences = result ? effectiveConfidences(result.extraction, edited) : null;
+  const confidences = result ? effectiveConfidences(result.extraction, edited, affirmed) : null;
   const gate = confidences ? gateApproval(confidences) : null;
 
   return (
@@ -298,14 +315,31 @@ export default function Home() {
             // It recomputes from the edited values, so fixing a number clears it.
             const totals = f === "total" ? checkTotals(parseNum(edited.subtotal), parseNum(edited.tax), parseNum(edited.total)) : null;
             const mem = result.supplierMemory?.[f];
+            const eff = confidences ? confidences[f] : (result.extraction as any)[f].confidence;
+            const low = eff < CONFIDENCE_THRESHOLD; // still below the review bar
+            const original = String((result.extraction as any)[f].value);
+            const affirmedAsIs = affirmed[f] === true && (edited[f] ?? original) === original;
             return (
               <div key={f}>
                 <Field
                   label={FIELD_LABELS[f]}
-                  confidence={confidences ? confidences[f] : (result.extraction as any)[f].confidence}
+                  confidence={eff}
                   value={edited[f] ?? ""}
                   onChange={(v) => setEdited((prev) => ({ ...prev, [f]: v }))}
                 />
+                {/* Confirm-as-is: affirm a correct-but-low read without editing it,
+                    so it clears the gate AND records a confirmation (not a reset). */}
+                {low && (
+                  <button
+                    style={confirmAsIsBtn}
+                    onClick={() => setAffirmed((prev) => ({ ...prev, [f]: true }))}
+                  >
+                    ✓ Confirm this is correct
+                  </button>
+                )}
+                {affirmedAsIs && !low && (
+                  <p style={affirmedNoteStyle}>✓ Confirmed correct as-is</p>
+                )}
                 {mem && (
                   <p style={memoryNoteStyle}>
                     🧠 Seen {mem.count}× before from this supplier · confidence {(mem.confidence * 100).toFixed(0)}%
@@ -337,12 +371,36 @@ export default function Home() {
             </div>
           )}
 
-          {/* Blocked hides the button entirely — a critical field must be fixed
-              first. "review" still lets the human override ("Approve anyway"). */}
-          {gate?.status !== "blocked" && (
-            <button style={approveBtn} onClick={onApprove}>
-              {gate?.status === "review" ? "Approve anyway" : "✓ Approve"}
-            </button>
+          {/* Approve-time duplicate: the corrected values matched an existing
+              invoice the raw extraction missed. Decide before it's saved/posted. */}
+          {approveDuplicate ? (
+            <section style={dupCardStyle}>
+              <div style={{ fontSize: 15, fontWeight: 700, color: "#7d4a00", marginBottom: 6 }}>
+                ⚠️ Possible duplicate
+              </div>
+              <p style={{ margin: "0 0 14px", color: "#6b4b1a", fontSize: 14 }}>
+                After your corrections, this matches an invoice already processed on{" "}
+                <strong>{new Date(approveDuplicate.processedOn).toLocaleDateString()}</strong> — same
+                supplier (<strong>{approveDuplicate.supplierName}</strong>) and invoice number (
+                <strong>{approveDuplicate.invoiceNumber}</strong>).
+              </p>
+              <div style={{ display: "flex", gap: 10 }}>
+                <button style={approveBtn} onClick={() => { setApproveDuplicate(null); onApprove(true); }}>
+                  Approve anyway
+                </button>
+                <button style={discardBtn} onClick={discard}>
+                  Discard
+                </button>
+              </div>
+            </section>
+          ) : (
+            /* Blocked hides the button entirely — a critical field must be fixed
+               first. "review" still lets the human override ("Approve anyway"). */
+            gate?.status !== "blocked" && (
+              <button style={approveBtn} onClick={() => onApprove()}>
+                {gate?.status === "review" ? "Approve anyway" : "✓ Approve"}
+              </button>
+            )
           )}
           {approved && <p style={{ color: "#1e8449", fontWeight: 600, marginBottom: 0 }}>{approved}</p>}
         </section>
@@ -478,6 +536,23 @@ const learnedStyle: React.CSSProperties = {
   padding: "10px 14px",
   borderRadius: 8,
   fontSize: 14,
+};
+const confirmAsIsBtn: React.CSSProperties = {
+  margin: "-6px 0 12px",
+  padding: "5px 12px",
+  background: "#fff",
+  color: "#1e8449",
+  border: "1px solid #a9dfbf",
+  borderRadius: 8,
+  cursor: "pointer",
+  fontWeight: 600,
+  fontSize: 12,
+};
+const affirmedNoteStyle: React.CSSProperties = {
+  margin: "-6px 0 12px",
+  color: "#1e8449",
+  fontSize: 12,
+  fontWeight: 600,
 };
 const memoryNoteStyle: React.CSSProperties = {
   margin: "-8px 0 14px",

@@ -1,5 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { recordConfirmation, recordCorrection, saveApprovedInvoice } from "@/lib/store";
+import {
+  findDuplicateInvoice,
+  recordConfirmation,
+  recordCorrection,
+  saveApprovedInvoice,
+} from "@/lib/store";
 import { REVIEWABLE_FIELDS, type InvoiceExtraction } from "@/lib/schema";
 import { postApprovedBill, type PostedBill } from "@/lib/accounting";
 
@@ -20,9 +25,10 @@ function toNumber(s: string): number | null {
  */
 export async function POST(req: NextRequest) {
   try {
-    const { extraction, edited } = (await req.json()) as {
+    const { extraction, edited, proceedDuplicate } = (await req.json()) as {
       extraction: InvoiceExtraction;
       edited: Record<string, string>;
+      proceedDuplicate?: boolean;
     };
 
     // The approved final value for a field: the human's edit if present,
@@ -31,11 +37,35 @@ export async function POST(req: NextRequest) {
       edited[field] ?? String((extraction as any)[field].value);
 
     const supplierName = finalOf("supplierName");
+    const invoiceNumber = finalOf("invoiceNumber");
+
+    // Duplicate check on the FINAL, human-approved values — catches the case the
+    // upload-time check misses: the raw extraction misread the number, the human
+    // corrected it, and the corrected value now matches an existing invoice.
+    // Warn, don't save: return so the UI can prompt proceed/discard.
+    if (!proceedDuplicate) {
+      const dup = await findDuplicateInvoice(supplierName, invoiceNumber);
+      console.log(
+        `[duplicate-check] approve-time supplier="${supplierName}" invoiceNumber="${invoiceNumber}" ` +
+          `match=${dup ? `${dup.id} (processed ${dup.createdAt})` : "none"}`,
+      );
+      if (dup) {
+        return NextResponse.json({
+          status: "duplicate",
+          duplicate: {
+            supplierName,
+            invoiceNumber,
+            processedOn: dup.createdAt,
+            existingId: dup.id,
+          },
+        });
+      }
+    }
 
     // Persist the human-approved invoice first, so corrections can link to it.
     const invoiceId = await saveApprovedInvoice({
       supplierName,
-      invoiceNumber: finalOf("invoiceNumber"),
+      invoiceNumber,
       invoiceDate: finalOf("invoiceDate") || null,
       currency: finalOf("currency"),
       subtotal: toNumber(finalOf("subtotal")),
