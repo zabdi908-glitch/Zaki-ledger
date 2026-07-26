@@ -135,6 +135,17 @@ function escapeQuery(value: string): string {
   return value.replace(/'/g, "\\'");
 }
 
+/** Today as a YYYY-MM-DD string (UTC). */
+function today(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+/** True when `s` is a date string Date can actually parse (e.g. YYYY-MM-DD). */
+function isParsableDate(s: string | null | undefined): s is string {
+  if (!s || s.trim() === "") return false;
+  return !Number.isNaN(new Date(`${s}T00:00:00Z`).getTime());
+}
+
 /** Add `days` to an ISO date (YYYY-MM-DD), returning a YYYY-MM-DD string. */
 function addDays(isoDate: string, days: number): string {
   const d = new Date(`${isoDate}T00:00:00Z`);
@@ -241,7 +252,11 @@ export async function createQuickBooksBill(bill: ApprovedBill): Promise<string> 
   };
   if (bill.invoiceNumber) payload.DocNumber = bill.invoiceNumber;
 
-  const txnDate = bill.invoiceDate ?? new Date().toISOString().slice(0, 10);
+  // Use the invoice's own date only when it's actually parseable — a missing,
+  // blank, or oddly-formatted value (`??` alone doesn't catch "" or bad formats)
+  // would produce an Invalid Date and make addDays() throw "Invalid time value".
+  // Fall back to today so the bill still posts cleanly.
+  const txnDate = isParsableDate(bill.invoiceDate) ? bill.invoiceDate : today();
   payload.TxnDate = txnDate;
   // Intentionally ignore the invoice's original due date / payment terms. If we
   // pass a due date already in the past (common for invoices dated before today),
