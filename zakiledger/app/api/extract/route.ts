@@ -16,18 +16,23 @@ interface CalibrationDebug {
   calibrated: number;
 }
 
+/** Per-field supplier track record surfaced in the UI ("seen N× before"). */
+type SupplierMemory = Record<string, { count: number; confidence: number }>;
+
 /**
  * Raise each reviewable field's confidence by this supplier's confirmation track
  * record, in place. Returns the fields whose score was actually lifted (for UI
- * transparency) plus a temporary debug trace. No-op when the supplier is unknown
- * or has no history, and never invents confidence for a field we didn't read.
+ * transparency), the per-field track record to surface in the UI, and a
+ * temporary debug trace. No-op when the supplier is unknown or has no history,
+ * and never invents confidence for a field we didn't read.
  */
 async function calibrateExtractionConfidence(
   extraction: InvoiceExtraction,
-): Promise<{ calibrated: string[]; debug: CalibrationDebug[] }> {
+): Promise<{ calibrated: string[]; memory: SupplierMemory; debug: CalibrationDebug[] }> {
   const supplier = extraction.supplierName.value.trim();
   const debug: CalibrationDebug[] = [];
-  if (!supplier) return { calibrated: [], debug };
+  const memory: SupplierMemory = {};
+  if (!supplier) return { calibrated: [], memory, debug };
 
   const stats = await confirmationStatsForSupplier(supplier);
   const calibrated: string[] = [];
@@ -54,12 +59,17 @@ async function calibrateExtractionConfidence(
       node.confidence = boosted;
       calibrated.push(field);
     }
+    // Surface the track record whenever this supplier/field has any confirmed
+    // history — independent of whether this particular read got calibrated.
+    if (stat && stat.count > 0) {
+      memory[field] = { count: stat.count, confidence: stat.floor };
+    }
     debug.push({ field, raw, confirmedCount: n, bonus: boosted - raw, floor: floorApplied, calibrated: boosted });
   }
 
   // TEMPORARY: surfaces in the Render/dev server logs so we can watch the trend.
   console.log(`[calibration] supplier="${supplier}"`, JSON.stringify(debug));
-  return { calibrated, debug };
+  return { calibrated, memory, debug };
 }
 
 /**
@@ -118,7 +128,7 @@ export async function POST(req: NextRequest) {
     // confidence than a cold per-read estimate, so a reliably-read-but-ambiguous
     // field (e.g. an O/0 invoice number) trends up instead of being re-guessed.
     // Only raises confidence, and only for fields we actually read a value for.
-    const { calibrated: calibratedFields, debug: calibrationDebug } =
+    const { calibrated: calibratedFields, memory: supplierMemory, debug: calibrationDebug } =
       await calibrateExtractionConfidence(extraction);
 
     // Consistency check — flag internally-inconsistent extractions for a human,
@@ -150,6 +160,7 @@ export async function POST(req: NextRequest) {
       demo,
       refinedForSupplier: refinedForSupplier ?? null,
       calibratedFields,
+      supplierMemory,
       calibrationDebug, // TEMPORARY
       duplicate,
     });

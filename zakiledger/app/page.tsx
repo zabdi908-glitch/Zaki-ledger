@@ -44,6 +44,8 @@ type ExtractResponse = {
   refinedForSupplier?: string | null;
   /** Reviewable fields whose confidence was lifted by this supplier's track record. */
   calibratedFields?: string[];
+  /** Per-field track record for this supplier: how many prior confirmed reads + their confidence. */
+  supplierMemory?: Record<string, { count: number; confidence: number }>;
   /** Set when an invoice with the same supplier + number was already processed. */
   duplicate?: {
     supplierName: string;
@@ -295,6 +297,7 @@ export default function Home() {
             // After the Total field, show a live subtotal + tax = total check.
             // It recomputes from the edited values, so fixing a number clears it.
             const totals = f === "total" ? checkTotals(parseNum(edited.subtotal), parseNum(edited.tax), parseNum(edited.total)) : null;
+            const mem = result.supplierMemory?.[f];
             return (
               <div key={f}>
                 <Field
@@ -303,6 +306,11 @@ export default function Home() {
                   value={edited[f] ?? ""}
                   onChange={(v) => setEdited((prev) => ({ ...prev, [f]: v }))}
                 />
+                {mem && (
+                  <p style={memoryNoteStyle}>
+                    🧠 Seen {mem.count}× before from this supplier · confidence {(mem.confidence * 100).toFixed(0)}%
+                  </p>
+                )}
                 {totals &&
                   (totals.ok ? (
                     <p style={totalsOkStyle}>✓ Totals check out</p>
@@ -470,6 +478,12 @@ const learnedStyle: React.CSSProperties = {
   padding: "10px 14px",
   borderRadius: 8,
   fontSize: 14,
+};
+const memoryNoteStyle: React.CSSProperties = {
+  margin: "-8px 0 14px",
+  color: "#6b5bd0",
+  fontSize: 12,
+  fontWeight: 600,
 };
 const totalsOkStyle: React.CSSProperties = {
   margin: "-6px 0 14px",
