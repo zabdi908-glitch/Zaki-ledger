@@ -33,6 +33,7 @@ export interface Confirmation {
   supplierName: string;
   field: ReviewableField;
   value: string; // the confirmed value
+  confidence: number; // the (calibrated) confidence shown when it was confirmed — the trust floor
 }
 
 /** The approved, human-verified final values written to the `invoices` table. */
@@ -72,6 +73,7 @@ function mapConfirmationRow(row: Record<string, unknown>): Confirmation {
     supplierName: String(row.supplier_name),
     field: row.field as ReviewableField,
     value: (row.value as string) ?? "",
+    confidence: Number(row.confidence ?? 0),
   };
 }
 
@@ -135,6 +137,7 @@ export async function recordConfirmation(
       supplier_name: c.supplierName,
       field: c.field,
       value: c.value,
+      confidence: c.confidence,
     })
     .select()
     .single();
@@ -143,35 +146,63 @@ export async function recordConfirmation(
   return mapConfirmationRow(data as Record<string, unknown>);
 }
 
+/** Per-field confirmation stats used to calibrate confidence. */
+export interface ConfirmationStat {
+  /** Confirmed-correct reads since the last correction for this supplier/field. */
+  count: number;
+  /** Highest confidence confirmed since then — the established-trust floor. */
+  floor: number;
+}
+
 /**
- * How many times each field has been confirmed correct for a supplier, as a
- * `{ field: count }` map. This is the raw material for confidence calibration:
- * a proven per-supplier, per-field track record of correct reads.
+ * Per-field confirmation stats for a supplier, counting only confirmations since
+ * the most recent correction for that field. An edit means the system got that
+ * field wrong, so it resets the track record: the count (calibration bonus) and
+ * the floor (established trust) both rebuild from scratch afterwards.
  */
-export async function confirmationCountsForSupplier(
+export async function confirmationStatsForSupplier(
   supplierName: string,
-): Promise<Partial<Record<ReviewableField, number>>> {
-  const counts: Partial<Record<ReviewableField, number>> = {};
-  const tally = (field: ReviewableField) => {
-    counts[field] = (counts[field] ?? 0) + 1;
-  };
+): Promise<Partial<Record<ReviewableField, ConfirmationStat>>> {
+  const supplier = supplierName.toLowerCase();
+
+  let corrections: Pick<Correction, "field" | "createdAt">[];
+  let confirmations: Pick<Confirmation, "field" | "createdAt" | "confidence">[];
 
   const db = getSupabase();
   if (!db) {
-    for (const c of memConfirmations) {
-      if (c.supplierName.toLowerCase() === supplierName.toLowerCase()) tally(c.field);
-    }
-    return counts;
+    corrections = memCorrections.filter((c) => c.supplierName.toLowerCase() === supplier);
+    confirmations = memConfirmations.filter((c) => c.supplierName.toLowerCase() === supplier);
+  } else {
+    const [corrRes, confRes] = await Promise.all([
+      db.from("corrections").select("field, created_at").ilike("supplier_name", supplierName),
+      db.from("confirmations").select("field, created_at, confidence").ilike("supplier_name", supplierName),
+    ]);
+    if (corrRes.error) throw new Error(`Failed to load corrections: ${corrRes.error.message}`);
+    if (confRes.error) throw new Error(`Failed to load confirmations: ${confRes.error.message}`);
+    corrections = (corrRes.data ?? []).map((r: any) => ({ field: r.field, createdAt: String(r.created_at) }));
+    confirmations = (confRes.data ?? []).map((r: any) => ({
+      field: r.field,
+      createdAt: String(r.created_at),
+      confidence: Number(r.confidence ?? 0),
+    }));
   }
 
-  const { data, error } = await db
-    .from("confirmations")
-    .select("field")
-    .ilike("supplier_name", supplierName);
+  // Most recent correction time per field — confirmations at or before it don't count.
+  const lastCorrectionAt: Partial<Record<ReviewableField, number>> = {};
+  for (const c of corrections) {
+    const t = Date.parse(c.createdAt);
+    if (!lastCorrectionAt[c.field] || t > lastCorrectionAt[c.field]!) lastCorrectionAt[c.field] = t;
+  }
 
-  if (error) throw new Error(`Failed to load confirmations: ${error.message}`);
-  for (const row of data ?? []) tally((row as { field: ReviewableField }).field);
-  return counts;
+  const stats: Partial<Record<ReviewableField, ConfirmationStat>> = {};
+  for (const c of confirmations) {
+    const cutoff = lastCorrectionAt[c.field];
+    if (cutoff !== undefined && Date.parse(c.createdAt) <= cutoff) continue; // reset by a later edit
+    const s = (stats[c.field] ??= { count: 0, floor: 0 });
+    s.count += 1;
+    if (c.confidence > s.floor) s.floor = c.confidence;
+  }
+  return stats;
 }
 
 /** Recent corrections for a supplier — the raw material for per-vendor learning. */

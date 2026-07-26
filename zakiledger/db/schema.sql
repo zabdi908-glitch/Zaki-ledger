@@ -61,6 +61,7 @@ create table if not exists confirmations (
   supplier_name  text not null,         -- key for per-vendor calibration
   field          text not null,         -- which field was confirmed correct
   value          text,                  -- the confirmed value (audit/explainability)
+  confidence     numeric(4,3),          -- calibrated confidence shown when confirmed (trust floor)
   created_at     timestamptz not null default now()
 );
 

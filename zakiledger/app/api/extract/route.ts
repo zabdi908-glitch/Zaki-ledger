@@ -2,40 +2,64 @@ import { NextRequest, NextResponse } from "next/server";
 import { extractInvoice } from "@/lib/anthropic";
 import { buildHints } from "@/lib/learning";
 import { arithmeticMismatch, REVIEWABLE_FIELDS, type InvoiceExtraction } from "@/lib/schema";
-import { confirmationCountsForSupplier } from "@/lib/store";
-import { calibrateConfidence } from "@/lib/calibration";
+import { confirmationStatsForSupplier } from "@/lib/store";
+import { calibrateConfidence, FLOOR_MIN_CONFIRMATIONS } from "@/lib/calibration";
 import { sampleExtraction } from "@/lib/demo";
+
+/** TEMPORARY debug row per field — remove once the calibration trend is confirmed. */
+interface CalibrationDebug {
+  field: string;
+  raw: number; // model's confidence before calibration
+  confirmedCount: number; // confirmations (since last edit) for this supplier/field
+  bonus: number; // calibrated - raw
+  floor: number | null; // established-trust floor, once applied (else null)
+  calibrated: number;
+}
 
 /**
  * Raise each reviewable field's confidence by this supplier's confirmation track
  * record, in place. Returns the fields whose score was actually lifted (for UI
- * transparency). No-op when the supplier is unknown or has no history, and never
- * invents confidence for a field we didn't read a value for.
+ * transparency) plus a temporary debug trace. No-op when the supplier is unknown
+ * or has no history, and never invents confidence for a field we didn't read.
  */
 async function calibrateExtractionConfidence(
   extraction: InvoiceExtraction,
-): Promise<string[]> {
+): Promise<{ calibrated: string[]; debug: CalibrationDebug[] }> {
   const supplier = extraction.supplierName.value.trim();
-  if (!supplier) return [];
+  const debug: CalibrationDebug[] = [];
+  if (!supplier) return { calibrated: [], debug };
 
-  const counts = await confirmationCountsForSupplier(supplier);
+  const stats = await confirmationStatsForSupplier(supplier);
   const calibrated: string[] = [];
 
   for (const field of REVIEWABLE_FIELDS) {
-    const n = counts[field] ?? 0;
-    if (n <= 0) continue;
-
     const node = (extraction as any)[field] as { value: unknown; confidence: number };
-    if (String(node.value).trim() === "") continue;
+    const raw = node.confidence;
+    const stat = stats[field];
+    const n = stat?.count ?? 0;
+    const hasValue = String(node.value).trim() !== "";
 
-    const boosted = calibrateConfidence(node.confidence, n);
-    if (boosted > node.confidence) {
+    let boosted = n > 0 && hasValue ? calibrateConfidence(raw, n) : raw;
+
+    // Established-trust floor: once the pattern is proven (>= FLOOR_MIN_CONFIRMATIONS),
+    // a single noisy low read can't drop the score below the trust already built.
+    // An edit resets the history upstream, so this only holds while reads stay correct.
+    let floorApplied: number | null = null;
+    if (stat && stat.count >= FLOOR_MIN_CONFIRMATIONS && hasValue) {
+      floorApplied = stat.floor;
+      boosted = Math.max(boosted, stat.floor);
+    }
+
+    if (boosted > raw) {
       node.confidence = boosted;
       calibrated.push(field);
     }
+    debug.push({ field, raw, confirmedCount: n, bonus: boosted - raw, floor: floorApplied, calibrated: boosted });
   }
 
-  return calibrated;
+  // TEMPORARY: surfaces in the Render/dev server logs so we can watch the trend.
+  console.log(`[calibration] supplier="${supplier}"`, JSON.stringify(debug));
+  return { calibrated, debug };
 }
 
 /**
@@ -94,7 +118,8 @@ export async function POST(req: NextRequest) {
     // confidence than a cold per-read estimate, so a reliably-read-but-ambiguous
     // field (e.g. an O/0 invoice number) trends up instead of being re-guessed.
     // Only raises confidence, and only for fields we actually read a value for.
-    const calibratedFields = await calibrateExtractionConfidence(extraction);
+    const { calibrated: calibratedFields, debug: calibrationDebug } =
+      await calibrateExtractionConfidence(extraction);
 
     // Consistency check — flag internally-inconsistent extractions for a human,
     // regardless of the model's stated confidence.
@@ -106,6 +131,7 @@ export async function POST(req: NextRequest) {
       demo,
       refinedForSupplier: refinedForSupplier ?? null,
       calibratedFields,
+      calibrationDebug, // TEMPORARY
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Extraction failed.";

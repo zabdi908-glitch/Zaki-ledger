@@ -74,6 +74,9 @@ export async function POST(req: NextRequest) {
           supplierName,
           field,
           value: aiValue,
+          // The confidence the human saw and accepted (already calibrated) — this
+          // becomes the established-trust floor once the pattern is proven.
+          confidence: (extraction as any)[field].confidence,
         });
         confirmationsRecorded += 1;
       }

@@ -15,13 +15,22 @@
 
 /**
  * Fraction of the *remaining* gap to 1.0 that each confirmation leaves open.
- * 0.7 means every confirmation closes 30% of what's left: the boost is quick at
- * first, then flattens, so we never sprint to false certainty on a few reads.
+ * 0.5 means every confirmation closes half of what's left, so early bonuses land
+ * hard enough to separate from normal model read-to-read variance:
+ *   1 confirmation → +0.14, 2 → +0.21, 3 → +0.245 (from a 0.72 base).
  */
-export const CONFIRMATION_GAP_RETENTION = 0.7;
+export const CONFIRMATION_GAP_RETENTION = 0.5;
 
 /** Ceiling for a calibrated score — a track record earns high trust, never 100%. */
 export const MAX_CALIBRATED_CONFIDENCE = 0.99;
+
+/**
+ * Once a supplier/field has this many confirmed-correct reads, the pattern is
+ * "established": a single new low raw read can no longer drag the score below the
+ * trust already built (see the floor in app/api/extract/route.ts). An edit resets
+ * that history, so trust rebuilds from scratch when the system was actually wrong.
+ */
+export const FLOOR_MIN_CONFIRMATIONS = 4;
 
 /**
  * Raise `base` confidence (0–1) given `confirmations`, the number of times this
@@ -30,7 +39,7 @@ export const MAX_CALIBRATED_CONFIDENCE = 0.99;
  *
  *   calibrated = base + (1 - base) * (1 - retention^n)
  *
- * e.g. base 0.72 with 3 confirmations → ~0.90.
+ * e.g. base 0.72 with 3 confirmations → ~0.97.
  */
 export function calibrateConfidence(base: number, confirmations: number): number {
   if (!Number.isFinite(base)) return base;
