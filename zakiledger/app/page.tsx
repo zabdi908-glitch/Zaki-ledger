@@ -1,8 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { REVIEWABLE_FIELDS, type InvoiceExtraction, type ReviewableField } from "@/lib/schema";
 import { checkTotals, gateApproval } from "@/lib/validation";
+
+type PlatformStatus = { configured: boolean; connected: boolean };
+type ConnectionsStatus = { xero: PlatformStatus; quickbooks: PlatformStatus };
 
 /** Parse a review-field string into a number, or null when it isn't one. */
 function parseNum(s: string | undefined): number | null {
@@ -78,6 +81,28 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   // The human explicitly chose to proceed past a duplicate warning.
   const [proceedDuplicate, setProceedDuplicate] = useState(false);
+  const [connections, setConnections] = useState<ConnectionsStatus | null>(null);
+  // Set to "xero"/"quickbooks" right after returning from a successful OAuth flow.
+  const [justConnected, setJustConnected] = useState<string | null>(null);
+
+  async function refreshConnections() {
+    try {
+      const res = await fetch("/api/connections");
+      if (res.ok) setConnections(await res.json());
+    } catch {
+      /* status is best-effort; the upload flow works regardless */
+    }
+  }
+
+  useEffect(() => {
+    refreshConnections();
+    // Surface the ?connected=… flag the OAuth callback redirects back with.
+    const connected = new URLSearchParams(window.location.search).get("connected");
+    if (connected) {
+      setJustConnected(connected);
+      window.history.replaceState(null, "", window.location.pathname); // clean the URL
+    }
+  }, []);
 
   /** Reset back to the empty upload state (used by the duplicate "Discard"). */
   function discard() {
@@ -158,13 +183,29 @@ export default function Home() {
         </div>
       </header>
 
-      <p style={{ color: "#556", marginTop: 0, marginBottom: 24 }}>
+      <p style={{ color: "#556", marginTop: 0, marginBottom: 20 }}>
         The AI drafts every field with a confidence score. You check and approve in one click —
         nothing is saved without you.{" "}
         <a href="/corrections" style={{ color: "#1a2b4a", fontWeight: 600 }}>
           View the correction ledger →
         </a>
       </p>
+
+      {/* Accounting connections — where approved invoices post as draft bills. */}
+      <section style={connBarStyle}>
+        <span style={{ fontSize: 12, fontWeight: 700, color: "#8892a0", letterSpacing: 0.4 }}>
+          ACCOUNTING
+        </span>
+        <ConnectionControl name="Xero" path="/api/xero/connect" status={connections?.xero} />
+        <ConnectionControl name="QuickBooks" path="/api/quickbooks/connect" status={connections?.quickbooks} />
+      </section>
+
+      {justConnected && (
+        <p style={learnedStyle}>
+          ✅ Connected to <strong>{justConnected === "quickbooks" ? "QuickBooks" : "Xero"}</strong>.
+          Approved invoices will now post there as draft bills.
+        </p>
+      )}
 
       <label style={loading ? { ...btnStyle, opacity: 0.7 } : btnStyle}>
         {loading ? "Reading invoice…" : "＋ Upload invoice (PDF or image)"}
@@ -299,6 +340,26 @@ export default function Home() {
         </section>
       )}
     </main>
+  );
+}
+
+function ConnectionControl({
+  name,
+  path,
+  status,
+}: {
+  name: string;
+  path: string;
+  status?: PlatformStatus;
+}) {
+  if (!status) return <span style={connMutedStyle}>{name} …</span>; // still loading
+  if (status.connected) return <span style={connOkStyle}>✓ {name} connected</span>;
+  if (!status.configured) return <span style={connMutedStyle}>{name} — not configured</span>;
+  // Configured but not connected: a plain link that kicks off the OAuth redirect.
+  return (
+    <a href={path} style={connBtnStyle}>
+      Connect {name}
+    </a>
   );
 }
 
@@ -461,6 +522,41 @@ const discardBtn: React.CSSProperties = {
   cursor: "pointer",
   fontWeight: 600,
   fontSize: 15,
+};
+const connBarStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  flexWrap: "wrap",
+  gap: 10,
+  marginBottom: 24,
+};
+const connBtnStyle: React.CSSProperties = {
+  display: "inline-block",
+  padding: "6px 14px",
+  background: "#1a2b4a",
+  color: "#fff",
+  borderRadius: 8,
+  fontWeight: 600,
+  fontSize: 13,
+  textDecoration: "none",
+};
+const connOkStyle: React.CSSProperties = {
+  padding: "6px 12px",
+  background: "#e8f8f0",
+  color: "#1e8449",
+  border: "1px solid #a9dfbf",
+  borderRadius: 8,
+  fontWeight: 600,
+  fontSize: 13,
+};
+const connMutedStyle: React.CSSProperties = {
+  padding: "6px 12px",
+  background: "#f4f6f8",
+  color: "#8892a0",
+  border: "1px solid #e6eaee",
+  borderRadius: 8,
+  fontWeight: 600,
+  fontSize: 13,
 };
 const chipOk: React.CSSProperties = {
   background: "#e8f8f0",
