@@ -48,6 +48,27 @@ create index if not exists corrections_supplier_idx
   on corrections (lower(supplier_name), created_at desc);
 
 -- =========================================================================
+-- THE OTHER HALF OF THE MOAT: the confirmation ledger.
+-- Append-only. Every field the human APPROVED UNCHANGED lands here — the
+-- signal that a read was correct. Corrections teach us where we were wrong;
+-- confirmations teach us where we're reliably right, per supplier + field, so
+-- confidence can trend up on a proven track record instead of being re-guessed
+-- from scratch on every read. Never UPDATE or DELETE — these are historical facts.
+-- =========================================================================
+create table if not exists confirmations (
+  id             uuid primary key default gen_random_uuid(),
+  invoice_id     uuid references invoices(id),
+  supplier_name  text not null,         -- key for per-vendor calibration
+  field          text not null,         -- which field was confirmed correct
+  value          text,                  -- the confirmed value (audit/explainability)
+  created_at     timestamptz not null default now()
+);
+
+-- Fast per-supplier, per-field confirmation counts for confidence calibration.
+create index if not exists confirmations_supplier_field_idx
+  on confirmations (lower(supplier_name), field, created_at desc);
+
+-- =========================================================================
 -- Accounting-platform OAuth connections (Xero, QuickBooks).
 -- One row per provider (single-tenant MVP). Access tokens are short-lived and
 -- get overwritten on every refresh; the refresh token keeps the link alive.

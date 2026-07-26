@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { recordCorrection, saveApprovedInvoice } from "@/lib/store";
+import { recordConfirmation, recordCorrection, saveApprovedInvoice } from "@/lib/store";
 import { REVIEWABLE_FIELDS, type InvoiceExtraction } from "@/lib/schema";
 import { postApprovedBill, type PostedBill } from "@/lib/accounting";
 
@@ -44,12 +44,18 @@ export async function POST(req: NextRequest) {
       overallConfidence: extraction.overallConfidence,
     });
 
-    // Feed the moat: append a ledger row for every field the human changed.
+    // Feed the moat, both halves of it:
+    //  - changed field    → a correction (teaches us where we were wrong)
+    //  - unchanged field  → a confirmation (teaches us where we're reliably right,
+    //                        so confidence can trend up on a proven track record)
     const corrections = [];
+    let confirmationsRecorded = 0;
     for (const field of REVIEWABLE_FIELDS) {
       const aiValue = String((extraction as any)[field].value);
       const humanValue = edited[field];
-      if (humanValue !== undefined && humanValue !== aiValue) {
+      const changed = humanValue !== undefined && humanValue !== aiValue;
+
+      if (changed) {
         corrections.push(
           await recordCorrection({
             invoiceId: invoiceId ?? undefined,
@@ -60,6 +66,16 @@ export async function POST(req: NextRequest) {
             aiConfidence: (extraction as any)[field].confidence,
           }),
         );
+      } else if (aiValue.trim() !== "") {
+        // Approved exactly as read — a correct read is a learning signal too.
+        // Skip empty values: "nothing detected" isn't something to gain trust in.
+        await recordConfirmation({
+          invoiceId: invoiceId ?? undefined,
+          supplierName,
+          field,
+          value: aiValue,
+        });
+        confirmationsRecorded += 1;
       }
     }
 
@@ -89,6 +105,7 @@ export async function POST(req: NextRequest) {
       status: "approved",
       invoiceId,
       correctionsRecorded: corrections.length,
+      confirmationsRecorded,
       corrections,
       billId: posted?.billId ?? null,
       billPlatform: posted?.platform ?? null,

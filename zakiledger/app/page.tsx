@@ -39,6 +39,8 @@ type ExtractResponse = {
   arithmeticMismatch: boolean;
   demo?: boolean;
   refinedForSupplier?: string | null;
+  /** Reviewable fields whose confidence was lifted by this supplier's track record. */
+  calibratedFields?: string[];
 };
 
 /** Below this, a field is "low confidence" and gets flagged for the human. */
@@ -186,6 +188,18 @@ export default function Home() {
         <p style={learnedStyle}>
           🧠 Refined using what we&apos;ve learned from past corrections for{" "}
           <strong>{result.refinedForSupplier}</strong>.
+        </p>
+      )}
+
+      {result?.calibratedFields && result.calibratedFields.length > 0 && (
+        <p style={learnedStyle}>
+          📈 Confidence raised on{" "}
+          <strong>
+            {result.calibratedFields
+              .map((f) => FIELD_LABELS[f as ReviewableField] ?? f)
+              .join(", ")}
+          </strong>{" "}
+          from this supplier&apos;s confirmed-correct history.
         </p>
       )}
 

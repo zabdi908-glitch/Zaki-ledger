@@ -1,8 +1,42 @@
 import { NextRequest, NextResponse } from "next/server";
 import { extractInvoice } from "@/lib/anthropic";
 import { buildHints } from "@/lib/learning";
-import { arithmeticMismatch } from "@/lib/schema";
+import { arithmeticMismatch, REVIEWABLE_FIELDS, type InvoiceExtraction } from "@/lib/schema";
+import { confirmationCountsForSupplier } from "@/lib/store";
+import { calibrateConfidence } from "@/lib/calibration";
 import { sampleExtraction } from "@/lib/demo";
+
+/**
+ * Raise each reviewable field's confidence by this supplier's confirmation track
+ * record, in place. Returns the fields whose score was actually lifted (for UI
+ * transparency). No-op when the supplier is unknown or has no history, and never
+ * invents confidence for a field we didn't read a value for.
+ */
+async function calibrateExtractionConfidence(
+  extraction: InvoiceExtraction,
+): Promise<string[]> {
+  const supplier = extraction.supplierName.value.trim();
+  if (!supplier) return [];
+
+  const counts = await confirmationCountsForSupplier(supplier);
+  const calibrated: string[] = [];
+
+  for (const field of REVIEWABLE_FIELDS) {
+    const n = counts[field] ?? 0;
+    if (n <= 0) continue;
+
+    const node = (extraction as any)[field] as { value: unknown; confidence: number };
+    if (String(node.value).trim() === "") continue;
+
+    const boosted = calibrateConfidence(node.confidence, n);
+    if (boosted > node.confidence) {
+      node.confidence = boosted;
+      calibrated.push(field);
+    }
+  }
+
+  return calibrated;
+}
 
 /**
  * POST /api/extract
@@ -55,6 +89,13 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // Confidence calibration — fold in this supplier's track record of correct
+    // reads. A field the human has approved unchanged before earns higher
+    // confidence than a cold per-read estimate, so a reliably-read-but-ambiguous
+    // field (e.g. an O/0 invoice number) trends up instead of being re-guessed.
+    // Only raises confidence, and only for fields we actually read a value for.
+    const calibratedFields = await calibrateExtractionConfidence(extraction);
+
     // Consistency check — flag internally-inconsistent extractions for a human,
     // regardless of the model's stated confidence.
     const mismatch = arithmeticMismatch(extraction);
@@ -64,6 +105,7 @@ export async function POST(req: NextRequest) {
       arithmeticMismatch: mismatch,
       demo,
       refinedForSupplier: refinedForSupplier ?? null,
+      calibratedFields,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Extraction failed.";

@@ -20,6 +20,21 @@ export interface Correction {
   aiConfidence: number; // how confident the AI was when it got it wrong/right
 }
 
+/**
+ * A single confirmation — the human approved a field exactly as the AI read it.
+ * The counterpart to a Correction: evidence the read was right. Mirrors the
+ * `confirmations` table in db/schema.sql. Aggregated per supplier + field to
+ * calibrate confidence upward on a proven track record (see lib/calibration.ts).
+ */
+export interface Confirmation {
+  id: string;
+  createdAt: string;
+  invoiceId?: string;
+  supplierName: string;
+  field: ReviewableField;
+  value: string; // the confirmed value
+}
+
 /** The approved, human-verified final values written to the `invoices` table. */
 export interface ApprovedInvoice {
   supplierName: string;
@@ -34,6 +49,7 @@ export interface ApprovedInvoice {
 
 // --- In-memory fallback (used only when Supabase isn't configured) ----------
 const memCorrections: Correction[] = [];
+const memConfirmations: Confirmation[] = [];
 
 function mapCorrectionRow(row: Record<string, unknown>): Correction {
   return {
@@ -45,6 +61,17 @@ function mapCorrectionRow(row: Record<string, unknown>): Correction {
     aiValue: (row.ai_value as string) ?? "",
     humanValue: (row.human_value as string) ?? "",
     aiConfidence: Number(row.ai_confidence ?? 0),
+  };
+}
+
+function mapConfirmationRow(row: Record<string, unknown>): Confirmation {
+  return {
+    id: String(row.id),
+    createdAt: String(row.created_at),
+    invoiceId: (row.invoice_id as string) ?? undefined,
+    supplierName: String(row.supplier_name),
+    field: row.field as ReviewableField,
+    value: (row.value as string) ?? "",
   };
 }
 
@@ -81,6 +108,70 @@ export async function recordCorrection(
 
   if (error) throw new Error(`Failed to record correction: ${error.message}`);
   return mapCorrectionRow(data as Record<string, unknown>);
+}
+
+/**
+ * Append a confirmation to the ledger — the human approved this field exactly as
+ * read. Append-only, same as corrections: a historical fact about a correct read.
+ */
+export async function recordConfirmation(
+  c: Omit<Confirmation, "id" | "createdAt">,
+): Promise<Confirmation> {
+  const db = getSupabase();
+  if (!db) {
+    const entry: Confirmation = {
+      ...c,
+      id: crypto.randomUUID(),
+      createdAt: new Date().toISOString(),
+    };
+    memConfirmations.push(entry);
+    return entry;
+  }
+
+  const { data, error } = await db
+    .from("confirmations")
+    .insert({
+      invoice_id: c.invoiceId ?? null,
+      supplier_name: c.supplierName,
+      field: c.field,
+      value: c.value,
+    })
+    .select()
+    .single();
+
+  if (error) throw new Error(`Failed to record confirmation: ${error.message}`);
+  return mapConfirmationRow(data as Record<string, unknown>);
+}
+
+/**
+ * How many times each field has been confirmed correct for a supplier, as a
+ * `{ field: count }` map. This is the raw material for confidence calibration:
+ * a proven per-supplier, per-field track record of correct reads.
+ */
+export async function confirmationCountsForSupplier(
+  supplierName: string,
+): Promise<Partial<Record<ReviewableField, number>>> {
+  const counts: Partial<Record<ReviewableField, number>> = {};
+  const tally = (field: ReviewableField) => {
+    counts[field] = (counts[field] ?? 0) + 1;
+  };
+
+  const db = getSupabase();
+  if (!db) {
+    for (const c of memConfirmations) {
+      if (c.supplierName.toLowerCase() === supplierName.toLowerCase()) tally(c.field);
+    }
+    return counts;
+  }
+
+  const { data, error } = await db
+    .from("confirmations")
+    .select("field")
+    .ilike("supplier_name", supplierName);
+
+  if (error) throw new Error(`Failed to load confirmations: ${error.message}`);
+  for (const row of data ?? []) tally((row as { field: ReviewableField }).field);
+  return counts;
 }
 
 /** Recent corrections for a supplier — the raw material for per-vendor learning. */
