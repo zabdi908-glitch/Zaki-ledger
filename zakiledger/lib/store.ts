@@ -48,8 +48,19 @@ export interface ApprovedInvoice {
   overallConfidence: number;
 }
 
+/** Lightweight invoice identity used by duplicate detection. */
+export interface StoredInvoiceSummary {
+  id: string;
+  supplierName: string;
+  invoiceNumber: string;
+  invoiceDate: string | null;
+  status: string; // 'approved' | 'pending_review'
+  createdAt: string; // when it was first processed into the system
+}
+
 // --- In-memory fallback (used only when Supabase isn't configured) ----------
 const memCorrections: Correction[] = [];
+const memInvoices: StoredInvoiceSummary[] = [];
 const memConfirmations: Confirmation[] = [];
 
 function mapCorrectionRow(row: Record<string, unknown>): Correction {
@@ -247,12 +258,23 @@ export async function recentCorrections(limit = 20): Promise<Correction[]> {
 
 /**
  * Persist the human-approved invoice and return its id (used to link the
- * corrections back to it). Returns null in fallback mode — corrections still
- * record, just without an invoice_id.
+ * corrections back to it). In fallback mode it records a lightweight summary in
+ * memory so duplicate detection still works without a database.
  */
 export async function saveApprovedInvoice(inv: ApprovedInvoice): Promise<string | null> {
   const db = getSupabase();
-  if (!db) return null;
+  if (!db) {
+    const id = crypto.randomUUID();
+    memInvoices.push({
+      id,
+      supplierName: inv.supplierName,
+      invoiceNumber: inv.invoiceNumber,
+      invoiceDate: inv.invoiceDate,
+      status: "approved",
+      createdAt: new Date().toISOString(),
+    });
+    return id;
+  }
 
   const { data, error } = await db
     .from("invoices")
@@ -273,4 +295,56 @@ export async function saveApprovedInvoice(inv: ApprovedInvoice): Promise<string 
 
   if (error) throw new Error(`Failed to save approved invoice: ${error.message}`);
   return (data as { id: string }).id;
+}
+
+/**
+ * Find an existing invoice with the same supplier + invoice number (approved or
+ * pending), for duplicate detection. Returns the most recent match, or null.
+ * Scope is deliberately just supplier + invoice number — a supplier re-sending a
+ * corrected version is explicitly out of scope until we have a pilot example.
+ * A blank supplier or invoice number is unmatchable, so it never flags.
+ */
+export async function findDuplicateInvoice(
+  supplierName: string,
+  invoiceNumber: string,
+): Promise<StoredInvoiceSummary | null> {
+  if (!supplierName.trim() || !invoiceNumber.trim()) return null;
+
+  const db = getSupabase();
+  if (!db) {
+    // Newest match first, mirroring the DB ordering below.
+    for (let i = memInvoices.length - 1; i >= 0; i--) {
+      const inv = memInvoices[i];
+      if (
+        inv.supplierName.toLowerCase() === supplierName.toLowerCase() &&
+        inv.invoiceNumber === invoiceNumber
+      ) {
+        return inv;
+      }
+    }
+    return null;
+  }
+
+  const { data, error } = await db
+    .from("invoices")
+    .select("id, supplier_name, invoice_number, invoice_date, status, created_at")
+    .ilike("supplier_name", supplierName)
+    .eq("invoice_number", invoiceNumber)
+    .in("status", ["approved", "pending_review"])
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) throw new Error(`Failed to check for duplicate invoice: ${error.message}`);
+  if (!data) return null;
+
+  const r = data as Record<string, unknown>;
+  return {
+    id: String(r.id),
+    supplierName: String(r.supplier_name),
+    invoiceNumber: String(r.invoice_number),
+    invoiceDate: (r.invoice_date as string) ?? null,
+    status: String(r.status),
+    createdAt: String(r.created_at),
+  };
 }

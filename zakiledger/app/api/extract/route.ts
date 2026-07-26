@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { extractInvoice } from "@/lib/anthropic";
 import { buildHints } from "@/lib/learning";
 import { arithmeticMismatch, REVIEWABLE_FIELDS, type InvoiceExtraction } from "@/lib/schema";
-import { confirmationStatsForSupplier } from "@/lib/store";
+import { confirmationStatsForSupplier, findDuplicateInvoice } from "@/lib/store";
 import { calibrateConfidence, FLOOR_MIN_CONFIRMATIONS } from "@/lib/calibration";
 import { sampleExtraction } from "@/lib/demo";
 
@@ -125,6 +125,25 @@ export async function POST(req: NextRequest) {
     // regardless of the model's stated confidence.
     const mismatch = arithmeticMismatch(extraction);
 
+    // Duplicate detection (upload is the earliest checkpoint). Warn, never block:
+    // surface the match and let the human proceed or discard. Scope is supplier +
+    // invoice number only, by design. Logged either way as an audit trail.
+    const dupSupplier = extraction.supplierName.value.trim();
+    const dupInvoiceNumber = extraction.invoiceNumber.value.trim();
+    const existing = await findDuplicateInvoice(dupSupplier, dupInvoiceNumber);
+    console.log(
+      `[duplicate-check] supplier="${dupSupplier}" invoiceNumber="${dupInvoiceNumber}" ` +
+        `match=${existing ? `${existing.id} (processed ${existing.createdAt})` : "none"}`,
+    );
+    const duplicate = existing
+      ? {
+          supplierName: dupSupplier,
+          invoiceNumber: dupInvoiceNumber,
+          processedOn: existing.createdAt,
+          existingId: existing.id,
+        }
+      : null;
+
     return NextResponse.json({
       extraction,
       arithmeticMismatch: mismatch,
@@ -132,6 +151,7 @@ export async function POST(req: NextRequest) {
       refinedForSupplier: refinedForSupplier ?? null,
       calibratedFields,
       calibrationDebug, // TEMPORARY
+      duplicate,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Extraction failed.";

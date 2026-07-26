@@ -41,6 +41,13 @@ type ExtractResponse = {
   refinedForSupplier?: string | null;
   /** Reviewable fields whose confidence was lifted by this supplier's track record. */
   calibratedFields?: string[];
+  /** Set when an invoice with the same supplier + number was already processed. */
+  duplicate?: {
+    supplierName: string;
+    invoiceNumber: string;
+    processedOn: string; // ISO timestamp of the earlier invoice
+    existingId: string;
+  } | null;
 };
 
 /** Below this, a field is "low confidence" and gets flagged for the human. */
@@ -69,6 +76,17 @@ export default function Home() {
   const [edited, setEdited] = useState<Record<string, string>>({});
   const [approved, setApproved] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // The human explicitly chose to proceed past a duplicate warning.
+  const [proceedDuplicate, setProceedDuplicate] = useState(false);
+
+  /** Reset back to the empty upload state (used by the duplicate "Discard"). */
+  function discard() {
+    setResult(null);
+    setEdited({});
+    setApproved(null);
+    setError(null);
+    setProceedDuplicate(false);
+  }
 
   async function onUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -77,6 +95,7 @@ export default function Home() {
     setError(null);
     setResult(null);
     setApproved(null);
+    setProceedDuplicate(false);
 
     const form = new FormData();
     form.append("file", file);
@@ -203,7 +222,30 @@ export default function Home() {
         </p>
       )}
 
-      {result && (
+      {/* Duplicate warning — decide before reviewing. Never auto-resolved. */}
+      {result?.duplicate && !proceedDuplicate && (
+        <section style={dupCardStyle}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: "#7d4a00", marginBottom: 6 }}>
+            ⚠️ Possible duplicate
+          </div>
+          <p style={{ margin: "0 0 14px", color: "#6b4b1a", fontSize: 14 }}>
+            This looks like a duplicate of an invoice already processed on{" "}
+            <strong>{new Date(result.duplicate.processedOn).toLocaleDateString()}</strong> — same
+            supplier (<strong>{result.duplicate.supplierName}</strong>) and invoice number (
+            <strong>{result.duplicate.invoiceNumber}</strong>).
+          </p>
+          <div style={{ display: "flex", gap: 10 }}>
+            <button style={approveBtn} onClick={() => setProceedDuplicate(true)}>
+              Proceed anyway
+            </button>
+            <button style={discardBtn} onClick={discard}>
+              Discard
+            </button>
+          </div>
+        </section>
+      )}
+
+      {result && (!result.duplicate || proceedDuplicate) && (
         <section style={cardStyle}>
           <div style={{ fontSize: 13, fontWeight: 700, color: "#8892a0", letterSpacing: 0.4, marginBottom: 16 }}>
             REVIEW &amp; APPROVE
@@ -401,6 +443,24 @@ const gateReviewStyle: React.CSSProperties = {
   borderRadius: 8,
   color: "#7d6608",
   fontSize: 14,
+};
+const dupCardStyle: React.CSSProperties = {
+  marginTop: 24,
+  padding: 20,
+  background: "#fff8ec",
+  border: "1px solid #f0c986",
+  borderRadius: 12,
+  boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
+};
+const discardBtn: React.CSSProperties = {
+  padding: "11px 22px",
+  background: "#fff",
+  color: "#8a5a00",
+  border: "1px solid #e0b877",
+  borderRadius: 10,
+  cursor: "pointer",
+  fontWeight: 600,
+  fontSize: 15,
 };
 const chipOk: React.CSSProperties = {
   background: "#e8f8f0",
