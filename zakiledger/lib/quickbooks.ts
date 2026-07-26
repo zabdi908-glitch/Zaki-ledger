@@ -135,6 +135,13 @@ function escapeQuery(value: string): string {
   return value.replace(/'/g, "\\'");
 }
 
+/** Add `days` to an ISO date (YYYY-MM-DD), returning a YYYY-MM-DD string. */
+function addDays(isoDate: string, days: number): string {
+  const d = new Date(`${isoDate}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
 async function qboGet(
   path: string,
   accessToken: string,
@@ -233,7 +240,16 @@ export async function createQuickBooksBill(bill: ApprovedBill): Promise<string> 
     ],
   };
   if (bill.invoiceNumber) payload.DocNumber = bill.invoiceNumber;
-  if (bill.invoiceDate) payload.TxnDate = bill.invoiceDate;
+
+  const txnDate = bill.invoiceDate ?? new Date().toISOString().slice(0, 10);
+  payload.TxnDate = txnDate;
+  // Intentionally ignore the invoice's original due date / payment terms. If we
+  // pass a due date already in the past (common for invoices dated before today),
+  // QuickBooks immediately marks the bill "Overdue" — which looks wrong in a
+  // review queue, where Xero shows the equivalent bill as a clean "Draft". The
+  // goal here is just getting the bill into the books for a bookkeeper to review,
+  // not preserving payment terms, so we always set DueDate to bill date + 30 days.
+  payload.DueDate = addDays(txnDate, 30);
 
   const created = (await qboPost("bill", accessToken, realmId, payload)) as {
     Bill?: { Id?: string };
