@@ -6,33 +6,21 @@ import { confirmationStatsForSupplier, findDuplicateInvoice } from "@/lib/store"
 import { calibrateConfidence, FLOOR_MIN_CONFIRMATIONS } from "@/lib/calibration";
 import { sampleExtraction } from "@/lib/demo";
 
-/** TEMPORARY debug row per field — remove once the calibration trend is confirmed. */
-interface CalibrationDebug {
-  field: string;
-  raw: number; // model's confidence before calibration
-  confirmedCount: number; // confirmations (since last edit) for this supplier/field
-  bonus: number; // calibrated - raw
-  floor: number | null; // established-trust floor, once applied (else null)
-  calibrated: number;
-}
-
 /** Per-field supplier track record surfaced in the UI ("seen N× before"). */
 type SupplierMemory = Record<string, { count: number; confidence: number }>;
 
 /**
  * Raise each reviewable field's confidence by this supplier's confirmation track
- * record, in place. Returns the fields whose score was actually lifted (for UI
- * transparency), the per-field track record to surface in the UI, and a
- * temporary debug trace. No-op when the supplier is unknown or has no history,
- * and never invents confidence for a field we didn't read.
+ * record, in place. Returns the fields whose score was actually lifted and the
+ * per-field track record to surface in the UI. No-op when the supplier is unknown
+ * or has no history, and never invents confidence for a field we didn't read.
  */
 async function calibrateExtractionConfidence(
   extraction: InvoiceExtraction,
-): Promise<{ calibrated: string[]; memory: SupplierMemory; debug: CalibrationDebug[] }> {
+): Promise<{ calibrated: string[]; memory: SupplierMemory }> {
   const supplier = extraction.supplierName.value.trim();
-  const debug: CalibrationDebug[] = [];
   const memory: SupplierMemory = {};
-  if (!supplier) return { calibrated: [], memory, debug };
+  if (!supplier) return { calibrated: [], memory };
 
   const stats = await confirmationStatsForSupplier(supplier);
   const calibrated: string[] = [];
@@ -49,9 +37,7 @@ async function calibrateExtractionConfidence(
     // Established-trust floor: once the pattern is proven (>= FLOOR_MIN_CONFIRMATIONS),
     // a single noisy low read can't drop the score below the trust already built.
     // An edit resets the history upstream, so this only holds while reads stay correct.
-    let floorApplied: number | null = null;
     if (stat && stat.count >= FLOOR_MIN_CONFIRMATIONS && hasValue) {
-      floorApplied = stat.floor;
       boosted = Math.max(boosted, stat.floor);
     }
 
@@ -64,12 +50,9 @@ async function calibrateExtractionConfidence(
     if (stat && stat.count > 0) {
       memory[field] = { count: stat.count, confidence: stat.floor };
     }
-    debug.push({ field, raw, confirmedCount: n, bonus: boosted - raw, floor: floorApplied, calibrated: boosted });
   }
 
-  // TEMPORARY: surfaces in the Render/dev server logs so we can watch the trend.
-  console.log(`[calibration] supplier="${supplier}"`, JSON.stringify(debug));
-  return { calibrated, memory, debug };
+  return { calibrated, memory };
 }
 
 /**
@@ -128,7 +111,7 @@ export async function POST(req: NextRequest) {
     // confidence than a cold per-read estimate, so a reliably-read-but-ambiguous
     // field (e.g. an O/0 invoice number) trends up instead of being re-guessed.
     // Only raises confidence, and only for fields we actually read a value for.
-    const { calibrated: calibratedFields, memory: supplierMemory, debug: calibrationDebug } =
+    const { calibrated: calibratedFields, memory: supplierMemory } =
       await calibrateExtractionConfidence(extraction);
 
     // Consistency check — flag internally-inconsistent extractions for a human,
@@ -161,7 +144,6 @@ export async function POST(req: NextRequest) {
       refinedForSupplier: refinedForSupplier ?? null,
       calibratedFields,
       supplierMemory,
-      calibrationDebug, // TEMPORARY
       duplicate,
     });
   } catch (err) {
