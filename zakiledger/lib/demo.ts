@@ -80,14 +80,39 @@ export function sampleMessyReceiptExtraction(): InvoiceExtraction {
 }
 
 /**
+ * A document the model genuinely can't classify — a paid invoice stamped "PAID",
+ * which reads as both. documentType confidence sits below CRITICAL_THRESHOLD, so
+ * approval blocks until a human settles the type. Every field reads well; the
+ * uncertainty is purely about *what kind of document this is*, which is exactly
+ * the case that used to commit to a ruleset silently.
+ */
+export function sampleAmbiguousExtraction(): InvoiceExtraction {
+  return {
+    documentType: { value: "invoice", confidence: 0.54 }, // coin-flip → gates
+    supplierName: { value: "Harbour Print Co", confidence: 0.95 },
+    invoiceNumber: { value: "HP-4471", confidence: 0.92 },
+    invoiceDate: { value: "2026-07-14", confidence: 0.93 },
+    currency: { value: "GBP", confidence: 0.98 },
+    subtotal: { value: 180.0, confidence: 0.94 },
+    tax: { value: 36.0, confidence: 0.92 },
+    total: { value: 216.0, confidence: 0.96 },
+    taxItemized: true,
+    lineItems: [{ description: "Business cards (500)", quantity: 1, unitPrice: 180.0, amount: 180.0 }],
+    overallConfidence: 0.86,
+  };
+}
+
+/**
  * Pick a demo sample from the uploaded filename, so the receipt paths are
  * reachable without an API key: a name containing "messy" or "till" gives the
- * no-number/no-VAT receipt, "receipt" gives the clean receipt, anything else
- * gives the invoice. Demo-mode only — real extraction never looks at the name.
+ * no-number/no-VAT receipt, "ambiguous" gives the unclassifiable document,
+ * "receipt" gives the clean receipt, anything else gives the invoice.
+ * Demo-mode only — real extraction never looks at the name.
  */
 export function sampleForFilename(filename: string): InvoiceExtraction {
   const name = filename.toLowerCase();
   if (name.includes("messy") || name.includes("till")) return sampleMessyReceiptExtraction();
+  if (name.includes("ambiguous")) return sampleAmbiguousExtraction();
   if (name.includes("receipt")) return sampleReceiptExtraction();
   return sampleExtraction();
 }

@@ -7,7 +7,7 @@ import {
   type InvoiceExtraction,
   type ReviewableField,
 } from "@/lib/schema";
-import { checkTotals, effectiveConfidence, gateApproval } from "@/lib/validation";
+import { checkTotals, effectiveConfidence, gateApproval, type GateSubject } from "@/lib/validation";
 
 type PlatformStatus = { configured: boolean; connected: boolean };
 type ConnectionsStatus = { xero: PlatformStatus; quickbooks: PlatformStatus };
@@ -94,8 +94,11 @@ function fieldLabels(documentType: DocumentType): Record<ReviewableField, string
 }
 
 /** e.g. "Invoice date not detected (0%)" or "Tax low confidence (34%)". */
-function reasonText(field: ReviewableField, confidence: number, documentType: DocumentType): string {
+function reasonText(field: GateSubject, confidence: number, documentType: DocumentType): string {
   const pct = Math.round(confidence * 100);
+  if (field === "documentType") {
+    return `Not sure whether this is an invoice or a receipt (${pct}%) — confirm below`;
+  }
   return `${fieldLabels(documentType)[field]} ${pct === 0 ? "not detected" : "low confidence"} (${pct}%)`;
 }
 
@@ -112,6 +115,11 @@ export default function Home() {
   const [affirmed, setAffirmed] = useState<Record<string, boolean>>({});
   // A duplicate discovered at approve time (on the final, human-approved values).
   const [approveDuplicate, setApproveDuplicate] = useState<ExtractResponse["duplicate"] | null>(null);
+  // The human settled an uncertain invoice-vs-receipt classification. `typeOverride`
+  // is set only when they picked the OTHER type; confirming the detected one just
+  // clears the gate.
+  const [typeConfirmed, setTypeConfirmed] = useState(false);
+  const [typeOverride, setTypeOverride] = useState<DocumentType | null>(null);
   const [connections, setConnections] = useState<ConnectionsStatus | null>(null);
   // Set to "xero"/"quickbooks" right after returning from a successful OAuth flow.
   const [justConnected, setJustConnected] = useState<string | null>(null);
@@ -144,6 +152,8 @@ export default function Home() {
     setProceedDuplicate(false);
     setAffirmed({});
     setApproveDuplicate(null);
+    setTypeConfirmed(false);
+    setTypeOverride(null);
   }
 
   async function onUpload(e: React.ChangeEvent<HTMLInputElement>) {
@@ -156,6 +166,8 @@ export default function Home() {
     setProceedDuplicate(false);
     setAffirmed({});
     setApproveDuplicate(null);
+    setTypeConfirmed(false);
+    setTypeOverride(null);
 
     const form = new FormData();
     form.append("file", file);
@@ -179,7 +191,15 @@ export default function Home() {
     const res = await fetch("/api/approve", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ extraction: result.extraction, edited, proceedDuplicate: proceed }),
+      // documentType is sent separately so a human override of a shaky
+      // classification is what gets stored, posted and duplicate-matched on —
+      // not the model's original guess.
+      body: JSON.stringify({
+        extraction: result.extraction,
+        edited,
+        proceedDuplicate: proceed,
+        documentType,
+      }),
     });
     const data = await res.json();
     if (!res.ok) return setError(data.error ?? "Approve failed.");
@@ -209,8 +229,11 @@ export default function Home() {
   }
 
   // Document type drives labels and which fields the gate judges — a receipt's
-  // missing number must not block it. Defaults to invoice for safety.
-  const documentType: DocumentType = result?.extraction.documentType?.value ?? "invoice";
+  // missing number must not block it. Defaults to invoice for safety. The human
+  // can override a shaky classification, which also confirms it.
+  const detectedType: DocumentType = result?.extraction.documentType?.value ?? "invoice";
+  const documentType: DocumentType = typeOverride ?? detectedType;
+  const typeConfidence = result?.extraction.documentType?.confidence ?? 1;
   const taxItemized = result?.extraction.taxItemized ?? true;
   const labels = fieldLabels(documentType);
   const isReceipt = documentType === "receipt";
@@ -218,7 +241,14 @@ export default function Home() {
   // Recomputed every render, so editing a flagged field re-evaluates live —
   // both the gate below and the per-field confidence badges read from this map.
   const confidences = result ? effectiveConfidences(result.extraction, edited, affirmed) : null;
-  const gate = confidences ? gateApproval(confidences, { documentType, taxItemized }) : null;
+  const gate = confidences
+    ? gateApproval(confidences, {
+        documentType,
+        taxItemized,
+        documentTypeConfidence: typeConfidence,
+        documentTypeConfirmed: typeConfirmed,
+      })
+    : null;
 
   return (
     <main style={{ maxWidth: 680, margin: "0 auto", padding: "40px 20px 64px" }}>
@@ -351,10 +381,41 @@ export default function Home() {
             {/* What the AI decided this document is — shown, with its confidence,
                 because the type changes which fields are required. */}
             <span style={docTypeBadgeStyle}>
-              {isReceipt ? "🧾 Receipt" : "📄 Invoice"} ·{" "}
-              {((result.extraction.documentType?.confidence ?? 1) * 100).toFixed(0)}%
+              {isReceipt ? "🧾 Receipt" : "📄 Invoice"}
+              {typeOverride ? " · set by you" : typeConfirmed ? " · confirmed" : ` · ${(typeConfidence * 100).toFixed(0)}%`}
             </span>
           </div>
+
+          {/* An uncertain classification blocks approval, because the type decides
+              which fields are required, what they're called, and how duplicates
+              are matched. The human settles it here — the type isn't an editable
+              field, so without this the block would be a deadlock. */}
+          {typeConfidence < 0.8 && !typeConfirmed && (
+            <div style={typePickerStyle}>
+              <div style={{ fontWeight: 700, marginBottom: 4 }}>
+                Is this an invoice or a receipt?
+              </div>
+              <p style={{ margin: "0 0 12px", fontSize: 13 }}>
+                We read it as a <strong>{detectedType}</strong> but only at{" "}
+                {(typeConfidence * 100).toFixed(0)}% confidence. This decides which fields are
+                required, so please confirm.
+              </p>
+              <div style={{ display: "flex", gap: 10 }}>
+                {(["invoice", "receipt"] as DocumentType[]).map((t) => (
+                  <button
+                    key={t}
+                    style={t === detectedType ? approveBtn : discardBtn}
+                    onClick={() => {
+                      setTypeOverride(t === detectedType ? null : t);
+                      setTypeConfirmed(true);
+                    }}
+                  >
+                    {t === "receipt" ? "🧾 Receipt" : "📄 Invoice"}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           {REVIEWABLE_FIELDS.map((f) => {
             // After the Total field, show a live subtotal + tax = total check.
             // It recomputes from the edited values, so fixing a number clears it.
@@ -753,6 +814,15 @@ const notStatedNoteStyle: React.CSSProperties = {
   margin: "-8px 0 14px",
   color: "#8892a0",
   fontSize: 12,
+};
+const typePickerStyle: React.CSSProperties = {
+  margin: "0 0 18px",
+  padding: "14px 16px",
+  background: "#fff8ec",
+  border: "1px solid #f0c986",
+  borderRadius: 10,
+  color: "#7d4a00",
+  fontSize: 14,
 };
 const docTypeBadgeStyle: React.CSSProperties = {
   display: "inline-block",

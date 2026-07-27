@@ -20,3 +20,9 @@ npm-debug.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Real documents used for live accuracy checks — never commit (contain supplier
+# names, partial card numbers, addresses).
+scripts/fixtures/receipts/*
+scripts/fixtures/invoices/*
+!scripts/fixtures/**/.gitkeep

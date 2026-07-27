@@ -5,7 +5,7 @@ import {
   recordCorrection,
   saveApprovedInvoice,
 } from "@/lib/store";
-import { REVIEWABLE_FIELDS, type InvoiceExtraction } from "@/lib/schema";
+import { REVIEWABLE_FIELDS, type DocumentType, type InvoiceExtraction } from "@/lib/schema";
 import { postApprovedBill, type PostedBill } from "@/lib/accounting";
 
 /** Parse a human-facing string into a number, or null when it isn't one. */
@@ -25,11 +25,14 @@ function toNumber(s: string): number | null {
  */
 export async function POST(req: NextRequest) {
   try {
-    const { extraction, edited, proceedDuplicate } = (await req.json()) as {
-      extraction: InvoiceExtraction;
-      edited: Record<string, string>;
-      proceedDuplicate?: boolean;
-    };
+    const { extraction, edited, proceedDuplicate, documentType: overriddenType } =
+      (await req.json()) as {
+        extraction: InvoiceExtraction;
+        edited: Record<string, string>;
+        proceedDuplicate?: boolean;
+        /** Set when the human confirmed or corrected a low-confidence classification. */
+        documentType?: DocumentType;
+      };
 
     // The approved final value for a field: the human's edit if present,
     // otherwise the AI's proposed value.
@@ -38,9 +41,10 @@ export async function POST(req: NextRequest) {
 
     const supplierName = finalOf("supplierName");
     const invoiceNumber = finalOf("invoiceNumber");
-    // The type is detected at extraction and isn't a reviewable field, so it comes
-    // straight off the extraction. Older clients that don't send it get "invoice".
-    const documentType = extraction.documentType?.value ?? "invoice";
+    // The human's confirmed/overridden type wins over the model's guess; fall back
+    // to the extraction, then to "invoice" for older clients that send neither.
+    const documentType: DocumentType =
+      overriddenType ?? extraction.documentType?.value ?? "invoice";
     const invoiceDate = finalOf("invoiceDate") || null;
     const total = toNumber(finalOf("total"));
 

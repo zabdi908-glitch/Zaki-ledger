@@ -68,9 +68,16 @@ export function effectiveConfidence(
 
 export type ApprovalStatus = "ready" | "review" | "blocked";
 
+/**
+ * What a gate reason can point at: a reviewable field, or the document-type
+ * classification itself (which is not a field the human edits, but is gated the
+ * same way — see gateApproval).
+ */
+export type GateSubject = ReviewableField | "documentType";
+
 /** A single field that fell short, with the confidence that triggered it. */
 export interface ApprovalReason {
-  field: ReviewableField;
+  field: GateSubject;
   confidence: number;
 }
 
@@ -90,6 +97,20 @@ export interface GateContext {
    * it, and warning about it would be noise.
    */
   taxItemized?: boolean;
+  /**
+   * The model's confidence in the invoice-vs-receipt classification. Gated with
+   * the same CRITICAL_THRESHOLD used for fields, one level up — see the note on
+   * gateApproval. Omitted (undefined) means "not supplied", which is treated as
+   * certain, so existing callers are unaffected.
+   */
+  documentTypeConfidence?: number;
+  /**
+   * The human explicitly confirmed (or overrode) the document type. Clears the
+   * type gate, mirroring confirm-as-is for fields — without it an uncertain
+   * classification would be an unbreakable deadlock, since the type is not a
+   * field the human can edit.
+   */
+  documentTypeConfirmed?: boolean;
 }
 
 /**
@@ -106,11 +127,30 @@ export interface GateContext {
  *
  * `ctx` only changes *which fields are judged*, never the tiers or thresholds —
  * receipts run through this same classifier, not a parallel one.
+ *
+ * Rule 0 runs before all of them: if the document-type classification itself is
+ * below CRITICAL_THRESHOLD, block. Everything downstream — which fields are
+ * Critical, what the labels say, how duplicates are matched — is derived from
+ * that one decision, so committing to it silently on a 51/49 read would gate the
+ * document against the wrong field set with no sign anything was uncertain. It
+ * is the most load-bearing value in the extraction and was the only one not
+ * subject to the trust rules; this applies the same threshold one level up.
+ * `documentTypeConfirmed` is the escape hatch, exactly as confirm-as-is is for a
+ * correct-but-timid field.
  */
 export function gateApproval(
   confidenceByField: Record<ReviewableField, number>,
   ctx: GateContext = {},
 ): ApprovalGate {
+  const typeConfidence = ctx.documentTypeConfidence;
+  if (
+    typeConfidence !== undefined &&
+    typeConfidence < CRITICAL_THRESHOLD &&
+    !ctx.documentTypeConfirmed
+  ) {
+    return { status: "blocked", reasons: [{ field: "documentType", confidence: typeConfidence }] };
+  }
+
   const criticalFields = CRITICAL_FIELDS_BY_TYPE[ctx.documentType ?? "invoice"];
   const critical = criticalFields.filter((f) => confidenceByField[f] < CRITICAL_THRESHOLD);
   if (critical.length > 0) {

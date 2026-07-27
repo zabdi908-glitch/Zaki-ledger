@@ -137,6 +137,80 @@ demo mode picks between them by filename. This is the biggest open risk in the s
 
 ---
 
+---
+
+# Addendum — hardening pass (same day)
+
+## 1. Vitest stood up — 37 tests, net-new
+
+`npm test` (also `test:watch`, and `check` = typecheck + test). Config in
+`vitest.config.ts`; `@/*` alias mirrors tsconfig.
+
+- `tests/validation.test.ts` — 24 tests. The gate/validation logic, including the
+  Phase 1 invoice behaviour as a regression guard.
+- `tests/flow.test.ts` — 13 tests. Extract → approve → duplicate, driving the real
+  route handlers **in-process** (`import { POST } from "@/app/api/extract/route"`).
+  No dev server, no network, runs in ~0.5s.
+
+The route tests share a process-wide in-memory store and are deliberately **order
+dependent** — a duplicate can only be found after something was approved. Each test
+file gets its own worker (`isolate: true`, `fileParallelism: false`) so files can't
+contaminate each other.
+
+Notable regression guards now locked in: the confirmations-count bug (blank number and
+0-confidence tax/subtotal must never be recorded as confirmed reads), the
+CONTROL assertions that prove the per-type Critical set does real work, and the
+gate's back-compat behaviour when called with no context.
+
+## 2. Low-confidence document-type gate
+
+`gateApproval` gained **rule 0**, evaluated before the field tiers: if
+`documentTypeConfidence < CRITICAL_THRESHOLD` (0.8, the existing one — no new
+threshold) and the human hasn't confirmed, the document is **blocked** with a
+`documentType` reason. `ApprovalReason.field` widened to `GateSubject =
+ReviewableField | "documentType"`.
+
+Rationale: everything downstream — Critical field set, labels, duplicate identity — is
+derived from that one value, so a 51/49 read silently committed the whole review to the
+wrong ruleset. It was the most load-bearing value in the extraction and the only one not
+subject to the trust rules.
+
+Because the type isn't an editable field, blocking alone would be a deadlock — the same
+trap `confirm-as-is` was built to escape. So the review screen shows an
+**"Is this an invoice or a receipt?"** card with both options; picking either clears the
+gate, and picking the other one overrides the type. The chosen type is sent to
+`/api/approve` and **wins over the model's guess**, so it drives what gets stored,
+duplicate-matched and posted. A test proves the override is what's persisted (the
+overridden doc becomes findable by the *receipt* identity rule).
+
+Back-compat: `documentTypeConfidence` omitted ⇒ treated as certain, so existing callers
+are unaffected. Boundary asserted at exactly 0.8.
+
+New demo sample `sampleAmbiguousExtraction()` (a "PAID" invoice, type confidence 0.54,
+all fields clean) reachable via a filename containing `ambiguous`.
+
+## 3. Live-key accuracy check — BLOCKED, harness ready
+
+**Not run.** It needs two things that can't be manufactured: a live
+`ANTHROPIC_API_KEY`, and real receipts. Generating synthetic receipt images and scoring
+against them would produce a number that measures nothing — the whole point is unseen
+real-world input (thermal fade, creases, odd layouts).
+
+Harness is written and verified to fail loudly on both preconditions:
+
+```
+npm run receipts:live          # scripts/live-receipt-check.ts
+```
+
+Drop real files in `scripts/fixtures/receipts/` and `scripts/fixtures/invoices/` — the
+folder is the ground-truth label. Reports type accuracy, mean/lowest type confidence,
+how many would trip the new gate, and per-document detail. It separates **gated misses**
+(caught by rule 0) from **confident misses**, which is the number that actually matters:
+a confident misclassification reaches the human already committed to the wrong ruleset.
+
+Fixtures are gitignored — real documents carry supplier names, partial card numbers and
+addresses, and must not be committed.
+
 ## For the full regression pass (after bulk approve + multi-page land)
 
 Fold these in as cases:
