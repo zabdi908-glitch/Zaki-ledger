@@ -41,6 +41,33 @@ create index if not exists invoices_receipt_identity_idx
   where document_type = 'receipt';
 
 -- =========================================================================
+-- The pending queue: documents read but not yet approved.
+-- Holding the extraction verbatim is what gives a document an ID before it is
+-- approved, which is what lets a client say "approve these five" (bulk approve)
+-- instead of re-uploading the whole extraction per document.
+--
+-- A row leaves the queue (status 'resolved') only when it reached the `invoices`
+-- ledger. Blocked/errored documents stay 'pending' with the reason attached, so
+-- the human can fix and re-submit them — see lib/store.ts resolvePendingDocument.
+-- =========================================================================
+create table if not exists pending_documents (
+  id            uuid primary key default gen_random_uuid(),
+  extraction    jsonb not null,          -- the InvoiceExtraction, verbatim
+  filename      text,
+  status        text not null default 'pending',  -- pending | resolved
+  last_outcome  text,                    -- approved | blocked | error
+  last_reason   text,                    -- why it was blocked/errored
+  invoice_id    uuid references invoices(id),
+  created_at    timestamptz not null default now(),
+  resolved_at   timestamptz
+);
+
+-- The queue view: pending only, oldest first.
+create index if not exists pending_documents_queue_idx
+  on pending_documents (created_at)
+  where status = 'pending';
+
+-- =========================================================================
 -- THE MOAT: the correction ledger.
 -- Append-only. Every human edit to an AI-proposed value lands here.
 -- This is BOTH the audit trail (compliance) AND the training data (flywheel).

@@ -41,6 +41,16 @@ export interface PostedBill {
   billId: string;
 }
 
+// Currency rules live in lib/currency.ts (dependency-free, so the browser can use
+// them too) and are re-exported here, where callers already look for bill rules.
+export {
+  SUPPORTED_CURRENCIES,
+  isSupportedCurrency,
+  unsupportedCurrencyReason,
+  formatMoney,
+  type SupportedCurrency,
+} from "./currency";
+
 /**
  * Post the approved bill to the connected platform, if any. Xero is preferred
  * when both happen to be connected. Returns null when neither is connected, so

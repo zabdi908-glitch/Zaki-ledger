@@ -29,6 +29,37 @@ correction** (the correction ledger).
 **Principle #1 — human-in-the-loop:** the AI drafts, the human approves. Nothing
 posts silently. Every action is logged and reversible.
 
+### Bulk approve
+
+Reading a document also parks it in an **approval queue** (`pending_documents`),
+which is what gives it an id before it is approved. Select several and
+`/api/approve/bulk` runs the *same* `gateApproval` decision over each one
+independently, posting only the ones that clear it:
+
+```
+ POST /api/approve/bulk  { documentIds: [...] }
+        │
+        ├─ per document, in sequence ──► currency check → confidence gate →
+        │                                arithmetic → duplicate → ledger → bill
+        │
+        ▼
+ { results: [ per-item status + merchant + total + reason ],
+   summary: "3 approved, 1 blocked, 1 error | Total posted: £315.60" }
+```
+
+Two rules make it safe to press:
+
+- **Documents are independent.** One document's bad currency or a platform
+  outage produces one error result; the other nine still get approved.
+- **The bar is higher than the review screen's, because nobody is watching.**
+  The review screen offers "Approve anyway" on a flagged field — a human is
+  looking right at it. In bulk only a clean `ready` posts; anything uncertain
+  (low confidence, unclassifiable type, arithmetic that doesn't reconcile, a
+  possible duplicate) comes back with the reason and stays in the queue.
+
+Approved documents leave the queue; blocked and errored ones stay, carrying the
+reason, so the queue is always "what still needs a human".
+
 ## The moat: the correction ledger
 
 `db/schema.sql` defines an append-only `corrections` table. Every time a human
@@ -72,6 +103,12 @@ confidence scores. Corrections still in memory unless you add tier 3.
 **Tier 3 — Real persistence.** Also set `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY`,
 and run `db/schema.sql` in your Supabase project's SQL editor. Now approved
 invoices and the correction ledger persist across restarts — the moat is live.
+(`db/schema.sql` is idempotent — re-run it after pulling to pick up the
+`pending_documents` table that bulk approve reads from.)
+
+In demo mode the queue starts empty; **Load a demo batch** seeds five documents —
+three clean receipts, one smudged merchant name, one unpostable currency — so
+bulk approve can be exercised end to end with no key and no database.
 
 ### Testing it on a URL (share with a real accountant)
 
@@ -89,5 +126,9 @@ Deploy to **Vercel** (it auto-detects Next.js — no config needed):
   two-pass read: pass 1 identifies the supplier, then if we hold corrections for that supplier it
   re-extracts with their targeted hints (second call only fires when supplier history exists)
 - [ ] Add the Xero OAuth flow + "post to Xero" action
-- [ ] Bulk approve + full audit-log view
+- [x] Bulk approve — an approval queue (`pending_documents`) plus `/api/approve/bulk`, which runs
+  the existing `gateApproval` per document independently, posts only the ones that clear it, and
+  reports per-item status/reason with a summary. Blocked and errored documents stay queued with
+  the reason attached
+- [ ] Full audit-log view
 - [ ] Receipts (not just invoices)

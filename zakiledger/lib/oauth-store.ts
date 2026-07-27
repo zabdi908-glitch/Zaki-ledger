@@ -34,7 +34,20 @@ export interface TokenSet {
 }
 
 // --- In-memory fallback (used only when Supabase isn't configured) ----------
-const memConnections = new Map<OAuthProvider, OAuthConnection>();
+
+/**
+ * On `globalThis` for the same reason as lib/store.ts: each Next.js route handler
+ * is bundled separately, so a module-level Map would mean the connection saved by
+ * /api/xero/callback was invisible to /api/approve — the OAuth flow would appear
+ * to succeed and then every approval would report "not connected".
+ * Irrelevant once Supabase is configured; the `oauth_connections` table is then
+ * the shared state.
+ */
+const globalForConnections = globalThis as unknown as {
+  __zakiLedgerConnections?: Map<OAuthProvider, OAuthConnection>;
+};
+const memConnections: Map<OAuthProvider, OAuthConnection> =
+  (globalForConnections.__zakiLedgerConnections ??= new Map());
 
 function mapConnectionRow(row: Record<string, unknown>): OAuthConnection {
   return {

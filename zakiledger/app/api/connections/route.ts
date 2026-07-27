@@ -8,11 +8,16 @@ import { isQuickBooksConfigured, isQuickBooksConnected } from "@/lib/quickbooks"
  * show a "Connect …" button vs. a "connected" indicator. Never returns tokens —
  * just whether each platform is configured (client id present) and connected (a
  * stored token exists).
+ *
+ * Also reports whether the app is running in demo mode (no Anthropic key), which
+ * is the one thing the UI can't work out for itself before the first upload — it
+ * gates the "Load demo batch" control.
  */
 export async function GET() {
   const [xero, quickbooks] = await Promise.all([isXeroConnected(), isQuickBooksConnected()]);
   return NextResponse.json({
     xero: { configured: isXeroConfigured(), connected: xero },
     quickbooks: { configured: isQuickBooksConfigured(), connected: quickbooks },
+    demo: !process.env.ANTHROPIC_API_KEY,
   });
 }

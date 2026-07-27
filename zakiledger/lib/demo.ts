@@ -103,16 +103,93 @@ export function sampleAmbiguousExtraction(): InvoiceExtraction {
 }
 
 /**
+ * A perfectly-read receipt in a currency we don't post in. Every field is
+ * confident, so the confidence gate has nothing to say about it — which is the
+ * point: this failure mode is invisible to the gate and has to be caught by an
+ * explicit precondition, or the bill goes out booked at the wrong amount in the
+ * organisation's base currency.
+ */
+export function sampleForeignCurrencyReceiptExtraction(): InvoiceExtraction {
+  return {
+    documentType: { value: "receipt", confidence: 0.95 },
+    supplierName: { value: "Shinjuku Station Kiosk", confidence: 0.93 },
+    invoiceNumber: { value: "T-5521", confidence: 0.87 },
+    invoiceDate: { value: "2026-07-19", confidence: 0.94 },
+    currency: { value: "JPY", confidence: 0.96 }, // read correctly — we just can't post it
+    subtotal: { value: 3400, confidence: 0.93 },
+    tax: { value: 340, confidence: 0.9 },
+    total: { value: 3740, confidence: 0.95 },
+    taxItemized: true,
+    lineItems: [{ description: "Rail pass top-up", quantity: 1, unitPrice: 3400, amount: 3400 }],
+    overallConfidence: 0.93,
+  };
+}
+
+/**
+ * The mixed batch the bulk-approve flow is designed around — five documents that
+ * between them exercise all three outcomes in one pass:
+ *
+ *   3 clean receipts        → high confidence throughout, arithmetic reconciles,
+ *                             distinct merchant/date/total so none reads as a
+ *                             duplicate of another → all three approve and post.
+ *   1 smudged merchant name → Critical field under threshold → blocked for review.
+ *   1 foreign currency      → confident but unpostable → error, with the reason.
+ *
+ * Deliberately kept as data, not as a test-only fixture: it's what the "Load demo
+ * batch" button seeds, so the feature is demonstrable with no key and no database.
+ */
+export function sampleBulkBatch(): Array<{ filename: string; extraction: InvoiceExtraction }> {
+  return [
+    { filename: "receipt-greenway-fuel.png", extraction: sampleReceiptExtraction() },
+    {
+      filename: "receipt-northgate-hardware.png",
+      extraction: {
+        ...sampleReceiptExtraction(),
+        supplierName: { value: "Northgate Hardware", confidence: 0.96 },
+        invoiceNumber: { value: "NH-10442", confidence: 0.91 },
+        invoiceDate: { value: "2026-07-20", confidence: 0.95 },
+        subtotal: { value: 128.0, confidence: 0.95 },
+        tax: { value: 25.6, confidence: 0.92 },
+        total: { value: 153.6, confidence: 0.97 },
+        lineItems: [
+          { description: "Cordless drill bits (set)", quantity: 2, unitPrice: 44.0, amount: 88.0 },
+          { description: "Safety goggles", quantity: 4, unitPrice: 10.0, amount: 40.0 },
+        ],
+      },
+    },
+    {
+      filename: "receipt-mereside-catering.png",
+      extraction: {
+        ...sampleReceiptExtraction(),
+        supplierName: { value: "Mereside Catering", confidence: 0.94 },
+        invoiceNumber: { value: "MC-3390", confidence: 0.89 },
+        invoiceDate: { value: "2026-07-21", confidence: 0.92 },
+        subtotal: { value: 82.5, confidence: 0.93 },
+        tax: { value: 16.5, confidence: 0.9 },
+        total: { value: 99.0, confidence: 0.96 },
+        lineItems: [{ description: "Team lunch (11 covers)", quantity: 11, unitPrice: 7.5, amount: 82.5 }],
+      },
+    },
+    { filename: "messy-till-receipt.png", extraction: sampleMessyReceiptExtraction() },
+    { filename: "receipt-tokyo-kiosk.png", extraction: sampleForeignCurrencyReceiptExtraction() },
+  ];
+}
+
+/**
  * Pick a demo sample from the uploaded filename, so the receipt paths are
  * reachable without an API key: a name containing "messy" or "till" gives the
  * no-number/no-VAT receipt, "ambiguous" gives the unclassifiable document,
- * "receipt" gives the clean receipt, anything else gives the invoice.
+ * "foreign" or "jpy" gives the unpostable-currency receipt, "receipt" gives the
+ * clean receipt, anything else gives the invoice.
  * Demo-mode only — real extraction never looks at the name.
  */
 export function sampleForFilename(filename: string): InvoiceExtraction {
   const name = filename.toLowerCase();
   if (name.includes("messy") || name.includes("till")) return sampleMessyReceiptExtraction();
   if (name.includes("ambiguous")) return sampleAmbiguousExtraction();
+  if (name.includes("foreign") || name.includes("jpy")) {
+    return sampleForeignCurrencyReceiptExtraction();
+  }
   if (name.includes("receipt")) return sampleReceiptExtraction();
   return sampleExtraction();
 }

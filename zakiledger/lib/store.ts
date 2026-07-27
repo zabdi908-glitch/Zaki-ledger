@@ -1,4 +1,4 @@
-import type { DocumentType, ReviewableField } from "./schema";
+import type { DocumentType, InvoiceExtraction, ReviewableField } from "./schema";
 import { getSupabase } from "./supabase";
 
 /**
@@ -62,10 +62,68 @@ export interface StoredInvoiceSummary {
   createdAt: string; // when it was first processed into the system
 }
 
+/**
+ * How an approval pass ended for a pending document. Defined here (rather than in
+ * the bulk-approve module) so the store, which records it, doesn't depend on the
+ * higher-level module that produces it.
+ */
+export type PendingOutcome = "approved" | "blocked" | "error";
+
+/**
+ * A document that has been read but not yet approved — the queue bulk approve
+ * operates on. Extraction is held verbatim so approval works from exactly what
+ * the human saw, and so an ID is all a client needs to send.
+ */
+export interface PendingDocument {
+  id: string;
+  createdAt: string;
+  filename: string | null;
+  extraction: InvoiceExtraction;
+  /** 'pending' while it still needs handling; 'resolved' once it entered the ledger. */
+  status: "pending" | "resolved";
+  /** Outcome of the most recent approval attempt (null until one is made). */
+  lastOutcome: PendingOutcome | null;
+  /** Why it was blocked or errored, in the human's words. */
+  lastReason: string | null;
+  /** The approved invoice row this became, when it got that far. */
+  invoiceId: string | null;
+}
+
 // --- In-memory fallback (used only when Supabase isn't configured) ----------
-const memCorrections: Correction[] = [];
-const memInvoices: StoredInvoiceSummary[] = [];
-const memConfirmations: Confirmation[] = [];
+
+/**
+ * The fallback store is hung off `globalThis` rather than kept in module scope,
+ * because module scope is not shared where it needs to be.
+ *
+ * Next.js bundles each route handler separately, so `lib/store.ts` is
+ * instantiated once per route: a plain module-level array would give /api/extract
+ * and /api/approve/bulk two different stores, and a document queued by one route
+ * would simply not exist to the other. (Dev-mode hot reload re-instantiates
+ * modules too, which would wipe the queue on every edit.) One global object gives
+ * every bundle the same arrays.
+ *
+ * This only affects the keyless/no-database mode. With Supabase configured these
+ * arrays are never touched — Postgres is the shared state.
+ */
+interface MemoryStore {
+  corrections: Correction[];
+  invoices: StoredInvoiceSummary[];
+  confirmations: Confirmation[];
+  pending: PendingDocument[];
+}
+
+const globalForMemory = globalThis as unknown as { __zakiLedgerMemory?: MemoryStore };
+const memory: MemoryStore = (globalForMemory.__zakiLedgerMemory ??= {
+  corrections: [],
+  invoices: [],
+  confirmations: [],
+  pending: [],
+});
+
+const memCorrections = memory.corrections;
+const memInvoices = memory.invoices;
+const memConfirmations = memory.confirmations;
+const memPending = memory.pending;
 
 function mapCorrectionRow(row: Record<string, unknown>): Correction {
   return {
@@ -432,4 +490,133 @@ export async function findDuplicateDocument(
   return documentType === "receipt"
     ? findDuplicateReceipt(d.supplierName, d.invoiceDate, d.total)
     : findDuplicateInvoice(d.supplierName, d.invoiceNumber);
+}
+
+// --- Pending queue ----------------------------------------------------------
+
+function mapPendingRow(row: Record<string, unknown>): PendingDocument {
+  return {
+    id: String(row.id),
+    createdAt: String(row.created_at),
+    filename: (row.filename as string) ?? null,
+    extraction: row.extraction as InvoiceExtraction,
+    status: (row.status as PendingDocument["status"]) ?? "pending",
+    lastOutcome: (row.last_outcome as PendingOutcome) ?? null,
+    lastReason: (row.last_reason as string) ?? null,
+    invoiceId: (row.invoice_id as string) ?? null,
+  };
+}
+
+/**
+ * Park a freshly-read document in the queue and return its id. This is what makes
+ * a document addressable: until now an extraction only existed in the browser, so
+ * "approve these five" had nothing to name them by.
+ */
+export async function savePendingDocument(p: {
+  extraction: InvoiceExtraction;
+  filename?: string | null;
+}): Promise<string> {
+  const db = getSupabase();
+  if (!db) {
+    const entry: PendingDocument = {
+      id: crypto.randomUUID(),
+      createdAt: new Date().toISOString(),
+      filename: p.filename ?? null,
+      extraction: p.extraction,
+      status: "pending",
+      lastOutcome: null,
+      lastReason: null,
+      invoiceId: null,
+    };
+    memPending.push(entry);
+    return entry.id;
+  }
+
+  const { data, error } = await db
+    .from("pending_documents")
+    .insert({
+      extraction: p.extraction,
+      filename: p.filename ?? null,
+      status: "pending",
+    })
+    .select("id")
+    .single();
+
+  if (error) throw new Error(`Failed to save pending document: ${error.message}`);
+  return (data as { id: string }).id;
+}
+
+/**
+ * The queue, oldest first — a work queue reads FIFO. Resolved documents drop out;
+ * blocked and errored ones stay, because they still need a human.
+ */
+export async function listPendingDocuments(limit = 100): Promise<PendingDocument[]> {
+  const db = getSupabase();
+  if (!db) return memPending.filter((p) => p.status === "pending").slice(0, limit);
+
+  const { data, error } = await db
+    .from("pending_documents")
+    .select()
+    .eq("status", "pending")
+    .order("created_at", { ascending: true })
+    .limit(limit);
+
+  if (error) throw new Error(`Failed to load pending documents: ${error.message}`);
+  return (data ?? []).map((r) => mapPendingRow(r as Record<string, unknown>));
+}
+
+/** One pending document by id, or null when the id is unknown. */
+export async function getPendingDocument(id: string): Promise<PendingDocument | null> {
+  const db = getSupabase();
+  if (!db) return memPending.find((p) => p.id === id) ?? null;
+
+  const { data, error } = await db
+    .from("pending_documents")
+    .select()
+    .eq("id", id)
+    .maybeSingle();
+
+  if (error) throw new Error(`Failed to load pending document: ${error.message}`);
+  return data ? mapPendingRow(data as Record<string, unknown>) : null;
+}
+
+/**
+ * Record how an approval attempt ended.
+ *
+ * Whether the document leaves the queue is decided by ONE thing: did it reach the
+ * ledger (`invoiceId` set)? Not by the outcome. A document that saved but failed
+ * to post to the accounting platform is reported as an error to the human, yet is
+ * resolved here — it is already in the ledger, and re-running it would post a
+ * second bill. Blocked and precondition-error documents never saved anything, so
+ * they stay queued for the human to fix and re-submit.
+ */
+export async function resolvePendingDocument(
+  id: string,
+  r: { outcome: PendingOutcome; reason?: string | null; invoiceId?: string | null },
+): Promise<void> {
+  const status = r.invoiceId ? "resolved" : "pending";
+
+  const db = getSupabase();
+  if (!db) {
+    const entry = memPending.find((p) => p.id === id);
+    if (!entry) return;
+    entry.status = status;
+    entry.lastOutcome = r.outcome;
+    entry.lastReason = r.reason ?? null;
+    entry.invoiceId = r.invoiceId ?? null;
+    return;
+  }
+
+  const { error } = await db
+    .from("pending_documents")
+    .update({
+      status,
+      last_outcome: r.outcome,
+      last_reason: r.reason ?? null,
+      invoice_id: r.invoiceId ?? null,
+      resolved_at: status === "resolved" ? new Date().toISOString() : null,
+    })
+    .eq("id", id);
+
+  if (error) throw new Error(`Failed to update pending document: ${error.message}`);
 }

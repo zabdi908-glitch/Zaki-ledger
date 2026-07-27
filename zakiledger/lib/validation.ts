@@ -168,6 +168,60 @@ export function gateApproval(
   return { status: "ready", reasons: [] };
 }
 
+// --- Human-readable gate reasons --------------------------------------------
+
+/**
+ * Field labels — bookkeepers should never see raw field keys. Same fields either
+ * way; a receipt just calls them by their receipt names ("Merchant", not
+ * "Supplier"), which is what's printed on the document in front of them.
+ *
+ * Lives here, next to the gate, because two callers now render gate reasons: the
+ * review screen (per field, as the human edits) and bulk approve (server-side,
+ * where no human is present to interpret a field key). One wording, both places.
+ */
+export const FIELD_LABELS_BY_TYPE: Record<DocumentType, Record<ReviewableField, string>> = {
+  invoice: {
+    supplierName: "Supplier",
+    invoiceNumber: "Invoice number",
+    invoiceDate: "Invoice date",
+    currency: "Currency",
+    subtotal: "Subtotal",
+    tax: "Tax",
+    total: "Total",
+  },
+  receipt: {
+    supplierName: "Merchant",
+    invoiceNumber: "Receipt number (optional)",
+    invoiceDate: "Receipt date",
+    currency: "Currency",
+    subtotal: "Subtotal",
+    tax: "VAT",
+    total: "Total",
+  },
+};
+
+export function fieldLabels(documentType: DocumentType): Record<ReviewableField, string> {
+  return FIELD_LABELS_BY_TYPE[documentType] ?? FIELD_LABELS_BY_TYPE.invoice;
+}
+
+/** e.g. "Invoice date not detected (0%)" or "Tax low confidence (34%)". */
+export function reasonText(
+  field: GateSubject,
+  confidence: number,
+  documentType: DocumentType,
+): string {
+  const pct = Math.round(confidence * 100);
+  if (field === "documentType") {
+    return `Not sure whether this is an invoice or a receipt (${pct}%) — confirm below`;
+  }
+  return `${fieldLabels(documentType)[field]} ${pct === 0 ? "not detected" : "low confidence"} (${pct}%)`;
+}
+
+/** All of a gate's reasons as one sentence — for contexts with no per-field UI. */
+export function gateReasonSummary(gate: ApprovalGate, documentType: DocumentType): string {
+  return gate.reasons.map((r) => reasonText(r.field, r.confidence, documentType)).join("; ");
+}
+
 // --- Arithmetic reconciliation ----------------------------------------------
 
 /** Rounding tolerance (in currency units) when checking subtotal + tax = total. */

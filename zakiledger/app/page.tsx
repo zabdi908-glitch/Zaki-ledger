@@ -7,10 +7,20 @@ import {
   type InvoiceExtraction,
   type ReviewableField,
 } from "@/lib/schema";
-import { checkTotals, effectiveConfidence, gateApproval, type GateSubject } from "@/lib/validation";
+import {
+  checkTotals,
+  effectiveConfidence,
+  fieldLabels,
+  gateApproval,
+  reasonText,
+} from "@/lib/validation";
+// Type-only: erased at compile time, so none of the server-side bulk-approve
+// module (or its Xero/Supabase chain) reaches the client bundle.
+import type { BulkApproveResult, BulkItemResult } from "@/lib/bulk-approve";
+import { formatMoney } from "@/lib/currency";
 
 type PlatformStatus = { configured: boolean; connected: boolean };
-type ConnectionsStatus = { xero: PlatformStatus; quickbooks: PlatformStatus };
+type ConnectionsStatus = { xero: PlatformStatus; quickbooks: PlatformStatus; demo?: boolean };
 
 /** Parse a review-field string into a number, or null when it isn't one. */
 function parseNum(s: string | undefined): number | null {
@@ -42,6 +52,8 @@ function effectiveConfidences(
 }
 
 type ExtractResponse = {
+  /** The queue row this upload created — sent back on approve so it's cleared. */
+  documentId?: string;
   extraction: InvoiceExtraction;
   arithmeticMismatch: boolean;
   demo?: boolean;
@@ -63,44 +75,45 @@ type ExtractResponse = {
 /** Below this, a field is "low confidence" and gets flagged for the human. */
 const CONFIDENCE_THRESHOLD = 0.85;
 
-/**
- * Human-readable labels — bookkeepers should never see raw field keys. Same
- * fields either way; a receipt just calls them by their receipt names ("Merchant",
- * not "Supplier"), which is what's printed on the document in front of them.
- */
-const FIELD_LABELS_BY_TYPE: Record<DocumentType, Record<ReviewableField, string>> = {
-  invoice: {
-    supplierName: "Supplier",
-    invoiceNumber: "Invoice number",
-    invoiceDate: "Invoice date",
-    currency: "Currency",
-    subtotal: "Subtotal",
-    tax: "Tax",
-    total: "Total",
-  },
-  receipt: {
-    supplierName: "Merchant",
-    invoiceNumber: "Receipt number (optional)",
-    invoiceDate: "Receipt date",
-    currency: "Currency",
-    subtotal: "Subtotal",
-    tax: "VAT",
-    total: "Total",
-  },
+/** An amount for the queue/results list. Falls back gracefully on a bad read. */
+function money(total: number | null, currency: string): string {
+  return total === null || !Number.isFinite(total) ? "—" : formatMoney(total, currency);
+}
+
+/** Add/remove one document from the batch selection. */
+function toggleOne(id: string, setSelected: React.Dispatch<React.SetStateAction<Set<string>>>) {
+  setSelected((prev) => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    return next;
+  });
+}
+
+/** Select every queued document, or clear the selection when all are already on. */
+function toggleAll(
+  docs: PendingDoc[],
+  selected: Set<string>,
+  setSelected: React.Dispatch<React.SetStateAction<Set<string>>>,
+) {
+  setSelected(selected.size === docs.length ? new Set() : new Set(docs.map((d) => d.id)));
+}
+
+/** A queued document, as GET /api/pending renders it for the batch list. */
+type PendingDoc = {
+  id: string;
+  createdAt: string;
+  filename: string | null;
+  documentType: DocumentType;
+  merchantName: string;
+  invoiceNumber: string;
+  invoiceDate: string;
+  currency: string;
+  total: number;
+  overallConfidence: number;
+  lastOutcome: "approved" | "blocked" | "error" | null;
+  lastReason: string | null;
 };
-
-function fieldLabels(documentType: DocumentType): Record<ReviewableField, string> {
-  return FIELD_LABELS_BY_TYPE[documentType] ?? FIELD_LABELS_BY_TYPE.invoice;
-}
-
-/** e.g. "Invoice date not detected (0%)" or "Tax low confidence (34%)". */
-function reasonText(field: GateSubject, confidence: number, documentType: DocumentType): string {
-  const pct = Math.round(confidence * 100);
-  if (field === "documentType") {
-    return `Not sure whether this is an invoice or a receipt (${pct}%) — confirm below`;
-  }
-  return `${fieldLabels(documentType)[field]} ${pct === 0 ? "not detected" : "low confidence"} (${pct}%)`;
-}
 
 export default function Home() {
   const [loading, setLoading] = useState(false);
@@ -123,6 +136,11 @@ export default function Home() {
   const [connections, setConnections] = useState<ConnectionsStatus | null>(null);
   // Set to "xero"/"quickbooks" right after returning from a successful OAuth flow.
   const [justConnected, setJustConnected] = useState<string | null>(null);
+  // --- Bulk approve: the queue, the selection, and the last run's results. ---
+  const [pending, setPending] = useState<PendingDoc[]>([]);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkRunning, setBulkRunning] = useState(false);
+  const [bulk, setBulk] = useState<BulkApproveResult | null>(null);
 
   async function refreshConnections() {
     try {
@@ -133,8 +151,57 @@ export default function Home() {
     }
   }
 
+  /**
+   * Reload the queue and drop any selection that no longer exists — a document
+   * approved (here or in the single-review card) is gone, and a stale id in the
+   * selection would come back as a "not found" error on the next batch.
+   */
+  async function refreshPending() {
+    try {
+      const res = await fetch("/api/pending");
+      if (!res.ok) return;
+      const data = (await res.json()) as { documents: PendingDoc[] };
+      setPending(data.documents);
+      const live = new Set(data.documents.map((d) => d.id));
+      setSelected((prev) => new Set([...prev].filter((id) => live.has(id))));
+    } catch {
+      /* the queue is additive to the single-document flow; never block on it */
+    }
+  }
+
+  async function onBulkApprove() {
+    if (selected.size === 0 || bulkRunning) return;
+    setBulkRunning(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/approve/bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ documentIds: [...selected] }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error ?? "Bulk approve failed.");
+        return;
+      }
+      setBulk(data as BulkApproveResult);
+    } finally {
+      setBulkRunning(false);
+      // Approved documents leave the queue; blocked/errored ones stay, now
+      // carrying the reason they came back with.
+      await refreshPending();
+    }
+  }
+
+  async function loadDemoBatch() {
+    await fetch("/api/pending/demo", { method: "POST" });
+    setBulk(null);
+    await refreshPending();
+  }
+
   useEffect(() => {
     refreshConnections();
+    refreshPending();
     // Surface the ?connected=… flag the OAuth callback redirects back with.
     const connected = new URLSearchParams(window.location.search).get("connected");
     if (connected) {
@@ -183,6 +250,8 @@ export default function Home() {
     const initial: Record<string, string> = {};
     for (const f of REVIEWABLE_FIELDS) initial[f] = String((data.extraction as any)[f].value);
     setEdited(initial);
+    // The upload also queued the document, so the batch list needs to know.
+    refreshPending();
   }
 
   async function onApprove(forceProceed = false) {
@@ -199,6 +268,8 @@ export default function Home() {
         edited,
         proceedDuplicate: proceed,
         documentType,
+        // Clears this document from the bulk queue once it's in the ledger.
+        documentId: result.documentId,
       }),
     });
     const data = await res.json();
@@ -226,6 +297,7 @@ export default function Home() {
       bill = ` (Couldn't post to the accounting platform: ${data.billError})`;
     }
     setApproved(base + bill);
+    refreshPending(); // it's in the ledger now — it must leave the batch list
   }
 
   // Document type drives labels and which fields the gate judges — a receipt's
@@ -295,8 +367,104 @@ export default function Home() {
 
       {error && <p style={{ color: "#c0392b", marginTop: 16 }}>{error}</p>}
 
+      {/* --- The approval queue: review one, or approve many at once. --------- */}
+      {(pending.length > 0 || bulk) && (
+        <section style={cardStyle}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+            <span style={{ fontSize: 13, fontWeight: 700, color: "#8892a0", letterSpacing: 0.4 }}>
+              APPROVAL QUEUE ({pending.length})
+            </span>
+            {pending.length > 0 && (
+              <button style={linkBtnStyle} onClick={() => toggleAll(pending, selected, setSelected)}>
+                {selected.size === pending.length ? "Clear selection" : "Select all"}
+              </button>
+            )}
+          </div>
+
+          {pending.length === 0 && (
+            <p style={{ margin: "0 0 8px", color: "#8892a0", fontSize: 14 }}>
+              Nothing left in the queue.
+            </p>
+          )}
+
+          {pending.map((d) => {
+            const isSelected = selected.has(d.id);
+            return (
+              <label key={d.id} style={isSelected ? queueRowSelected : queueRow}>
+                <input
+                  type="checkbox"
+                  checked={isSelected}
+                  onChange={() => toggleOne(d.id, setSelected)}
+                  style={{ marginTop: 3, flexShrink: 0 }}
+                />
+                <span style={{ flex: 1, minWidth: 0 }}>
+                  <span style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+                    <strong style={{ color: "#1a2b4a" }}>
+                      {d.merchantName || "(unknown)"}
+                    </strong>
+                    <span style={{ fontWeight: 700, color: "#1a2b4a", whiteSpace: "nowrap" }}>
+                      {money(d.total, d.currency)}
+                    </span>
+                  </span>
+                  <span style={{ display: "block", fontSize: 12, color: "#8892a0", marginTop: 2 }}>
+                    {d.documentType === "receipt" ? "🧾 Receipt" : "📄 Invoice"}
+                    {d.invoiceNumber ? ` · ${d.invoiceNumber}` : ""}
+                    {d.invoiceDate ? ` · ${d.invoiceDate}` : ""}
+                    {d.filename ? ` · ${d.filename}` : ""}
+                  </span>
+                  {/* Why it came back from a previous batch, carried on the row. */}
+                  {d.lastReason && (
+                    <span style={d.lastOutcome === "error" ? rowErrorNote : rowBlockedNote}>
+                      {d.lastOutcome === "error" ? "❌" : "⚠️"} {d.lastReason}
+                    </span>
+                  )}
+                </span>
+              </label>
+            );
+          })}
+
+          {pending.length > 0 && (
+            <button
+              style={selected.size === 0 || bulkRunning ? { ...approveBtn, opacity: 0.5 } : approveBtn}
+              onClick={onBulkApprove}
+              disabled={selected.size === 0 || bulkRunning}
+            >
+              {bulkRunning ? "Approving…" : `✓ Approve ${selected.size} selected`}
+            </button>
+          )}
+
+          {/* --- Results of the last batch, per document. --------------------- */}
+          {bulk && (
+            <div style={{ marginTop: 8 }}>
+              <div style={bulkSummaryStyle}>
+                {bulk.summary.approved} approved, {bulk.summary.blocked} blocked,{" "}
+                {bulk.summary.errors} error{bulk.summary.errors === 1 ? "" : "s"}
+                {" | "}Total posted: {bulk.summary.postedLabel}
+              </div>
+              {bulk.summary.approvedWithoutPosting && (
+                <p style={{ margin: "0 0 12px", fontSize: 12, color: "#8892a0" }}>
+                  Recorded in the ledger — no accounting platform is connected, so nothing was
+                  sent to Xero or QuickBooks.
+                </p>
+              )}
+              {bulk.results.map((r) => (
+                <BulkResultRow key={r.documentId} result={r} />
+              ))}
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* Demo affordance: seed the mixed batch so bulk approve is exercisable
+          with no API key and no database. */}
+      {connections?.demo && pending.length === 0 && (
+        <button style={{ ...linkBtnStyle, marginTop: 16 }} onClick={loadDemoBatch}>
+          🧪 Load a demo batch (5 documents)
+        </button>
+      )}
+
       {/* Cold-open explainer — helps a first-time visitor understand it instantly. */}
-      {!result && !loading && !error && (
+      {!result && !loading && !error && pending.length === 0 && !bulk && (
         <section style={howCardStyle}>
           <div style={{ fontSize: 13, fontWeight: 700, color: "#8892a0", letterSpacing: 0.4 }}>
             HOW IT WORKS
@@ -562,6 +730,41 @@ function ConnectionControl({
     <a href={path} style={connBtnStyle}>
       Connect {name}
     </a>
+  );
+}
+
+/**
+ * One document's outcome from a bulk run. The three states are colour- AND
+ * icon-coded rather than colour alone, so the distinction survives a colourblind
+ * reader and a black-and-white print of the batch.
+ */
+function BulkResultRow({ result }: { result: BulkItemResult }) {
+  const style =
+    result.status === "approved"
+      ? resultApproved
+      : result.status === "blocked"
+        ? resultBlocked
+        : resultError;
+  const icon = result.status === "approved" ? "✅" : result.status === "blocked" ? "⚠️" : "❌";
+
+  return (
+    <div style={style}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+        <strong>
+          {icon} {result.merchantName}
+        </strong>
+        <span style={{ fontWeight: 700, whiteSpace: "nowrap" }}>
+          {money(result.total, result.currency)}
+        </span>
+      </div>
+      {result.reason && <div style={{ marginTop: 4, fontSize: 13 }}>{result.reason}</div>}
+      {result.status === "approved" && result.billId && (
+        <div style={{ marginTop: 4, fontSize: 13 }}>
+          Posted as a draft bill to {result.billPlatform === "quickbooks" ? "QuickBooks" : "Xero"}{" "}
+          (ID {result.billId}).
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -834,6 +1037,79 @@ const docTypeBadgeStyle: React.CSSProperties = {
   fontSize: 12,
   fontWeight: 700,
   letterSpacing: 0.3,
+};
+const queueRow: React.CSSProperties = {
+  display: "flex",
+  alignItems: "flex-start",
+  gap: 10,
+  padding: "10px 12px",
+  marginBottom: 8,
+  border: "1px solid #e6eaee",
+  borderRadius: 10,
+  cursor: "pointer",
+  fontSize: 14,
+  background: "#fff",
+};
+const queueRowSelected: React.CSSProperties = {
+  ...queueRow,
+  borderColor: "#a9c4df",
+  background: "#f5f9fd",
+};
+const rowBlockedNote: React.CSSProperties = {
+  display: "block",
+  marginTop: 6,
+  fontSize: 12,
+  color: "#7d6608",
+};
+const rowErrorNote: React.CSSProperties = {
+  display: "block",
+  marginTop: 6,
+  fontSize: 12,
+  color: "#c0392b",
+};
+const bulkSummaryStyle: React.CSSProperties = {
+  margin: "8px 0 12px",
+  padding: "10px 14px",
+  background: "#f4f6f8",
+  border: "1px solid #e6eaee",
+  borderRadius: 8,
+  fontSize: 14,
+  fontWeight: 700,
+  color: "#1a2b4a",
+};
+const resultBase: React.CSSProperties = {
+  padding: "10px 14px",
+  marginBottom: 8,
+  borderRadius: 8,
+  fontSize: 14,
+};
+const resultApproved: React.CSSProperties = {
+  ...resultBase,
+  background: "#e8f8f0",
+  border: "1px solid #a9dfbf",
+  color: "#1e6b45",
+};
+const resultBlocked: React.CSSProperties = {
+  ...resultBase,
+  background: "#fef9e7",
+  border: "1px solid #f7dc6f",
+  color: "#7d6608",
+};
+const resultError: React.CSSProperties = {
+  ...resultBase,
+  background: "#fdecea",
+  border: "1px solid #e6b0aa",
+  color: "#c0392b",
+};
+const linkBtnStyle: React.CSSProperties = {
+  padding: "5px 12px",
+  background: "#fff",
+  color: "#1a2b4a",
+  border: "1px solid #d5dbdb",
+  borderRadius: 8,
+  cursor: "pointer",
+  fontWeight: 600,
+  fontSize: 12,
 };
 const approveBtn: React.CSSProperties = {
   marginTop: 8,

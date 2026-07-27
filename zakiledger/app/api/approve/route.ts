@@ -3,6 +3,7 @@ import {
   findDuplicateDocument,
   recordConfirmation,
   recordCorrection,
+  resolvePendingDocument,
   saveApprovedInvoice,
 } from "@/lib/store";
 import { REVIEWABLE_FIELDS, type DocumentType, type InvoiceExtraction } from "@/lib/schema";
@@ -25,13 +26,20 @@ function toNumber(s: string): number | null {
  */
 export async function POST(req: NextRequest) {
   try {
-    const { extraction, edited, proceedDuplicate, documentType: overriddenType } =
+    const { extraction, edited, proceedDuplicate, documentType: overriddenType, documentId } =
       (await req.json()) as {
         extraction: InvoiceExtraction;
         edited: Record<string, string>;
         proceedDuplicate?: boolean;
         /** Set when the human confirmed or corrected a low-confidence classification. */
         documentType?: DocumentType;
+        /**
+         * The pending-queue row this document came from, when the client has one.
+         * Optional: the approval works entirely from `extraction`, and this only
+         * clears the queue entry so a document approved here doesn't linger in the
+         * bulk queue to be approved a second time.
+         */
+        documentId?: string;
       };
 
     // The approved final value for a field: the human's edit if present,
@@ -163,6 +171,12 @@ export async function POST(req: NextRequest) {
       });
     } catch (err) {
       billError = err instanceof Error ? err.message : "Failed to post bill.";
+    }
+
+    // Clear the queue entry, if this came from one — it's in the ledger now, so it
+    // must not still be selectable in a bulk batch.
+    if (documentId) {
+      await resolvePendingDocument(documentId, { outcome: "approved", invoiceId });
     }
 
     return NextResponse.json({

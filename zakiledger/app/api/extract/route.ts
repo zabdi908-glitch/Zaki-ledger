@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { extractDocument } from "@/lib/anthropic";
 import { buildHints } from "@/lib/learning";
 import { arithmeticMismatch, REVIEWABLE_FIELDS, type InvoiceExtraction } from "@/lib/schema";
-import { confirmationStatsForSupplier, findDuplicateDocument } from "@/lib/store";
+import { confirmationStatsForSupplier, findDuplicateDocument, savePendingDocument } from "@/lib/store";
 import { calibrateConfidence, FLOOR_MIN_CONFIRMATIONS } from "@/lib/calibration";
 import { sampleForFilename } from "@/lib/demo";
 
@@ -149,7 +149,14 @@ export async function POST(req: NextRequest) {
         }
       : null;
 
+    // Park it in the approval queue and hand back its id. This is what makes the
+    // document addressable: the single review screen still works from the
+    // extraction in the response, but bulk approve only ever needs the id, and the
+    // extraction it approves is the stored one — not something a client re-sends.
+    const documentId = await savePendingDocument({ extraction, filename: file.name ?? null });
+
     return NextResponse.json({
+      documentId,
       extraction,
       arithmeticMismatch: mismatch,
       demo,
