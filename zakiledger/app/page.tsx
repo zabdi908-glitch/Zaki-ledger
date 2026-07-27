@@ -14,10 +14,6 @@ import {
   gateApproval,
   reasonText,
 } from "@/lib/validation";
-// Type-only: erased at compile time, so none of the server-side bulk-approve
-// module (or its Xero/Supabase chain) reaches the client bundle.
-import type { BulkApproveResult, BulkItemResult } from "@/lib/bulk-approve";
-import { formatMoney } from "@/lib/currency";
 
 type PlatformStatus = { configured: boolean; connected: boolean };
 type ConnectionsStatus = { xero: PlatformStatus; quickbooks: PlatformStatus; demo?: boolean };
@@ -75,45 +71,6 @@ type ExtractResponse = {
 /** Below this, a field is "low confidence" and gets flagged for the human. */
 const CONFIDENCE_THRESHOLD = 0.85;
 
-/** An amount for the queue/results list. Falls back gracefully on a bad read. */
-function money(total: number | null, currency: string): string {
-  return total === null || !Number.isFinite(total) ? "—" : formatMoney(total, currency);
-}
-
-/** Add/remove one document from the batch selection. */
-function toggleOne(id: string, setSelected: React.Dispatch<React.SetStateAction<Set<string>>>) {
-  setSelected((prev) => {
-    const next = new Set(prev);
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
-    return next;
-  });
-}
-
-/** Select every queued document, or clear the selection when all are already on. */
-function toggleAll(
-  docs: PendingDoc[],
-  selected: Set<string>,
-  setSelected: React.Dispatch<React.SetStateAction<Set<string>>>,
-) {
-  setSelected(selected.size === docs.length ? new Set() : new Set(docs.map((d) => d.id)));
-}
-
-/** A queued document, as GET /api/pending renders it for the batch list. */
-type PendingDoc = {
-  id: string;
-  createdAt: string;
-  filename: string | null;
-  documentType: DocumentType;
-  merchantName: string;
-  invoiceNumber: string;
-  invoiceDate: string;
-  currency: string;
-  total: number;
-  overallConfidence: number;
-  lastOutcome: "approved" | "blocked" | "error" | null;
-  lastReason: string | null;
-};
 
 export default function Home() {
   const [loading, setLoading] = useState(false);
@@ -136,11 +93,9 @@ export default function Home() {
   const [connections, setConnections] = useState<ConnectionsStatus | null>(null);
   // Set to "xero"/"quickbooks" right after returning from a successful OAuth flow.
   const [justConnected, setJustConnected] = useState<string | null>(null);
-  // --- Bulk approve: the queue, the selection, and the last run's results. ---
-  const [pending, setPending] = useState<PendingDoc[]>([]);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [bulkRunning, setBulkRunning] = useState(false);
-  const [bulk, setBulk] = useState<BulkApproveResult | null>(null);
+  // How many documents are waiting for approval — just the count, to point at the
+  // queue. The queue itself lives on /pending; see components/PendingDocuments.
+  const [pendingCount, setPendingCount] = useState(0);
 
   async function refreshConnections() {
     try {
@@ -151,52 +106,16 @@ export default function Home() {
     }
   }
 
-  /**
-   * Reload the queue and drop any selection that no longer exists — a document
-   * approved (here or in the single-review card) is gone, and a stale id in the
-   * selection would come back as a "not found" error on the next batch.
-   */
+  /** How many documents are waiting, so the queue link can carry a count. */
   async function refreshPending() {
     try {
       const res = await fetch("/api/pending");
       if (!res.ok) return;
-      const data = (await res.json()) as { documents: PendingDoc[] };
-      setPending(data.documents);
-      const live = new Set(data.documents.map((d) => d.id));
-      setSelected((prev) => new Set([...prev].filter((id) => live.has(id))));
+      const data = (await res.json()) as { documents: unknown[] };
+      setPendingCount(data.documents.length);
     } catch {
       /* the queue is additive to the single-document flow; never block on it */
     }
-  }
-
-  async function onBulkApprove() {
-    if (selected.size === 0 || bulkRunning) return;
-    setBulkRunning(true);
-    setError(null);
-    try {
-      const res = await fetch("/api/approve/bulk", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ documentIds: [...selected] }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error ?? "Bulk approve failed.");
-        return;
-      }
-      setBulk(data as BulkApproveResult);
-    } finally {
-      setBulkRunning(false);
-      // Approved documents leave the queue; blocked/errored ones stay, now
-      // carrying the reason they came back with.
-      await refreshPending();
-    }
-  }
-
-  async function loadDemoBatch() {
-    await fetch("/api/pending/demo", { method: "POST" });
-    setBulk(null);
-    await refreshPending();
   }
 
   useEffect(() => {
@@ -367,104 +286,23 @@ export default function Home() {
 
       {error && <p style={{ color: "#c0392b", marginTop: 16 }}>{error}</p>}
 
-      {/* --- The approval queue: review one, or approve many at once. --------- */}
-      {(pending.length > 0 || bulk) && (
-        <section style={cardStyle}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
-            <span style={{ fontSize: 13, fontWeight: 700, color: "#8892a0", letterSpacing: 0.4 }}>
-              APPROVAL QUEUE ({pending.length})
+      {/* The queue lives on its own screen — this is just the pointer to it. */}
+      {pendingCount > 0 && (
+        <a href="/pending" style={queueLinkStyle}>
+          <span>
+            <strong>
+              {pendingCount} document{pendingCount === 1 ? "" : "s"} waiting for approval
+            </strong>
+            <span style={{ display: "block", fontSize: 13, color: "#6b7a8f", marginTop: 2 }}>
+              Approve them one at a time, or tick several and approve as a batch.
             </span>
-            {pending.length > 0 && (
-              <button style={linkBtnStyle} onClick={() => toggleAll(pending, selected, setSelected)}>
-                {selected.size === pending.length ? "Clear selection" : "Select all"}
-              </button>
-            )}
-          </div>
-
-          {pending.length === 0 && (
-            <p style={{ margin: "0 0 8px", color: "#8892a0", fontSize: 14 }}>
-              Nothing left in the queue.
-            </p>
-          )}
-
-          {pending.map((d) => {
-            const isSelected = selected.has(d.id);
-            return (
-              <label key={d.id} style={isSelected ? queueRowSelected : queueRow}>
-                <input
-                  type="checkbox"
-                  checked={isSelected}
-                  onChange={() => toggleOne(d.id, setSelected)}
-                  style={{ marginTop: 3, flexShrink: 0 }}
-                />
-                <span style={{ flex: 1, minWidth: 0 }}>
-                  <span style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
-                    <strong style={{ color: "#1a2b4a" }}>
-                      {d.merchantName || "(unknown)"}
-                    </strong>
-                    <span style={{ fontWeight: 700, color: "#1a2b4a", whiteSpace: "nowrap" }}>
-                      {money(d.total, d.currency)}
-                    </span>
-                  </span>
-                  <span style={{ display: "block", fontSize: 12, color: "#8892a0", marginTop: 2 }}>
-                    {d.documentType === "receipt" ? "🧾 Receipt" : "📄 Invoice"}
-                    {d.invoiceNumber ? ` · ${d.invoiceNumber}` : ""}
-                    {d.invoiceDate ? ` · ${d.invoiceDate}` : ""}
-                    {d.filename ? ` · ${d.filename}` : ""}
-                  </span>
-                  {/* Why it came back from a previous batch, carried on the row. */}
-                  {d.lastReason && (
-                    <span style={d.lastOutcome === "error" ? rowErrorNote : rowBlockedNote}>
-                      {d.lastOutcome === "error" ? "❌" : "⚠️"} {d.lastReason}
-                    </span>
-                  )}
-                </span>
-              </label>
-            );
-          })}
-
-          {pending.length > 0 && (
-            <button
-              style={selected.size === 0 || bulkRunning ? { ...approveBtn, opacity: 0.5 } : approveBtn}
-              onClick={onBulkApprove}
-              disabled={selected.size === 0 || bulkRunning}
-            >
-              {bulkRunning ? "Approving…" : `✓ Approve ${selected.size} selected`}
-            </button>
-          )}
-
-          {/* --- Results of the last batch, per document. --------------------- */}
-          {bulk && (
-            <div style={{ marginTop: 8 }}>
-              <div style={bulkSummaryStyle}>
-                {bulk.summary.approved} approved, {bulk.summary.blocked} blocked,{" "}
-                {bulk.summary.errors} error{bulk.summary.errors === 1 ? "" : "s"}
-                {" | "}Total posted: {bulk.summary.postedLabel}
-              </div>
-              {bulk.summary.approvedWithoutPosting && (
-                <p style={{ margin: "0 0 12px", fontSize: 12, color: "#8892a0" }}>
-                  Recorded in the ledger — no accounting platform is connected, so nothing was
-                  sent to Xero or QuickBooks.
-                </p>
-              )}
-              {bulk.results.map((r) => (
-                <BulkResultRow key={r.documentId} result={r} />
-              ))}
-            </div>
-          )}
-        </section>
-      )}
-
-      {/* Demo affordance: seed the mixed batch so bulk approve is exercisable
-          with no API key and no database. */}
-      {connections?.demo && pending.length === 0 && (
-        <button style={{ ...linkBtnStyle, marginTop: 16 }} onClick={loadDemoBatch}>
-          🧪 Load a demo batch (5 documents)
-        </button>
+          </span>
+          <span style={{ fontWeight: 700, whiteSpace: "nowrap" }}>Review queue →</span>
+        </a>
       )}
 
       {/* Cold-open explainer — helps a first-time visitor understand it instantly. */}
-      {!result && !loading && !error && pending.length === 0 && !bulk && (
+      {!result && !loading && !error && pendingCount === 0 && (
         <section style={howCardStyle}>
           <div style={{ fontSize: 13, fontWeight: 700, color: "#8892a0", letterSpacing: 0.4 }}>
             HOW IT WORKS
@@ -730,41 +568,6 @@ function ConnectionControl({
     <a href={path} style={connBtnStyle}>
       Connect {name}
     </a>
-  );
-}
-
-/**
- * One document's outcome from a bulk run. The three states are colour- AND
- * icon-coded rather than colour alone, so the distinction survives a colourblind
- * reader and a black-and-white print of the batch.
- */
-function BulkResultRow({ result }: { result: BulkItemResult }) {
-  const style =
-    result.status === "approved"
-      ? resultApproved
-      : result.status === "blocked"
-        ? resultBlocked
-        : resultError;
-  const icon = result.status === "approved" ? "✅" : result.status === "blocked" ? "⚠️" : "❌";
-
-  return (
-    <div style={style}>
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
-        <strong>
-          {icon} {result.merchantName}
-        </strong>
-        <span style={{ fontWeight: 700, whiteSpace: "nowrap" }}>
-          {money(result.total, result.currency)}
-        </span>
-      </div>
-      {result.reason && <div style={{ marginTop: 4, fontSize: 13 }}>{result.reason}</div>}
-      {result.status === "approved" && result.billId && (
-        <div style={{ marginTop: 4, fontSize: 13 }}>
-          Posted as a draft bill to {result.billPlatform === "quickbooks" ? "QuickBooks" : "Xero"}{" "}
-          (ID {result.billId}).
-        </div>
-      )}
-    </div>
   );
 }
 
@@ -1038,78 +841,19 @@ const docTypeBadgeStyle: React.CSSProperties = {
   fontWeight: 700,
   letterSpacing: 0.3,
 };
-const queueRow: React.CSSProperties = {
+const queueLinkStyle: React.CSSProperties = {
   display: "flex",
-  alignItems: "flex-start",
-  gap: 10,
-  padding: "10px 12px",
-  marginBottom: 8,
-  border: "1px solid #e6eaee",
-  borderRadius: 10,
-  cursor: "pointer",
-  fontSize: 14,
-  background: "#fff",
-};
-const queueRowSelected: React.CSSProperties = {
-  ...queueRow,
-  borderColor: "#a9c4df",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 14,
+  marginTop: 20,
+  padding: "14px 18px",
   background: "#f5f9fd",
-};
-const rowBlockedNote: React.CSSProperties = {
-  display: "block",
-  marginTop: 6,
-  fontSize: 12,
-  color: "#7d6608",
-};
-const rowErrorNote: React.CSSProperties = {
-  display: "block",
-  marginTop: 6,
-  fontSize: 12,
-  color: "#c0392b",
-};
-const bulkSummaryStyle: React.CSSProperties = {
-  margin: "8px 0 12px",
-  padding: "10px 14px",
-  background: "#f4f6f8",
-  border: "1px solid #e6eaee",
-  borderRadius: 8,
-  fontSize: 14,
-  fontWeight: 700,
+  border: "1px solid #a9c4df",
+  borderRadius: 12,
   color: "#1a2b4a",
-};
-const resultBase: React.CSSProperties = {
-  padding: "10px 14px",
-  marginBottom: 8,
-  borderRadius: 8,
-  fontSize: 14,
-};
-const resultApproved: React.CSSProperties = {
-  ...resultBase,
-  background: "#e8f8f0",
-  border: "1px solid #a9dfbf",
-  color: "#1e6b45",
-};
-const resultBlocked: React.CSSProperties = {
-  ...resultBase,
-  background: "#fef9e7",
-  border: "1px solid #f7dc6f",
-  color: "#7d6608",
-};
-const resultError: React.CSSProperties = {
-  ...resultBase,
-  background: "#fdecea",
-  border: "1px solid #e6b0aa",
-  color: "#c0392b",
-};
-const linkBtnStyle: React.CSSProperties = {
-  padding: "5px 12px",
-  background: "#fff",
-  color: "#1a2b4a",
-  border: "1px solid #d5dbdb",
-  borderRadius: 8,
-  cursor: "pointer",
-  fontWeight: 600,
-  fontSize: 12,
+  fontSize: 15,
+  textDecoration: "none",
 };
 const approveBtn: React.CSSProperties = {
   marginTop: 8,

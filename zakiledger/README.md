@@ -29,11 +29,23 @@ correction** (the correction ledger).
 **Principle #1 — human-in-the-loop:** the AI drafts, the human approves. Nothing
 posts silently. Every action is logged and reversible.
 
-### Bulk approve
+### The approval queue (`/pending`)
 
 Reading a document also parks it in an **approval queue** (`pending_documents`),
-which is what gives it an id before it is approved. Select several and
-`/api/approve/bulk` runs the *same* `gateApproval` decision over each one
+which is what gives it an id before it is approved. `/pending` lists everything
+waiting — merchant, amount, date, confidence, type — with two ways through it:
+
+- **Approve** on a row, for working down the queue one at a time.
+- **Approve Selected**, which appears once 2+ are ticked. Below that it would
+  just be a second, worse button for the row action already sitting there.
+
+Both hit the same endpoint with the same gate, so a document is judged
+identically whether it was approved alone or in a batch of ten — the single-row
+button is a batch of one, not a separate code path. **View details** expands the
+full extraction with a confidence score per field, fetched on demand so the list
+itself stays light.
+
+`/api/approve/bulk` runs the *same* `gateApproval` decision over each document
 independently, posting only the ones that clear it:
 
 ```
