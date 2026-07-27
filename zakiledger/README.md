@@ -122,6 +122,19 @@ In demo mode the queue starts empty; **Load a demo batch** seeds five documents 
 three clean receipts, one smudged merchant name, one unpostable currency — so
 bulk approve can be exercised end to end with no key and no database.
 
+#### Uploads succeed but `/pending` stays empty
+
+The queue write is non-fatal by design — a broken queue must never cost you an
+extraction — so this shows up as documents that read fine and then don't appear.
+The review screen now says so explicitly when it happens, and the server logs
+`[pending-queue] could not queue this document`.
+
+Almost always the `pending_documents` table is missing or out of date. **Re-run
+`db/schema.sql`** — the fix is the `alter table … add column if not exists` block,
+because `create table if not exists` is a no-op against a table that already
+exists with different columns and will not repair one. Re-running the whole file
+is safe.
+
 ### Testing it on a URL (share with a real accountant)
 
 Deploy to **Vercel** (it auto-detects Next.js — no config needed):

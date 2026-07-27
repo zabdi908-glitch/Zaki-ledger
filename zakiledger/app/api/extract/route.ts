@@ -157,21 +157,28 @@ export async function POST(req: NextRequest) {
     // Non-fatal on purpose. The queue is ADDITIVE to the single-document flow: the
     // review screen works entirely from the extraction in this response and needs
     // no id at all. So a queue write that fails — most likely `pending_documents`
-    // not yet created in a deployment running an older db/schema.sql — must cost
-    // the user their bulk-approve option, not their extraction. Without this, one
-    // missing table takes down uploading entirely, which is the whole product.
+    // missing or out of date in a deployment running an older db/schema.sql — must
+    // cost the user their bulk-approve option, not their extraction. Without this,
+    // one missing table takes down uploading entirely, which is the whole product.
+    //
+    // But non-fatal must not mean invisible. Reporting it only to the server log
+    // is what turned a plain misconfiguration into a bug hunt: uploads succeeded,
+    // the queue stayed empty, and nothing on screen connected the two. The reason
+    // travels back in the response so the UI can say what happened.
     let documentId: string | null = null;
+    let queueError: string | null = null;
     try {
       documentId = await savePendingDocument({ extraction, filename: file.name ?? null });
     } catch (err) {
+      queueError = err instanceof Error ? err.message : String(err);
       console.error(
-        `[pending-queue] could not queue this document (bulk approve unavailable): ` +
-          `${err instanceof Error ? err.message : String(err)}`,
+        `[pending-queue] could not queue this document (bulk approve unavailable): ${queueError}`,
       );
     }
 
     return NextResponse.json({
       documentId,
+      queueError,
       extraction,
       arithmeticMismatch: mismatch,
       demo,

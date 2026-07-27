@@ -49,7 +49,14 @@ function effectiveConfidences(
 
 type ExtractResponse = {
   /** The queue row this upload created — sent back on approve so it's cleared. */
-  documentId?: string;
+  documentId?: string | null;
+  /**
+   * Set when the document was read fine but couldn't be added to the approval
+   * queue. Surfaced rather than swallowed: an empty queue after a successful
+   * upload looks like lost data, and the human deserves to know it's a
+   * configuration problem and that this document is still approvable here.
+   */
+  queueError?: string | null;
   extraction: InvoiceExtraction;
   arithmeticMismatch: boolean;
   demo?: boolean;
@@ -285,6 +292,23 @@ export default function Home() {
       </label>
 
       {error && <p style={{ color: "#c0392b", marginTop: 16 }}>{error}</p>}
+
+      {/* Read fine, but never made it to the queue. Say so plainly — and say what
+          still works — instead of leaving an empty queue to look like data loss. */}
+      {result?.queueError && (
+        <p style={queueWarnStyle}>
+          ⚠️ This document was read successfully but couldn&apos;t be added to the approval
+          queue, so it won&apos;t appear on the{" "}
+          <a href="/pending" style={{ color: "#7d4a00", fontWeight: 700 }}>
+            pending documents
+          </a>{" "}
+          page. You can still review and approve it below. <br />
+          <span style={{ fontSize: 12 }}>
+            Usually the <code>pending_documents</code> table is missing or out of date — re-run{" "}
+            <code>db/schema.sql</code>. ({result.queueError})
+          </span>
+        </p>
+      )}
 
       {/* The queue lives on its own screen — this is just the pointer to it. */}
       {pendingCount > 0 && (
@@ -840,6 +864,16 @@ const docTypeBadgeStyle: React.CSSProperties = {
   fontSize: 12,
   fontWeight: 700,
   letterSpacing: 0.3,
+};
+const queueWarnStyle: React.CSSProperties = {
+  marginTop: 20,
+  padding: "12px 16px",
+  background: "#fff8ec",
+  border: "1px solid #f0c986",
+  borderRadius: 10,
+  color: "#7d4a00",
+  fontSize: 14,
+  lineHeight: 1.5,
 };
 const queueLinkStyle: React.CSSProperties = {
   display: "flex",

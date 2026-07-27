@@ -62,10 +62,39 @@ create table if not exists pending_documents (
   resolved_at   timestamptz
 );
 
+-- Converge an EXISTING pending_documents table onto the shape above.
+--
+-- This is not belt-and-braces, it is the repair path for a real incident:
+-- `create table if not exists` is a no-op when a table of that name already
+-- exists, *whatever columns it has*. A pending_documents table created by some
+-- other definition therefore survives every re-run of this file untouched, while
+-- the app inserts into columns that were never there — and because the queue
+-- write is deliberately non-fatal, the only symptom is documents quietly never
+-- reaching the queue. Adding each column idempotently is what actually converges
+-- a divergent table, the same pattern used for invoices.document_type above.
+--
+-- `extraction` is added nullable here even though a fresh install declares it
+-- NOT NULL: adding a NOT NULL column to a table that already holds rows fails
+-- outright, and a repair step that errors is a repair step nobody completes.
+alter table pending_documents add column if not exists extraction    jsonb;
+alter table pending_documents add column if not exists filename      text;
+alter table pending_documents add column if not exists status        text not null default 'pending';
+alter table pending_documents add column if not exists last_outcome  text;
+alter table pending_documents add column if not exists last_reason   text;
+alter table pending_documents add column if not exists invoice_id    uuid references invoices(id);
+alter table pending_documents add column if not exists created_at    timestamptz not null default now();
+alter table pending_documents add column if not exists resolved_at   timestamptz;
+
 -- The queue view: pending only, oldest first.
 create index if not exists pending_documents_queue_idx
   on pending_documents (created_at)
   where status = 'pending';
+
+-- PostgREST (what supabase-js talks to) answers from a cached schema and will
+-- keep reporting a just-added column as missing until it reloads. Supabase
+-- normally reloads on DDL, but this makes the file self-sufficient: after running
+-- it, the new columns are usable immediately rather than "in a minute or two".
+notify pgrst, 'reload schema';
 
 -- =========================================================================
 -- THE MOAT: the correction ledger.

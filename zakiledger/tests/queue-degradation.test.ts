@@ -65,6 +65,27 @@ describe("a queue the database can't serve", () => {
     expect(body.documentId).toBeNull();
   });
 
+  it("reports WHY, instead of leaving an empty queue to look like lost data", async () => {
+    // The bug this pins: the failure was logged server-side only, so an upload
+    // succeeded, the queue stayed empty, and nothing on screen connected the two.
+    // Non-fatal must not mean invisible.
+    const { body } = await extract("invoice.pdf");
+
+    expect(body.queueError).toBeTruthy();
+    expect(body.queueError).toContain("pending_documents");
+  });
+
+  it("reports no queue error on the happy path", async () => {
+    store.failQueueWrites = false;
+    try {
+      const { body } = await extract("receipt.png");
+      expect(body.documentId).toBeTruthy();
+      expect(body.queueError).toBeNull();
+    } finally {
+      store.failQueueWrites = true;
+    }
+  });
+
   it("still approves, rather than reporting a 500 for work it already committed", async () => {
     const { body: extracted } = await extract("receipt.png");
 
