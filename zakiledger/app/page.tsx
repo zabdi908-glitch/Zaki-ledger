@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import BatchUpload from "@/components/BatchUpload";
 import {
   REVIEWABLE_FIELDS,
   type DocumentType,
@@ -103,6 +104,8 @@ export default function Home() {
   // How many documents are waiting for approval — just the count, to point at the
   // queue. The queue itself lives on /pending; see components/PendingDocuments.
   const [pendingCount, setPendingCount] = useState(0);
+  // Set when 2+ files were picked — hands off to the parallel batch flow.
+  const [batchFiles, setBatchFiles] = useState<File[] | null>(null);
 
   async function refreshConnections() {
     try {
@@ -150,8 +153,26 @@ export default function Home() {
   }
 
   async function onUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const picked = Array.from(e.target.files ?? []);
+    // Let the same input be re-picked with the same file later — without this,
+    // choosing the identical file twice fires no change event.
+    e.target.value = "";
+    if (picked.length === 0) return;
+
+    // Two files or more is a different job: nobody reviews ten documents field by
+    // field on one screen. It goes to the batch flow, which reads them in
+    // parallel and hands them to the approval queue. One file keeps the close
+    // review screen below, which is still the heart of the product.
+    if (picked.length > 1) {
+      setBatchFiles(picked);
+      setResult(null);
+      setApproved(null);
+      setError(null);
+      return;
+    }
+
+    const file = picked[0];
+    setBatchFiles(null);
     setLoading(true);
     setError(null);
     setResult(null);
@@ -287,11 +308,30 @@ export default function Home() {
       )}
 
       <label style={loading ? { ...btnStyle, opacity: 0.7 } : btnStyle}>
-        {loading ? "Reading document…" : "＋ Upload invoice or receipt (PDF or image)"}
-        <input type="file" accept="application/pdf,image/*" onChange={onUpload} hidden disabled={loading} />
+        {loading ? "Reading document…" : "＋ Upload invoices or receipts (PDF or images)"}
+        <input
+          type="file"
+          accept="application/pdf,image/*"
+          multiple
+          onChange={onUpload}
+          hidden
+          disabled={loading}
+        />
       </label>
+      <p style={{ margin: "8px 0 0", fontSize: 13, color: "#8892a0" }}>
+        Pick several at once to read them in parallel and send them straight to the approval queue.
+      </p>
 
       {error && <p style={{ color: "#c0392b", marginTop: 16 }}>{error}</p>}
+
+      {/* 2+ files: parallel read, live progress, per-file result. */}
+      {batchFiles && (
+        <BatchUpload
+          files={batchFiles}
+          onCancel={() => setBatchFiles(null)}
+          onDone={refreshPending}
+        />
+      )}
 
       {/* Read fine, but never made it to the queue. Say so plainly — and say what
           still works — instead of leaving an empty queue to look like data loss. */}
@@ -326,7 +366,7 @@ export default function Home() {
       )}
 
       {/* Cold-open explainer — helps a first-time visitor understand it instantly. */}
-      {!result && !loading && !error && pendingCount === 0 && (
+      {!result && !loading && !error && !batchFiles && pendingCount === 0 && (
         <section style={howCardStyle}>
           <div style={{ fontSize: 13, fontWeight: 700, color: "#8892a0", letterSpacing: 0.4 }}>
             HOW IT WORKS

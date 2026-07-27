@@ -29,6 +29,30 @@ correction** (the correction ledger).
 **Principle #1 — human-in-the-loop:** the AI drafts, the human approves. Nothing
 posts silently. Every action is logged and reversible.
 
+### Uploading several at once
+
+Picking 2+ files hands off to `/api/extract-batch`, which reads them in parallel
+(up to `EXTRACT_CONCURRENCY`, currently 5 — a ceiling, so a fifty-file drop can't
+turn a provider rate limit into "your upload failed") and **streams NDJSON**, one
+line per document as it lands:
+
+```
+{"type":"start","total":5}
+{"type":"result","index":1,"filename":"receipt-2.png","status":"success",…}
+{"type":"summary","total":5,"succeeded":4,"failed":1,"queued":4}
+```
+
+Streaming rather than one array at the end is what makes the progress real. A
+response that arrives when everything is finished gives the UI nothing to report
+until there's nothing left to report, so any "3 of 5" drawn from it would be an
+animation. Lines arrive in *completion* order and each carries its `index`, so
+the list stays in the order the files were picked.
+
+One unreadable file is one failed row: it reports its own reason and the other
+four are untouched and still queued. The reading itself is
+`lib/extract-pipeline.ts`, shared with the single-file route — "run the existing
+extract logic on each file" means the same logic, not a copy that drifts.
+
 ### The approval queue (`/pending`)
 
 Reading a document also parks it in an **approval queue** (`pending_documents`),
