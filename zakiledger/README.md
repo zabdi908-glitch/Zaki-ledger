@@ -135,6 +135,25 @@ because `create table if not exists` is a no-op against a table that already
 exists with different columns and will not repair one. Re-running the whole file
 is safe.
 
+Two divergences seen in the wild, both repaired by that re-run:
+
+| Log says | Cause |
+| --- | --- |
+| `Could not find the 'extraction' column` | table created from a different definition |
+| `null value in column "user_id" … violates not-null constraint` | table came from a **multi-tenant** definition |
+
+The second is worth understanding rather than working around: **Zaki Ledger has
+no authentication** — no login, no Supabase session, no users table. Routes reach
+Postgres with the service-role key, so there is no "current user" to put in a
+`user_id`, and no application change can supply one. The migration drops that
+NOT NULL rather than inventing an ID, because fabricated attribution in a
+bookkeeping audit trail is worse than no attribution. If the app ever grows real
+accounts, a real user id gets plumbed through and the constraint comes back.
+
+If you would rather start clean than converge a foreign table — and the queue has
+never successfully held anything, so there is nothing to lose — `drop table
+pending_documents;` then re-run `db/schema.sql`.
+
 ### Testing it on a URL (share with a real accountant)
 
 Deploy to **Vercel** (it auto-detects Next.js — no config needed):

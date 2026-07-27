@@ -85,6 +85,33 @@ alter table pending_documents add column if not exists invoice_id    uuid refere
 alter table pending_documents add column if not exists created_at    timestamptz not null default now();
 alter table pending_documents add column if not exists resolved_at   timestamptz;
 
+-- Same divergence, second symptom: a pending_documents table from a multi-tenant
+-- definition carries a NOT NULL `user_id`, which no insert here can ever satisfy.
+--
+-- Zaki Ledger is single-tenant and has NO authentication — no login, no Supabase
+-- session, no users table. The API routes reach Postgres with the service-role
+-- key, so there is no "current user" to attribute a document to, and inventing
+-- one to satisfy a constraint would put fabricated data in the audit trail of a
+-- bookkeeping system. Relaxing the constraint is the honest fix while the app has
+-- no users; if it ever grows real accounts, a genuine user_id gets plumbed
+-- through savePendingDocument and this becomes NOT NULL again on purpose.
+--
+-- Guarded and non-destructive: it touches nothing on a clean install, drops no
+-- data, and is safe to re-run.
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public'
+      and table_name   = 'pending_documents'
+      and column_name  = 'user_id'
+      and is_nullable  = 'NO'
+  ) then
+    alter table pending_documents alter column user_id drop not null;
+    raise notice 'pending_documents.user_id: dropped NOT NULL (this app has no auth)';
+  end if;
+end $$;
+
 -- The queue view: pending only, oldest first.
 create index if not exists pending_documents_queue_idx
   on pending_documents (created_at)
