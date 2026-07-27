@@ -116,18 +116,48 @@ export async function setConnectionOrgId(
   if (error) throw new Error(`Failed to set ${provider} org id: ${error.message}`);
 }
 
-/** The stored connection for a provider, or null if never connected. */
+/**
+ * Delay before the single retry in `getConnection`. The race it absorbs closes
+ * in well under a second, so this only has to outlast the clock correction.
+ */
+const COLD_START_RETRY_DELAY_MS = 300;
+
+/**
+ * The stored connection for a provider, or null if never connected.
+ *
+ * Retries once on failure. This is not a general retry policy — it exists for one
+ * specific observed race: the FIRST Supabase call from a freshly-started instance
+ * fails, then everything after it succeeds. Seen twice as
+ * `JWT issued at future` (Supabase rejecting the service_role key because the new
+ * container's clock is briefly ahead of Supabase's, so the token's `iat` looks
+ * future-dated) and once as `TypeError: fetch failed`, which is the same cold-start
+ * shape with different wording — hence retrying on any error rather than matching
+ * a message.
+ *
+ * Without this, the first visitor after an idle spin-down or a deploy gets a 500
+ * from /api/connections. On the free tier that is a routine event, not an edge case.
+ * A second attempt lands after the clock settles.
+ */
 export async function getConnection(
   provider: OAuthProvider,
 ): Promise<OAuthConnection | null> {
   const db = getSupabase();
   if (!db) return memConnections.get(provider) ?? null;
 
-  const { data, error } = await db
-    .from("oauth_connections")
-    .select()
-    .eq("provider", provider)
-    .maybeSingle();
+  const load = () =>
+    db.from("oauth_connections").select().eq("provider", provider).maybeSingle();
+
+  let { data, error } = await load();
+
+  if (error) {
+    // Logged rather than swallowed: if this starts firing on warm instances it is
+    // no longer a cold-start race and the retry is masking something real.
+    console.warn(
+      `[oauth-store] ${provider} connection load failed (${error.message}) — retrying once`,
+    );
+    await new Promise((r) => setTimeout(r, COLD_START_RETRY_DELAY_MS));
+    ({ data, error } = await load());
+  }
 
   if (error) throw new Error(`Failed to load ${provider} connection: ${error.message}`);
   return data ? mapConnectionRow(data as Record<string, unknown>) : null;
