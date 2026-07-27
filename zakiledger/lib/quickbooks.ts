@@ -4,7 +4,7 @@ import {
   saveConnection,
   type TokenSet,
 } from "./oauth-store";
-import type { ApprovedBill } from "./accounting";
+import { billLineDescription, type ApprovedBill } from "./accounting";
 
 /**
  * QuickBooks Online OAuth 2.0 + Accounting API integration.
@@ -245,7 +245,7 @@ export async function createQuickBooksBill(bill: ApprovedBill): Promise<string> 
       {
         DetailType: "AccountBasedExpenseLineDetail",
         Amount: bill.total ?? 0,
-        Description: `Invoice ${bill.invoiceNumber ?? ""}`.trim() || "Imported invoice",
+        Description: billLineDescription(bill),
         AccountBasedExpenseLineDetail: { AccountRef: { value: accountId } },
       },
     ],

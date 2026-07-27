@@ -1,7 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { REVIEWABLE_FIELDS, type InvoiceExtraction, type ReviewableField } from "@/lib/schema";
+import {
+  REVIEWABLE_FIELDS,
+  type DocumentType,
+  type InvoiceExtraction,
+  type ReviewableField,
+} from "@/lib/schema";
 import { checkTotals, effectiveConfidence, gateApproval } from "@/lib/validation";
 
 type PlatformStatus = { configured: boolean; connected: boolean };
@@ -45,11 +50,12 @@ type ExtractResponse = {
   calibratedFields?: string[];
   /** Per-field track record for this supplier: how many prior confirmed reads + their confidence. */
   supplierMemory?: Record<string, { count: number; confidence: number }>;
-  /** Set when an invoice with the same supplier + number was already processed. */
+  /** Set when a matching document was already processed (see the store's identity rules). */
   duplicate?: {
+    documentType?: DocumentType;
     supplierName: string;
     invoiceNumber: string;
-    processedOn: string; // ISO timestamp of the earlier invoice
+    processedOn: string; // ISO timestamp of the earlier document
     existingId: string;
   } | null;
 };
@@ -57,21 +63,40 @@ type ExtractResponse = {
 /** Below this, a field is "low confidence" and gets flagged for the human. */
 const CONFIDENCE_THRESHOLD = 0.85;
 
-/** Human-readable labels — bookkeepers should never see raw field keys. */
-const FIELD_LABELS: Record<ReviewableField, string> = {
-  supplierName: "Supplier",
-  invoiceNumber: "Invoice number",
-  invoiceDate: "Invoice date",
-  currency: "Currency",
-  subtotal: "Subtotal",
-  tax: "Tax",
-  total: "Total",
+/**
+ * Human-readable labels — bookkeepers should never see raw field keys. Same
+ * fields either way; a receipt just calls them by their receipt names ("Merchant",
+ * not "Supplier"), which is what's printed on the document in front of them.
+ */
+const FIELD_LABELS_BY_TYPE: Record<DocumentType, Record<ReviewableField, string>> = {
+  invoice: {
+    supplierName: "Supplier",
+    invoiceNumber: "Invoice number",
+    invoiceDate: "Invoice date",
+    currency: "Currency",
+    subtotal: "Subtotal",
+    tax: "Tax",
+    total: "Total",
+  },
+  receipt: {
+    supplierName: "Merchant",
+    invoiceNumber: "Receipt number (optional)",
+    invoiceDate: "Receipt date",
+    currency: "Currency",
+    subtotal: "Subtotal",
+    tax: "VAT",
+    total: "Total",
+  },
 };
 
+function fieldLabels(documentType: DocumentType): Record<ReviewableField, string> {
+  return FIELD_LABELS_BY_TYPE[documentType] ?? FIELD_LABELS_BY_TYPE.invoice;
+}
+
 /** e.g. "Invoice date not detected (0%)" or "Tax low confidence (34%)". */
-function reasonText(field: ReviewableField, confidence: number): string {
+function reasonText(field: ReviewableField, confidence: number, documentType: DocumentType): string {
   const pct = Math.round(confidence * 100);
-  return `${FIELD_LABELS[field]} ${pct === 0 ? "not detected" : "low confidence"} (${pct}%)`;
+  return `${fieldLabels(documentType)[field]} ${pct === 0 ? "not detected" : "low confidence"} (${pct}%)`;
 }
 
 export default function Home() {
@@ -183,10 +208,17 @@ export default function Home() {
     setApproved(base + bill);
   }
 
+  // Document type drives labels and which fields the gate judges — a receipt's
+  // missing number must not block it. Defaults to invoice for safety.
+  const documentType: DocumentType = result?.extraction.documentType?.value ?? "invoice";
+  const taxItemized = result?.extraction.taxItemized ?? true;
+  const labels = fieldLabels(documentType);
+  const isReceipt = documentType === "receipt";
+
   // Recomputed every render, so editing a flagged field re-evaluates live —
   // both the gate below and the per-field confidence badges read from this map.
   const confidences = result ? effectiveConfidences(result.extraction, edited, affirmed) : null;
-  const gate = confidences ? gateApproval(confidences) : null;
+  const gate = confidences ? gateApproval(confidences, { documentType, taxItemized }) : null;
 
   return (
     <main style={{ maxWidth: 680, margin: "0 auto", padding: "40px 20px 64px" }}>
@@ -227,7 +259,7 @@ export default function Home() {
       )}
 
       <label style={loading ? { ...btnStyle, opacity: 0.7 } : btnStyle}>
-        {loading ? "Reading invoice…" : "＋ Upload invoice (PDF or image)"}
+        {loading ? "Reading document…" : "＋ Upload invoice or receipt (PDF or image)"}
         <input type="file" accept="application/pdf,image/*" onChange={onUpload} hidden disabled={loading} />
       </label>
 
@@ -258,8 +290,9 @@ export default function Home() {
 
       {result?.demo && (
         <p style={demoStyle}>
-          🧪 <strong>Demo mode</strong> — this is a sample invoice. Add an API key to extract from
-          your own uploads.
+          🧪 <strong>Demo mode</strong> — this is a sample {isReceipt ? "receipt" : "invoice"}. Add
+          an API key to extract from your own uploads. (Name a file
+          &ldquo;receipt&rdquo; or &ldquo;messy&rdquo; to preview the receipt samples.)
         </p>
       )}
 
@@ -274,11 +307,9 @@ export default function Home() {
         <p style={learnedStyle}>
           📈 Confidence raised on{" "}
           <strong>
-            {result.calibratedFields
-              .map((f) => FIELD_LABELS[f as ReviewableField] ?? f)
-              .join(", ")}
+            {result.calibratedFields.map((f) => labels[f as ReviewableField] ?? f).join(", ")}
           </strong>{" "}
-          from this supplier&apos;s confirmed-correct history.
+          from this {isReceipt ? "merchant" : "supplier"}&apos;s confirmed-correct history.
         </p>
       )}
 
@@ -289,10 +320,18 @@ export default function Home() {
             ⚠️ Possible duplicate
           </div>
           <p style={{ margin: "0 0 14px", color: "#6b4b1a", fontSize: 14 }}>
-            This looks like a duplicate of an invoice already processed on{" "}
-            <strong>{new Date(result.duplicate.processedOn).toLocaleDateString()}</strong> — same
-            supplier (<strong>{result.duplicate.supplierName}</strong>) and invoice number (
-            <strong>{result.duplicate.invoiceNumber}</strong>).
+            This looks like a duplicate of {isReceipt ? "a receipt" : "an invoice"} already processed
+            on <strong>{new Date(result.duplicate.processedOn).toLocaleDateString()}</strong> —{" "}
+            {isReceipt ? (
+              <>
+                same merchant (<strong>{result.duplicate.supplierName}</strong>), date and total.
+              </>
+            ) : (
+              <>
+                same supplier (<strong>{result.duplicate.supplierName}</strong>) and invoice number (
+                <strong>{result.duplicate.invoiceNumber}</strong>).
+              </>
+            )}
           </p>
           <div style={{ display: "flex", gap: 10 }}>
             <button style={approveBtn} onClick={() => setProceedDuplicate(true)}>
@@ -309,27 +348,53 @@ export default function Home() {
         <section style={cardStyle}>
           <div style={{ fontSize: 13, fontWeight: 700, color: "#8892a0", letterSpacing: 0.4, marginBottom: 16 }}>
             REVIEW &amp; APPROVE
+            {/* What the AI decided this document is — shown, with its confidence,
+                because the type changes which fields are required. */}
+            <span style={docTypeBadgeStyle}>
+              {isReceipt ? "🧾 Receipt" : "📄 Invoice"} ·{" "}
+              {((result.extraction.documentType?.confidence ?? 1) * 100).toFixed(0)}%
+            </span>
           </div>
           {REVIEWABLE_FIELDS.map((f) => {
             // After the Total field, show a live subtotal + tax = total check.
             // It recomputes from the edited values, so fixing a number clears it.
-            const totals = f === "total" ? checkTotals(parseNum(edited.subtotal), parseNum(edited.tax), parseNum(edited.total)) : null;
+            // Skipped when the document states no tax — there's no split to
+            // reconcile, so the check would fail on a perfectly good receipt.
+            const totals =
+              f === "total" && taxItemized
+                ? checkTotals(parseNum(edited.subtotal), parseNum(edited.tax), parseNum(edited.total))
+                : null;
             const mem = result.supplierMemory?.[f];
             const eff = confidences ? confidences[f] : (result.extraction as any)[f].confidence;
             const low = eff < CONFIDENCE_THRESHOLD; // still below the review bar
             const original = String((result.extraction as any)[f].value);
             const affirmedAsIs = affirmed[f] === true && (edited[f] ?? original) === original;
+            // Fields the document genuinely doesn't carry: an absent receipt
+            // number, and tax/subtotal on a receipt that shows only a gross total.
+            // These are facts about the document, not failed reads — so they get a
+            // plain note instead of a red "⚠ check" the human can never satisfy.
+            const absentByDesign =
+              (isReceipt && f === "invoiceNumber" && original.trim() === "") ||
+              (!taxItemized && (f === "tax" || f === "subtotal") && eff === 0);
             return (
               <div key={f}>
                 <Field
-                  label={FIELD_LABELS[f]}
+                  label={labels[f]}
                   confidence={eff}
                   value={edited[f] ?? ""}
                   onChange={(v) => setEdited((prev) => ({ ...prev, [f]: v }))}
+                  muted={absentByDesign}
                 />
+                {absentByDesign && (
+                  <p style={notStatedNoteStyle}>
+                    {f === "invoiceNumber"
+                      ? "No receipt number printed on this receipt — optional, leave blank."
+                      : `Not itemised on this receipt — only a gross total is shown. Add it if you know it.`}
+                  </p>
+                )}
                 {/* Confirm-as-is: affirm a correct-but-low read without editing it,
                     so it clears the gate AND records a confirmation (not a reset). */}
-                {low && (
+                {low && !absentByDesign && (
                   <button
                     style={confirmAsIsBtn}
                     onClick={() => setAffirmed((prev) => ({ ...prev, [f]: true }))}
@@ -342,7 +407,8 @@ export default function Home() {
                 )}
                 {mem && (
                   <p style={memoryNoteStyle}>
-                    🧠 Seen {mem.count}× before from this supplier · confidence {(mem.confidence * 100).toFixed(0)}%
+                    🧠 Seen {mem.count}× before from this {isReceipt ? "merchant" : "supplier"} · confidence{" "}
+                    {(mem.confidence * 100).toFixed(0)}%
                   </p>
                 )}
                 {totals &&
@@ -365,7 +431,7 @@ export default function Home() {
               </div>
               <ul style={{ margin: "6px 0 0", paddingLeft: 20 }}>
                 {gate.reasons.map((r) => (
-                  <li key={r.field}>{reasonText(r.field, r.confidence)}</li>
+                  <li key={r.field}>{reasonText(r.field, r.confidence, documentType)}</li>
                 ))}
               </ul>
             </div>
@@ -379,10 +445,19 @@ export default function Home() {
                 ⚠️ Possible duplicate
               </div>
               <p style={{ margin: "0 0 14px", color: "#6b4b1a", fontSize: 14 }}>
-                After your corrections, this matches an invoice already processed on{" "}
-                <strong>{new Date(approveDuplicate.processedOn).toLocaleDateString()}</strong> — same
-                supplier (<strong>{approveDuplicate.supplierName}</strong>) and invoice number (
-                <strong>{approveDuplicate.invoiceNumber}</strong>).
+                After your corrections, this matches {isReceipt ? "a receipt" : "an invoice"} already
+                processed on{" "}
+                <strong>{new Date(approveDuplicate.processedOn).toLocaleDateString()}</strong> —{" "}
+                {isReceipt ? (
+                  <>
+                    same merchant (<strong>{approveDuplicate.supplierName}</strong>), date and total.
+                  </>
+                ) : (
+                  <>
+                    same supplier (<strong>{approveDuplicate.supplierName}</strong>) and invoice number (
+                    <strong>{approveDuplicate.invoiceNumber}</strong>).
+                  </>
+                )}
               </p>
               <div style={{ display: "flex", gap: 10 }}>
                 <button style={approveBtn} onClick={() => { setApproveDuplicate(null); onApprove(true); }}>
@@ -434,19 +509,22 @@ function Field({
   value,
   confidence,
   onChange,
+  muted = false,
 }: {
   label: string;
   value: string;
   confidence: number;
   onChange: (v: string) => void;
+  /** The document doesn't state this field — show it neutral, not as a failed read. */
+  muted?: boolean;
 }) {
-  const low = confidence < CONFIDENCE_THRESHOLD;
+  const low = !muted && confidence < CONFIDENCE_THRESHOLD;
   return (
     <div style={{ marginBottom: 14 }}>
       <label style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13, color: "#556", marginBottom: 4 }}>
         <span style={{ fontWeight: 600 }}>{label}</span>
-        <span style={low ? chipLow : chipOk}>
-          {low ? "⚠ check" : "✓"} {(confidence * 100).toFixed(0)}%
+        <span style={muted ? chipMuted : low ? chipLow : chipOk}>
+          {muted ? "— not stated" : `${low ? "⚠ check" : "✓"} ${(confidence * 100).toFixed(0)}%`}
         </span>
       </label>
       <input
@@ -459,7 +537,7 @@ function Field({
           fontSize: 15,
           boxSizing: "border-box",
           border: `1px solid ${low ? "#e6b0aa" : "#d5dbdb"}`,
-          background: low ? "#fdf2f0" : "#fff",
+          background: low ? "#fdf2f0" : muted ? "#fafbfc" : "#fff",
           outline: "none",
         }}
       />
@@ -662,6 +740,30 @@ const chipLow: React.CSSProperties = {
   borderRadius: 999,
   fontSize: 12,
   fontWeight: 600,
+};
+const chipMuted: React.CSSProperties = {
+  background: "#f4f6f8",
+  color: "#8892a0",
+  padding: "2px 8px",
+  borderRadius: 999,
+  fontSize: 12,
+  fontWeight: 600,
+};
+const notStatedNoteStyle: React.CSSProperties = {
+  margin: "-8px 0 14px",
+  color: "#8892a0",
+  fontSize: 12,
+};
+const docTypeBadgeStyle: React.CSSProperties = {
+  display: "inline-block",
+  marginLeft: 10,
+  padding: "2px 10px",
+  borderRadius: 999,
+  background: "#eef2ff",
+  color: "#3730a3",
+  fontSize: 12,
+  fontWeight: 700,
+  letterSpacing: 0.3,
 };
 const approveBtn: React.CSSProperties = {
   marginTop: 8,

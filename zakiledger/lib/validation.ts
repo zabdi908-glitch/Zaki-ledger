@@ -8,7 +8,7 @@
  * They catch different problems and can both fire at once. Neither ever hard-
  * locks a human out of approving; the accountant stays in the loop.
  */
-import type { ReviewableField } from "./schema";
+import type { DocumentType, ReviewableField } from "./schema";
 
 // --- Confidence-based approval gating ---------------------------------------
 
@@ -19,6 +19,19 @@ export const CRITICAL_FIELDS: ReviewableField[] = [
   "invoiceDate",
   "total",
 ];
+
+/**
+ * Which fields are Critical, per document type. Same tiers, same thresholds, same
+ * classifier — only the membership differs, because the documents differ.
+ *
+ * A receipt drops `invoiceNumber` from Critical: till receipts routinely carry no
+ * number, so gating on it would permanently block a perfectly good receipt on a
+ * field the document never had. It stays visible and editable, just ungated.
+ */
+export const CRITICAL_FIELDS_BY_TYPE: Record<DocumentType, ReviewableField[]> = {
+  invoice: CRITICAL_FIELDS,
+  receipt: ["supplierName", "invoiceDate", "total"],
+};
 
 /** Fields that warrant a warning (but not a block) when low confidence. */
 export const IMPORTANT_FIELDS: ReviewableField[] = ["tax", "currency"];
@@ -67,6 +80,18 @@ export interface ApprovalGate {
   reasons: ApprovalReason[];
 }
 
+/** Document-shape facts that change which fields the gate can fairly judge. */
+export interface GateContext {
+  /** invoice (default) or receipt — selects the Critical field set. */
+  documentType?: DocumentType;
+  /**
+   * Did the document state a tax amount? When false, tax is excluded from the
+   * Important tier: a document that doesn't break out tax hasn't failed to read
+   * it, and warning about it would be noise.
+   */
+  taxItemized?: boolean;
+}
+
 /**
  * Classify whether an extraction is trustworthy enough to approve, given the
  * effective confidence per field. Rules evaluate in order — a Critical failure
@@ -78,16 +103,24 @@ export interface ApprovalGate {
  * "Effective" confidence means the caller should pass 1 (100%) for any field the
  * human has edited — a human-entered value is verified, which is what lets a
  * blocked form unlock live as the accountant corrects the flagged field.
+ *
+ * `ctx` only changes *which fields are judged*, never the tiers or thresholds —
+ * receipts run through this same classifier, not a parallel one.
  */
 export function gateApproval(
   confidenceByField: Record<ReviewableField, number>,
+  ctx: GateContext = {},
 ): ApprovalGate {
-  const critical = CRITICAL_FIELDS.filter((f) => confidenceByField[f] < CRITICAL_THRESHOLD);
+  const criticalFields = CRITICAL_FIELDS_BY_TYPE[ctx.documentType ?? "invoice"];
+  const critical = criticalFields.filter((f) => confidenceByField[f] < CRITICAL_THRESHOLD);
   if (critical.length > 0) {
     return { status: "blocked", reasons: critical.map((f) => ({ field: f, confidence: confidenceByField[f] })) };
   }
 
-  const important = IMPORTANT_FIELDS.filter((f) => confidenceByField[f] < IMPORTANT_THRESHOLD);
+  // A document that states no tax has no tax read to doubt — drop it from the tier.
+  const importantFields =
+    ctx.taxItemized === false ? IMPORTANT_FIELDS.filter((f) => f !== "tax") : IMPORTANT_FIELDS;
+  const important = importantFields.filter((f) => confidenceByField[f] < IMPORTANT_THRESHOLD);
   if (important.length > 0) {
     return { status: "review", reasons: important.map((f) => ({ field: f, confidence: confidenceByField[f] })) };
   }

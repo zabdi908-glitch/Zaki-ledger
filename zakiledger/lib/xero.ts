@@ -5,7 +5,7 @@ import {
   setConnectionOrgId,
   type TokenSet,
 } from "./oauth-store";
-import type { ApprovedBill } from "./accounting";
+import { billLineDescription, type ApprovedBill } from "./accounting";
 
 /**
  * Xero OAuth 2.0 + Accounting API integration.
@@ -173,7 +173,7 @@ export async function createXeroDraftBill(bill: ApprovedBill): Promise<string> {
         }))
       : [
           {
-            Description: `Invoice ${bill.invoiceNumber ?? ""}`.trim() || "Imported invoice",
+            Description: billLineDescription(bill),
             Quantity: 1,
             UnitAmount: bill.total ?? 0,
             LineAmount: bill.total ?? 0,

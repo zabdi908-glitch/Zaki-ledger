@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { extractInvoice } from "@/lib/anthropic";
+import { extractDocument } from "@/lib/anthropic";
 import { buildHints } from "@/lib/learning";
 import { arithmeticMismatch, REVIEWABLE_FIELDS, type InvoiceExtraction } from "@/lib/schema";
-import { confirmationStatsForSupplier, findDuplicateInvoice } from "@/lib/store";
+import { confirmationStatsForSupplier, findDuplicateDocument } from "@/lib/store";
 import { calibrateConfidence, FLOOR_MIN_CONFIRMATIONS } from "@/lib/calibration";
-import { sampleExtraction } from "@/lib/demo";
+import { sampleForFilename } from "@/lib/demo";
 
 /** Per-field supplier track record surfaced in the UI ("seen N× before"). */
 type SupplierMemory = Record<string, { count: number; confidence: number }>;
@@ -77,7 +77,7 @@ export async function POST(req: NextRequest) {
     let refinedForSupplier: string | undefined;
 
     if (demo) {
-      extraction = sampleExtraction();
+      extraction = sampleForFilename(file.name ?? "");
     } else {
       const buffer = Buffer.from(await file.arrayBuffer());
       const base64 = buffer.toString("base64");
@@ -85,9 +85,10 @@ export async function POST(req: NextRequest) {
 
       // Pass 1 — first read using recent cross-supplier corrections. We can't
       // target a supplier's hints yet because we don't know the supplier until
-      // the model reads the document.
+      // the model reads the document. This same pass also classifies the document
+      // as an invoice or a receipt — detection is not a separate call.
       const generalHints = await buildHints();
-      extraction = await extractInvoice(base64, mediaType, generalHints);
+      extraction = await extractDocument(base64, mediaType, generalHints);
 
       // Pass 2 — per-supplier learning. Now that we know the supplier, if we hold
       // corrections specific to THEM, re-extract with those targeted hints so the
@@ -100,7 +101,7 @@ export async function POST(req: NextRequest) {
       if (supplier) {
         const supplierHints = await buildHints(supplier);
         if (supplierHints) {
-          extraction = await extractInvoice(base64, mediaType, supplierHints);
+          extraction = await extractDocument(base64, mediaType, supplierHints);
           refinedForSupplier = supplier;
         }
       }
@@ -119,17 +120,28 @@ export async function POST(req: NextRequest) {
     const mismatch = arithmeticMismatch(extraction);
 
     // Duplicate detection (upload is the earliest checkpoint). Warn, never block:
-    // surface the match and let the human proceed or discard. Scope is supplier +
-    // invoice number only, by design. Logged either way as an audit trail.
+    // surface the match and let the human proceed or discard. Identity is supplier
+    // + invoice number for an invoice, merchant + date + total for a receipt (which
+    // usually has no number). Logged either way as an audit trail.
+    const documentType = extraction.documentType.value;
     const dupSupplier = extraction.supplierName.value.trim();
     const dupInvoiceNumber = extraction.invoiceNumber.value.trim();
-    const existing = await findDuplicateInvoice(dupSupplier, dupInvoiceNumber);
+    const dupDate = extraction.invoiceDate.value.trim() || null;
+    const dupTotal = extraction.total.value;
+    const existing = await findDuplicateDocument(documentType, {
+      supplierName: dupSupplier,
+      invoiceNumber: dupInvoiceNumber,
+      invoiceDate: dupDate,
+      total: dupTotal,
+    });
     console.log(
-      `[duplicate-check] supplier="${dupSupplier}" invoiceNumber="${dupInvoiceNumber}" ` +
+      `[duplicate-check] type=${documentType} supplier="${dupSupplier}" ` +
+        `invoiceNumber="${dupInvoiceNumber}" date="${dupDate ?? ""}" total=${dupTotal} ` +
         `match=${existing ? `${existing.id} (processed ${existing.createdAt})` : "none"}`,
     );
     const duplicate = existing
       ? {
+          documentType,
           supplierName: dupSupplier,
           invoiceNumber: dupInvoiceNumber,
           processedOn: existing.createdAt,

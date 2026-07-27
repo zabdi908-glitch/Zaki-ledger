@@ -1,4 +1,4 @@
-import type { LineItem } from "./schema";
+import type { DocumentType, LineItem } from "./schema";
 import { createXeroDraftBill, isXeroConnected } from "./xero";
 import { createQuickBooksBill, isQuickBooksConnected } from "./quickbooks";
 
@@ -12,6 +12,8 @@ import { createQuickBooksBill, isQuickBooksConnected } from "./quickbooks";
  * approval still succeeds, consistent with the rest of the app running keyless.
  */
 export interface ApprovedBill {
+  /** invoice | receipt — only affects wording on the posted line, not the shape. */
+  documentType?: DocumentType;
   supplierName: string;
   invoiceNumber: string | null;
   invoiceDate: string | null; // ISO date
@@ -20,6 +22,17 @@ export interface ApprovedBill {
   tax: number | null;
   total: number | null;
   lineItems: LineItem[];
+}
+
+/**
+ * Description for a single summary line, e.g. "Receipt R-88213" or, when the
+ * document carries no number (common on receipts), just "Imported receipt".
+ */
+export function billLineDescription(bill: ApprovedBill): string {
+  const noun = bill.documentType === "receipt" ? "Receipt" : "Invoice";
+  return bill.invoiceNumber?.trim()
+    ? `${noun} ${bill.invoiceNumber.trim()}`
+    : `Imported ${noun.toLowerCase()}`;
 }
 
 /** The platform a bill was posted to, plus its id in that platform. */

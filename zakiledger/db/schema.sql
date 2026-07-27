@@ -10,11 +10,15 @@ create table if not exists documents (
 );
 
 -- The AI's extraction + the human-approved final values.
+-- Holds both invoices and receipts — one table, one pipeline. `document_type`
+-- says which; `supplier_name` holds the supplier on an invoice and the merchant
+-- on a receipt (same counterparty column, so per-party learning is shared).
 create table if not exists invoices (
   id                 uuid primary key default gen_random_uuid(),
   document_id        uuid references documents(id),
-  supplier_name      text,
-  invoice_number     text,
+  document_type      text not null default 'invoice',  -- invoice | receipt
+  supplier_name      text,               -- supplier (invoice) / merchant (receipt)
+  invoice_number     text,               -- optional on a receipt
   invoice_date       date,
   currency           text,
   subtotal           numeric(14,2),
@@ -25,6 +29,16 @@ create table if not exists invoices (
   approved_at        timestamptz,
   created_at         timestamptz not null default now()
 );
+
+-- Existing deployments: add the column without touching stored rows. Anything
+-- already in the table predates receipts, so the 'invoice' default is correct.
+alter table invoices add column if not exists document_type text not null default 'invoice';
+
+-- Receipt duplicate detection matches on merchant + date + total (a receipt
+-- usually has no number), so index that path.
+create index if not exists invoices_receipt_identity_idx
+  on invoices (lower(supplier_name), invoice_date, total)
+  where document_type = 'receipt';
 
 -- =========================================================================
 -- THE MOAT: the correction ledger.

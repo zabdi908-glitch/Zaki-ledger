@@ -1,4 +1,4 @@
-import type { ReviewableField } from "./schema";
+import type { DocumentType, ReviewableField } from "./schema";
 import { getSupabase } from "./supabase";
 
 /**
@@ -38,6 +38,7 @@ export interface Confirmation {
 
 /** The approved, human-verified final values written to the `invoices` table. */
 export interface ApprovedInvoice {
+  documentType: DocumentType;
   supplierName: string;
   invoiceNumber: string;
   invoiceDate: string | null; // ISO date, or null when unreadable
@@ -48,12 +49,15 @@ export interface ApprovedInvoice {
   overallConfidence: number;
 }
 
-/** Lightweight invoice identity used by duplicate detection. */
+/** Lightweight document identity used by duplicate detection. */
 export interface StoredInvoiceSummary {
   id: string;
+  documentType: DocumentType;
   supplierName: string;
   invoiceNumber: string;
   invoiceDate: string | null;
+  /** Needed to identify a receipt, which often has no number to match on. */
+  total: number | null;
   status: string; // 'approved' | 'pending_review'
   createdAt: string; // when it was first processed into the system
 }
@@ -73,6 +77,23 @@ function mapCorrectionRow(row: Record<string, unknown>): Correction {
     aiValue: (row.ai_value as string) ?? "",
     humanValue: (row.human_value as string) ?? "",
     aiConfidence: Number(row.ai_confidence ?? 0),
+  };
+}
+
+/** Columns needed to identify a stored document in a duplicate check. */
+const DUP_COLUMNS = "id, document_type, supplier_name, invoice_number, invoice_date, total, status, created_at";
+
+function mapSummaryRow(row: Record<string, unknown>): StoredInvoiceSummary {
+  return {
+    id: String(row.id),
+    // Rows written before receipts existed have no document_type; they're invoices.
+    documentType: ((row.document_type as DocumentType) ?? "invoice") as DocumentType,
+    supplierName: String(row.supplier_name),
+    invoiceNumber: String(row.invoice_number ?? ""),
+    invoiceDate: (row.invoice_date as string) ?? null,
+    total: row.total === null || row.total === undefined ? null : Number(row.total),
+    status: String(row.status),
+    createdAt: String(row.created_at),
   };
 }
 
@@ -267,9 +288,11 @@ export async function saveApprovedInvoice(inv: ApprovedInvoice): Promise<string 
     const id = crypto.randomUUID();
     memInvoices.push({
       id,
+      documentType: inv.documentType,
       supplierName: inv.supplierName,
       invoiceNumber: inv.invoiceNumber,
       invoiceDate: inv.invoiceDate,
+      total: inv.total,
       status: "approved",
       createdAt: new Date().toISOString(),
     });
@@ -279,6 +302,7 @@ export async function saveApprovedInvoice(inv: ApprovedInvoice): Promise<string 
   const { data, error } = await db
     .from("invoices")
     .insert({
+      document_type: inv.documentType,
       supplier_name: inv.supplierName,
       invoice_number: inv.invoiceNumber,
       invoice_date: inv.invoiceDate,
@@ -327,7 +351,7 @@ export async function findDuplicateInvoice(
 
   const { data, error } = await db
     .from("invoices")
-    .select("id, supplier_name, invoice_number, invoice_date, status, created_at")
+    .select(DUP_COLUMNS)
     .ilike("supplier_name", supplierName)
     .eq("invoice_number", invoiceNumber)
     .in("status", ["approved", "pending_review"])
@@ -337,14 +361,75 @@ export async function findDuplicateInvoice(
 
   if (error) throw new Error(`Failed to check for duplicate invoice: ${error.message}`);
   if (!data) return null;
+  return mapSummaryRow(data as Record<string, unknown>);
+}
 
-  const r = data as Record<string, unknown>;
-  return {
-    id: String(r.id),
-    supplierName: String(r.supplier_name),
-    invoiceNumber: String(r.invoice_number),
-    invoiceDate: (r.invoice_date as string) ?? null,
-    status: String(r.status),
-    createdAt: String(r.created_at),
-  };
+/**
+ * Find an existing receipt from the same merchant, on the same date, for the same
+ * total. That trio is a receipt's practical identity: unlike an invoice it usually
+ * carries no number to match on, so matching on supplier + number alone would
+ * silently never fire and every re-uploaded receipt would sail through.
+ *
+ * Deliberately strict — all three must match. Same merchant twice in a day for
+ * genuinely different amounts won't flag, and two identical purchases on one day
+ * (a real possibility: two identical coffees) will flag as a *warning* the human
+ * can wave through. Same contract as the invoice check: warn, never block.
+ *
+ * A blank merchant, missing date, or absent total is unmatchable, so it never flags.
+ */
+export async function findDuplicateReceipt(
+  merchantName: string,
+  receiptDate: string | null,
+  total: number | null,
+): Promise<StoredInvoiceSummary | null> {
+  if (!merchantName.trim() || !receiptDate || total === null || !Number.isFinite(total)) {
+    return null;
+  }
+
+  const db = getSupabase();
+  if (!db) {
+    for (let i = memInvoices.length - 1; i >= 0; i--) {
+      const inv = memInvoices[i];
+      if (
+        inv.documentType === "receipt" &&
+        inv.supplierName.toLowerCase() === merchantName.toLowerCase() &&
+        inv.invoiceDate === receiptDate &&
+        inv.total !== null &&
+        Math.abs(inv.total - total) < 0.005
+      ) {
+        return inv;
+      }
+    }
+    return null;
+  }
+
+  const { data, error } = await db
+    .from("invoices")
+    .select(DUP_COLUMNS)
+    .eq("document_type", "receipt")
+    .ilike("supplier_name", merchantName)
+    .eq("invoice_date", receiptDate)
+    .eq("total", total)
+    .in("status", ["approved", "pending_review"])
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) throw new Error(`Failed to check for duplicate receipt: ${error.message}`);
+  if (!data) return null;
+  return mapSummaryRow(data as Record<string, unknown>);
+}
+
+/**
+ * Duplicate check for either document type — the single entry point used at both
+ * checkpoints (upload-time in /api/extract, approve-time in /api/approve) so the
+ * two stay in lockstep as the rules evolve.
+ */
+export async function findDuplicateDocument(
+  documentType: DocumentType,
+  d: { supplierName: string; invoiceNumber: string; invoiceDate: string | null; total: number | null },
+): Promise<StoredInvoiceSummary | null> {
+  return documentType === "receipt"
+    ? findDuplicateReceipt(d.supplierName, d.invoiceDate, d.total)
+    : findDuplicateInvoice(d.supplierName, d.invoiceNumber);
 }
