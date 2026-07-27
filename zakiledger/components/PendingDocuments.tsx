@@ -71,6 +71,11 @@ export default function PendingDocuments({
   /** Ids currently being approved — disables their row button and the batch one. */
   const [busy, setBusy] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
+  /** The row whose delete is awaiting confirmation, and the one being deleted. */
+  const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  /** Transient success line ("Document deleted"). */
+  const [notice, setNotice] = useState<string | null>(null);
 
   /**
    * Reload the queue and drop any selection that no longer exists. Approved
@@ -131,6 +136,39 @@ export default function PendingDocuments({
     }
   }
 
+  /**
+   * Delete a queued document. Only ever reached from the confirmation step —
+   * there is no undo, so the click that destroys is never the first click.
+   */
+  async function confirmDelete(id: string) {
+    setDeletingId(id);
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await fetch(`/api/pending/${id}`, { method: "DELETE" });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error ?? "Couldn't delete the document.");
+        return;
+      }
+      setNotice("Document deleted");
+      // Drop it locally as well as refetching, so the row goes the instant the
+      // request lands rather than after the round trip.
+      setDocs((prev) => (prev ? prev.filter((d) => d.id !== id) : prev));
+      setSelected((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't delete the document.");
+    } finally {
+      setDeletingId(null);
+      setConfirmingDelete(null);
+      await refresh();
+    }
+  }
+
   async function toggleDetail(id: string) {
     if (openId === id) {
       setOpenId(null);
@@ -174,6 +212,7 @@ export default function PendingDocuments({
   return (
     <div>
       {error && <p style={errorNote}>{error}</p>}
+      {notice && <p style={noticeStyle}>✓ {notice}</p>}
 
       {/* --- Empty state ---------------------------------------------------- */}
       {docs.length === 0 ? (
@@ -252,18 +291,48 @@ export default function PendingDocuments({
                       </p>
                     )}
 
-                    <div style={{ display: "flex", gap: 8, marginTop: 10, alignItems: "center" }}>
-                      <button
-                        style={working ? { ...approveSmall, opacity: 0.5 } : approveSmall}
-                        onClick={() => approve([d.id])}
-                        disabled={working}
-                      >
-                        {busy.has(d.id) ? "Approving…" : "✓ Approve"}
-                      </button>
-                      <button style={linkBtn} onClick={() => toggleDetail(d.id)}>
-                        {isOpen ? "Hide details" : "View details"}
-                      </button>
-                    </div>
+                    {/* The destructive action is never the first click: asking
+                        replaces the row's buttons until it's answered, so there
+                        is nothing to mis-click while the question is open. */}
+                    {confirmingDelete === d.id ? (
+                      <div style={confirmBar}>
+                        <span style={{ flex: 1 }}>
+                          Delete this document? It won&apos;t be recoverable.
+                        </span>
+                        <button
+                          style={deletingId === d.id ? { ...dangerSmall, opacity: 0.5 } : dangerSmall}
+                          onClick={() => confirmDelete(d.id)}
+                          disabled={deletingId === d.id}
+                        >
+                          {deletingId === d.id ? "Deleting…" : "Yes, delete"}
+                        </button>
+                        <button style={linkBtn} onClick={() => setConfirmingDelete(null)}>
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <div style={{ display: "flex", gap: 8, marginTop: 10, alignItems: "center" }}>
+                        <button
+                          style={working ? { ...approveSmall, opacity: 0.5 } : approveSmall}
+                          onClick={() => approve([d.id])}
+                          disabled={working}
+                        >
+                          {busy.has(d.id) ? "Approving…" : "✓ Approve"}
+                        </button>
+                        <button style={linkBtn} onClick={() => toggleDetail(d.id)}>
+                          {isOpen ? "Hide details" : "View details"}
+                        </button>
+                        <button
+                          style={deleteBtn}
+                          onClick={() => {
+                            setConfirmingDelete(d.id);
+                            setNotice(null);
+                          }}
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    )}
 
                     {isOpen && <DetailPanel documentId={d.id} detail={detail} />}
                   </div>
@@ -577,6 +646,50 @@ const approveSmall: React.CSSProperties = {
   cursor: "pointer",
   fontWeight: 600,
   fontSize: 13,
+};
+const deleteBtn: React.CSSProperties = {
+  padding: "5px 12px",
+  background: "#fff",
+  color: "#c0392b",
+  border: "1px solid #e6b0aa",
+  borderRadius: 8,
+  cursor: "pointer",
+  fontWeight: 600,
+  fontSize: 12,
+};
+const dangerSmall: React.CSSProperties = {
+  padding: "6px 14px",
+  background: "#c0392b",
+  color: "#fff",
+  border: "none",
+  borderRadius: 8,
+  cursor: "pointer",
+  fontWeight: 600,
+  fontSize: 13,
+};
+const confirmBar: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  flexWrap: "wrap",
+  marginTop: 10,
+  padding: "10px 12px",
+  background: "#fdecea",
+  border: "1px solid #e6b0aa",
+  borderRadius: 8,
+  color: "#c0392b",
+  fontSize: 13,
+  fontWeight: 600,
+};
+const noticeStyle: React.CSSProperties = {
+  margin: "0 0 14px",
+  padding: "10px 14px",
+  background: "#e8f8f0",
+  border: "1px solid #a9dfbf",
+  borderRadius: 8,
+  color: "#1e6b45",
+  fontSize: 14,
+  fontWeight: 600,
 };
 const linkBtn: React.CSSProperties = {
   padding: "5px 12px",

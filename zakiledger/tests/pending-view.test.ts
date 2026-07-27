@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { GET as listRoute } from "@/app/api/pending/route";
-import { GET as detailRoute } from "@/app/api/pending/[id]/route";
-import { savePendingDocument } from "@/lib/store";
+import { DELETE as deleteRoute, GET as detailRoute } from "@/app/api/pending/[id]/route";
+import { resolvePendingDocument, savePendingDocument } from "@/lib/store";
 import { sampleMessyReceiptExtraction, sampleReceiptExtraction } from "@/lib/demo";
 
 /**
@@ -106,5 +106,52 @@ describe("the detail view", () => {
     const { status, body } = await detail("00000000-0000-0000-0000-000000000000");
     expect(status).toBe(404);
     expect(body.error).toBeTruthy();
+  });
+});
+
+describe("deleting a queued document", () => {
+  async function del(id: string) {
+    const res = await deleteRoute(new Request(`http://test/api/pending/${id}`, { method: "DELETE" }), {
+      params: Promise.resolve({ id }),
+    });
+    return { status: res.status, body: (await res.json()) as any };
+  }
+
+  it("removes it from the queue for good", async () => {
+    const id = await savePendingDocument({
+      extraction: sampleReceiptExtraction(),
+      filename: "duplicate-to-bin.png",
+    });
+
+    const { status, body } = await del(id);
+    expect(status).toBe(200);
+    expect(body.status).toBe("deleted");
+
+    // Gone from the list AND unfetchable — not merely hidden from the queue view.
+    const { body: after } = await list();
+    expect(after.documents.find((d: any) => d.id === id)).toBeUndefined();
+    const res = await detailRoute(new Request(`http://test/api/pending/${id}`), {
+      params: Promise.resolve({ id }),
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it("404s on an id that was never there", async () => {
+    const { status } = await del("00000000-0000-0000-0000-000000000000");
+    expect(status).toBe(404);
+  });
+
+  it("refuses to delete a document that already reached the ledger", async () => {
+    // The audit-trail guard: this row is what links an approved bill back to the
+    // extraction it came from, so deleting it would orphan the bill's origin.
+    const id = await savePendingDocument({
+      extraction: sampleMessyReceiptExtraction(),
+      filename: "already-approved.png",
+    });
+    await resolvePendingDocument(id, { outcome: "approved", invoiceId: "inv-1" });
+
+    const { status, body } = await del(id);
+    expect(status).toBe(409);
+    expect(body.error).toContain("already been approved");
   });
 });

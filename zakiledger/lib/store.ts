@@ -580,6 +580,45 @@ export async function getPendingDocument(id: string): Promise<PendingDocument | 
   return data ? mapPendingRow(data as Record<string, unknown>) : null;
 }
 
+/** What `deletePendingDocument` did, so the caller can answer honestly. */
+export type DeletePendingResult = "deleted" | "not_found" | "already_resolved";
+
+/**
+ * Drop a queued document for good — the escape hatch for a duplicate or a
+ * misfired upload that should never become a bill.
+ *
+ * Refuses once a document is resolved, and that refusal is the point: a resolved
+ * row is the link between an approved invoice and the extraction it came from.
+ * Deleting it would leave a bill in the ledger (and possibly in Xero) whose
+ * origin can no longer be shown, which is exactly the thing a bookkeeping audit
+ * trail exists to prevent. The queue list only offers pending documents anyway,
+ * so this guards the endpoint, not the button.
+ */
+export async function deletePendingDocument(id: string): Promise<DeletePendingResult> {
+  const existing = await getPendingDocument(id);
+  if (!existing) return "not_found";
+  if (existing.status === "resolved") return "already_resolved";
+
+  const db = getSupabase();
+  if (!db) {
+    const i = memPending.findIndex((p) => p.id === id);
+    if (i === -1) return "not_found";
+    memPending.splice(i, 1);
+    return "deleted";
+  }
+
+  // Scoped to still-pending rows, so a document approved between the check above
+  // and this write is not deleted out from under the ledger.
+  const { error } = await db
+    .from("pending_documents")
+    .delete()
+    .eq("id", id)
+    .eq("status", "pending");
+
+  if (error) throw new Error(`Failed to delete pending document: ${error.message}`);
+  return "deleted";
+}
+
 /**
  * Record how an approval attempt ended.
  *
