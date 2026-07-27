@@ -175,8 +175,21 @@ export async function POST(req: NextRequest) {
 
     // Clear the queue entry, if this came from one — it's in the ledger now, so it
     // must not still be selectable in a bulk batch.
+    //
+    // Non-fatal, and the ordering is why: by this point the invoice is saved, the
+    // corrections are recorded and the bill is posted. Letting a bookkeeping write
+    // on the queue throw here would turn a completed approval into a 500 and tell
+    // the human their work was lost when it plainly wasn't. Worst case the document
+    // lingers in the queue, where bulk approve's already-approved check catches it.
     if (documentId) {
-      await resolvePendingDocument(documentId, { outcome: "approved", invoiceId });
+      try {
+        await resolvePendingDocument(documentId, { outcome: "approved", invoiceId });
+      } catch (err) {
+        console.error(
+          `[pending-queue] approved ${invoiceId} but could not clear queue entry ` +
+            `${documentId}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     }
 
     return NextResponse.json({
