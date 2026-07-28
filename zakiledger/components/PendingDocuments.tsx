@@ -79,11 +79,17 @@ function effectiveConfidences(
   return out;
 }
 
-function computeGate(x: InvoiceExtraction, edited: Record<string, string>): ApprovalGate {
+function computeGate(
+  x: InvoiceExtraction,
+  edited: Record<string, string>,
+  documentType: DocumentType,
+  documentTypeConfirmed: boolean,
+): ApprovalGate {
   return gateApproval(effectiveConfidences(x, edited), {
-    documentType: x.documentType?.value ?? "invoice",
+    documentType,
     taxItemized: x.taxItemized,
     documentTypeConfidence: x.documentType?.confidence,
+    documentTypeConfirmed,
   });
 }
 
@@ -110,6 +116,15 @@ export default function PendingDocuments({
   const [detail, setDetail] = useState<PendingDetail | null>(null);
   /** Edits made in the open row's detail panel, keyed by reviewable field. */
   const [edited, setEdited] = useState<Record<string, string>>({});
+  /**
+   * The human settled an uncertain invoice-vs-receipt classification for the open
+   * row — mirrors app/page.tsx's type-confirm flow. The type isn't a field the
+   * human edits in place, so without this a low-confidence classification has no
+   * way to clear the gate: editing every visible field still leaves Rule 0
+   * (documentType confidence) blocking the row forever.
+   */
+  const [typeConfirmed, setTypeConfirmed] = useState(false);
+  const [typeOverride, setTypeOverride] = useState<DocumentType | null>(null);
   /** A direct approve came back as a possible duplicate — armed to proceed anyway. */
   const [duplicateWarning, setDuplicateWarning] = useState<{ id: string; message: string } | null>(
     null,
@@ -202,7 +217,9 @@ export default function PendingDocuments({
     setDuplicateWarning(null);
     try {
       const x = detail.extraction;
-      const documentType = x.documentType?.value ?? "invoice";
+      // The human's confirmed/overridden type wins over the model's guess — same
+      // rule /api/approve applies for the main upload screen.
+      const documentType = typeOverride ?? x.documentType?.value ?? "invoice";
       const res = await fetch("/api/approve", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -234,6 +251,8 @@ export default function PendingDocuments({
       setOpenId(null);
       setDetail(null);
       setEdited({});
+      setTypeConfirmed(false);
+      setTypeOverride(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Approve failed.");
     } finally {
@@ -280,12 +299,16 @@ export default function PendingDocuments({
       setOpenId(null);
       setDetail(null);
       setEdited({});
+      setTypeConfirmed(false);
+      setTypeOverride(null);
       setDuplicateWarning(null);
       return;
     }
     setOpenId(id);
     setDetail(null); // clear the previous row's data so it can't render under this one
     setEdited({}); // a different document's edits don't carry over
+    setTypeConfirmed(false);
+    setTypeOverride(null);
     setDuplicateWarning(null);
     try {
       const res = await fetch(`/api/pending/${id}`);
@@ -361,12 +384,19 @@ export default function PendingDocuments({
           {docs.map((d) => {
             const isSelected = selected.has(d.id);
             const isOpen = openId === d.id;
-            // Edits only exist for the row whose detail panel is open — this is
-            // what decides whether Approve goes through the direct review route
-            // (with the human's values) or the untouched bulk route (by id alone).
+            // Edits (or a settled document-type classification) only exist for the
+            // row whose detail panel is open — this is what decides whether
+            // Approve goes through the direct review route (with the human's
+            // values) or the untouched bulk route (by id alone).
             const rowExtraction = isOpen && detail && detail.id === d.id ? detail.extraction : null;
             const rowEdited = rowExtraction !== null && hasEdits(rowExtraction, edited);
-            const rowGate = rowExtraction && rowEdited ? computeGate(rowExtraction, edited) : null;
+            const rowTouched = rowEdited || typeConfirmed;
+            const rowDocumentType: DocumentType =
+              typeOverride ?? rowExtraction?.documentType?.value ?? d.documentType;
+            const rowGate =
+              rowExtraction && rowTouched
+                ? computeGate(rowExtraction, edited, rowDocumentType, typeConfirmed)
+                : null;
             const rowBlocked = rowGate !== null && rowGate.status !== "ready";
             return (
               <div key={d.id} style={isSelected ? rowSelected : row}>
@@ -451,9 +481,13 @@ export default function PendingDocuments({
                               ? { ...approveSmall, opacity: 0.5, cursor: "not-allowed" }
                               : approveSmall
                           }
-                          onClick={() => (rowEdited ? approveDirect(d.id, false) : approve([d.id]))}
+                          onClick={() => (rowTouched ? approveDirect(d.id, false) : approve([d.id]))}
                           disabled={working || rowBlocked}
-                          title={rowBlocked ? "Fix the flagged field first" : "Approve this document now"}
+                          title={
+                            rowBlocked
+                              ? gateReasonSummary(rowGate!, rowDocumentType) || "Fix the flagged field first"
+                              : "Approve this document now"
+                          }
                         >
                           {busy.has(d.id) ? "Approving…" : "✓ Approve"}
                         </button>
@@ -478,6 +512,12 @@ export default function PendingDocuments({
                         detail={detail}
                         edited={edited}
                         onEdit={commitEdit}
+                        typeConfirmed={typeConfirmed}
+                        typeOverride={typeOverride}
+                        onConfirmType={(t, detectedType) => {
+                          setTypeOverride(t === detectedType ? null : t);
+                          setTypeConfirmed(true);
+                        }}
                       />
                     )}
                   </div>
@@ -541,30 +581,66 @@ function DetailPanel({
   detail,
   edited,
   onEdit,
+  typeConfirmed,
+  typeOverride,
+  onConfirmType,
 }: {
   documentId: string;
   detail: PendingDetail | null;
   edited: Record<string, string>;
   onEdit: (field: ReviewableField, value: string) => void;
+  typeConfirmed: boolean;
+  typeOverride: DocumentType | null;
+  onConfirmType: (chosen: DocumentType, detectedType: DocumentType) => void;
 }) {
   if (!detail || detail.id !== documentId) {
     return <p style={mutedNote}>Loading details…</p>;
   }
 
   const x = detail.extraction;
-  const type = x.documentType?.value ?? "invoice";
+  const detectedType = x.documentType?.value ?? "invoice";
+  const type = typeOverride ?? detectedType;
+  const typeConfidence = x.documentType?.confidence ?? 1;
   const labels = fieldLabels(type);
   const confidences = effectiveConfidences(x, edited);
-  const gate = hasEdits(x, edited) ? computeGate(x, edited) : null;
+  const gate =
+    hasEdits(x, edited) || typeConfirmed ? computeGate(x, edited, type, typeConfirmed) : null;
 
   return (
     <div style={detailPanel}>
       <div style={{ display: "flex", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
-        <span style={confidenceChipStyle(x.documentType?.confidence ?? 1)}>
-          Document type {((x.documentType?.confidence ?? 1) * 100).toFixed(0)}%
+        <span style={confidenceChipStyle(typeConfidence)}>
+          Document type{" "}
+          {typeOverride ? "· set by you" : typeConfirmed ? "· confirmed" : `${(typeConfidence * 100).toFixed(0)}%`}
         </span>
         {!x.taxItemized && <span style={chipMuted}>No tax broken out</span>}
       </div>
+
+      {/* An uncertain classification blocks approval, because the type decides
+          which fields are required and how duplicates are matched. The type
+          isn't an editable field, so without this the block is a deadlock —
+          editing every visible field still leaves this row stuck. */}
+      {typeConfidence < 0.8 && !typeConfirmed && (
+        <div style={typePickerStyle}>
+          <div style={{ fontWeight: 700, marginBottom: 4 }}>Is this an invoice or a receipt?</div>
+          <p style={{ margin: "0 0 10px", fontSize: 13 }}>
+            We read it as a <strong>{detectedType}</strong> but only at{" "}
+            {(typeConfidence * 100).toFixed(0)}% confidence. This decides which fields are
+            required, so please confirm before approving.
+          </p>
+          <div style={{ display: "flex", gap: 10 }}>
+            {(["invoice", "receipt"] as DocumentType[]).map((t) => (
+              <button
+                key={t}
+                style={t === detectedType ? approveSmall : linkBtn}
+                onClick={() => onConfirmType(t, detectedType)}
+              >
+                {t === "receipt" ? "🧾 Receipt" : "📄 Invoice"}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {gate && gate.status !== "ready" && (
         <p style={rowBlockedNote}>⚠️ {gateReasonSummary(gate, type)}</p>
@@ -725,6 +801,14 @@ const detailPanel: React.CSSProperties = {
   background: "#fafbfc",
   border: "1px solid #eef1f4",
   borderRadius: 8,
+};
+const typePickerStyle: React.CSSProperties = {
+  margin: "0 0 12px",
+  padding: "10px 12px",
+  background: "#fef9e7",
+  border: "1px solid #f7dc6f",
+  borderRadius: 8,
+  color: "#7d6608",
 };
 const emptyStyle: React.CSSProperties = {
   padding: "28px 24px",

@@ -147,18 +147,35 @@ export default function Home() {
    * Live per-platform status — each endpoint refreshes an expired token and
    * proves it with a real API call, so "connected" here means "would actually
    * post a bill right now", not just "a token exists somewhere".
+   *
+   * A failed request (401, a 5xx, a network blip) means "couldn't verify right
+   * now" — not "disconnected". The common cause is a session cookie that's
+   * mid-refresh on the first request after a page load or a busy upload/approve
+   * sequence, which is transient by nature. Collapsing that into `connected:
+   * false` (the old behaviour) made the OAuth token look revoked every time a
+   * check merely failed to land — the token itself is untouched (nothing here
+   * ever deletes it; only an explicit Disconnect does, see disconnectAccounting
+   * below). So a failed check leaves the displayed status as it was and retries
+   * once shortly after, rather than flashing "Not Connected".
    */
-  async function refreshAccountingStatus() {
-    const check = (path: string) =>
-      fetch(path)
-        .then((r) => (r.ok ? r.json() : { connected: false }))
-        .catch(() => ({ connected: false }));
+  async function refreshAccountingStatus(isRetry = false) {
+    const check = async (path: string): Promise<LiveStatus> => {
+      try {
+        const res = await fetch(path);
+        return res.ok ? await res.json() : null;
+      } catch {
+        return null;
+      }
+    };
     const [xero, qbo] = await Promise.all([
       check("/api/auth/xero/status"),
       check("/api/auth/quickbooks/status"),
     ]);
-    setXeroStatus(xero);
-    setQboStatus(qbo);
+    if (xero) setXeroStatus(xero);
+    if (qbo) setQboStatus(qbo);
+    if (!isRetry && (!xero || !qbo)) {
+      setTimeout(() => refreshAccountingStatus(true), 1500);
+    }
   }
 
   /** Forget a platform's tokens and fall back to the connect-one-platform choice. */
@@ -689,7 +706,24 @@ export default function Home() {
               </button>
             )
           )}
-          {approved && <p style={{ color: "#1e8449", fontWeight: 600, marginBottom: 0 }}>{approved}</p>}
+          {approved && (
+            <div style={{ marginTop: 4 }}>
+              <p style={{ color: "#1e8449", fontWeight: 600, marginBottom: 12 }}>{approved}</p>
+              {/* The form above stays mounted (nothing to re-review), so without
+                  this the human's only way to do anything else is to scroll back
+                  up to the file picker — there's no signal that they're done. */}
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <button style={approveBtn} onClick={discard}>
+                  ＋ Upload another
+                </button>
+                {pendingCount > 0 && (
+                  <a href="/pending" style={{ ...discardBtn, textDecoration: "none", display: "inline-flex", alignItems: "center" }}>
+                    View pending queue ({pendingCount})
+                  </a>
+                )}
+              </div>
+            </div>
+          )}
         </section>
       )}
     </main>
