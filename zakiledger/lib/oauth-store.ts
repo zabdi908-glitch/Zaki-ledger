@@ -180,3 +180,15 @@ export async function getConnection(
 export function isExpired(conn: OAuthConnection): boolean {
   return Date.parse(conn.expiresAt) - Date.now() <= 60_000;
 }
+
+/** Forget a provider's connection entirely — the disconnect action. */
+export async function deleteConnection(provider: OAuthProvider): Promise<void> {
+  const db = getSupabase();
+  if (!db) {
+    memConnections.delete(provider);
+    return;
+  }
+
+  const { error } = await db.from("oauth_connections").delete().eq("provider", provider);
+  if (error) throw new Error(`Failed to disconnect ${provider}: ${error.message}`);
+}

@@ -112,7 +112,7 @@ export async function refreshQuickBooksToken(refreshToken: string): Promise<Toke
  * Return a valid access token + realmId for the stored connection, refreshing
  * the access token first if it's expired. Returns null when not connected.
  */
-async function getValidQboAccess(): Promise<{ accessToken: string; realmId: string } | null> {
+export async function getValidQboAccess(): Promise<{ accessToken: string; realmId: string } | null> {
   let conn = await getConnection("quickbooks");
   if (!conn) return null;
 
@@ -128,6 +128,32 @@ async function getValidQboAccess(): Promise<{ accessToken: string; realmId: stri
 /** True when there is a usable QuickBooks connection stored. */
 export async function isQuickBooksConnected(): Promise<boolean> {
   return (await getConnection("quickbooks")) !== null;
+}
+
+/**
+ * The connection status the UI shows: not just "a token is stored" but "the
+ * token still works" — refreshes an expired access token first, then proves it
+ * with a real API call (company info) rather than trusting the stored expiry.
+ * A revoked or otherwise broken token reports as disconnected instead of
+ * throwing.
+ */
+export async function quickBooksConnectionStatus(): Promise<{
+  connected: boolean;
+  accountName?: string;
+}> {
+  try {
+    const access = await getValidQboAccess();
+    if (!access) return { connected: false };
+
+    const info = (await qboGet(
+      `companyinfo/${access.realmId}?minorversion=65`,
+      access.accessToken,
+      access.realmId,
+    )) as { CompanyInfo?: { CompanyName?: string } };
+    return { connected: true, accountName: info.CompanyInfo?.CompanyName };
+  } catch {
+    return { connected: false };
+  }
 }
 
 /** Escape a value for inclusion in a QuickBooks SQL-like query string. */

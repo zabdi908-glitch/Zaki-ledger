@@ -127,7 +127,7 @@ export async function fetchXeroTenantId(accessToken: string): Promise<string | u
  * the token first if it's expired and persisting the rotated tokens. Returns
  * null when Xero isn't connected.
  */
-async function getValidXeroAccess(): Promise<{ accessToken: string; tenantId: string } | null> {
+export async function getValidXeroAccess(): Promise<{ accessToken: string; tenantId: string } | null> {
   let conn = await getConnection("xero");
   if (!conn) return null;
 
@@ -150,6 +150,37 @@ async function getValidXeroAccess(): Promise<{ accessToken: string; tenantId: st
 /** True when there is a usable Xero connection stored. */
 export async function isXeroConnected(): Promise<boolean> {
   return (await getConnection("xero")) !== null;
+}
+
+/**
+ * The connection status the UI shows: not just "a token is stored" but "the
+ * token still works" — refreshes an expired access token first (that's a live
+ * connection, not a dead one), then proves it with a real API call rather than
+ * trusting the stored expiry. A revoked or otherwise broken token reports as
+ * disconnected instead of throwing.
+ */
+export async function xeroConnectionStatus(): Promise<{
+  connected: boolean;
+  accountName?: string;
+}> {
+  try {
+    const access = await getValidXeroAccess();
+    if (!access) return { connected: false };
+
+    const res = await fetch(`${API_BASE}/Organisation`, {
+      headers: {
+        Authorization: `Bearer ${access.accessToken}`,
+        "Xero-tenant-id": access.tenantId,
+        Accept: "application/json",
+      },
+    });
+    if (!res.ok) return { connected: false };
+
+    const body = (await res.json()) as { Organisations?: Array<{ Name?: string }> };
+    return { connected: true, accountName: body.Organisations?.[0]?.Name };
+  } catch {
+    return { connected: false };
+  }
 }
 
 /**

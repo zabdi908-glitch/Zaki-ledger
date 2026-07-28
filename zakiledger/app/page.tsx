@@ -16,8 +16,10 @@ import {
   reasonText,
 } from "@/lib/validation";
 
-type PlatformStatus = { configured: boolean; connected: boolean };
-type ConnectionsStatus = { xero: PlatformStatus; quickbooks: PlatformStatus; demo?: boolean };
+type ConfiguredStatus = { xero: { configured: boolean }; quickbooks: { configured: boolean }; demo?: boolean };
+/** A provider's live connection status: null while the check is in flight. */
+type LiveStatus = { connected: boolean; accountName?: string } | null;
+type AccountingProvider = "xero" | "quickbooks";
 
 /** Parse a review-field string into a number, or null when it isn't one. */
 function parseNum(s: string | undefined): number | null {
@@ -98,7 +100,17 @@ export default function Home() {
   // clears the gate.
   const [typeConfirmed, setTypeConfirmed] = useState(false);
   const [typeOverride, setTypeOverride] = useState<DocumentType | null>(null);
-  const [connections, setConnections] = useState<ConnectionsStatus | null>(null);
+  const [configured, setConfigured] = useState<ConfiguredStatus | null>(null);
+  // Live status per platform — proven with a real API call, not just "a token is
+  // stored". Null means the check hasn't landed yet.
+  const [xeroStatus, setXeroStatus] = useState<LiveStatus>(null);
+  const [qboStatus, setQboStatus] = useState<LiveStatus>(null);
+  // The provider a disconnect is being confirmed for, and the one currently
+  // disconnecting — the destructive click is never the first click.
+  const [confirmingDisconnect, setConfirmingDisconnect] = useState<AccountingProvider | null>(
+    null,
+  );
+  const [disconnecting, setDisconnecting] = useState<AccountingProvider | null>(null);
   // Set to "xero"/"quickbooks" right after returning from a successful OAuth flow.
   const [justConnected, setJustConnected] = useState<string | null>(null);
   // How many documents are waiting for approval — just the count, to point at the
@@ -121,12 +133,43 @@ export default function Home() {
   // stream that is still delivering results.
   const [batchRunning, setBatchRunning] = useState(false);
 
+  /** Which platforms have client credentials set, plus the demo-mode flag. */
   async function refreshConnections() {
     try {
       const res = await fetch("/api/connections");
-      if (res.ok) setConnections(await res.json());
+      if (res.ok) setConfigured(await res.json());
     } catch {
       /* status is best-effort; the upload flow works regardless */
+    }
+  }
+
+  /**
+   * Live per-platform status — each endpoint refreshes an expired token and
+   * proves it with a real API call, so "connected" here means "would actually
+   * post a bill right now", not just "a token exists somewhere".
+   */
+  async function refreshAccountingStatus() {
+    const check = (path: string) =>
+      fetch(path)
+        .then((r) => (r.ok ? r.json() : { connected: false }))
+        .catch(() => ({ connected: false }));
+    const [xero, qbo] = await Promise.all([
+      check("/api/auth/xero/status"),
+      check("/api/auth/quickbooks/status"),
+    ]);
+    setXeroStatus(xero);
+    setQboStatus(qbo);
+  }
+
+  /** Forget a platform's tokens and fall back to the connect-one-platform choice. */
+  async function disconnectAccounting(provider: AccountingProvider) {
+    setDisconnecting(provider);
+    try {
+      await fetch(`/api/${provider}/disconnect`, { method: "POST" });
+    } finally {
+      setDisconnecting(null);
+      setConfirmingDisconnect(null);
+      await refreshAccountingStatus();
     }
   }
 
@@ -144,6 +187,7 @@ export default function Home() {
 
   useEffect(() => {
     refreshConnections();
+    refreshAccountingStatus();
     refreshPending();
     // Surface the ?connected=… flag the OAuth callback redirects back with.
     const connected = new URLSearchParams(window.location.search).get("connected");
@@ -308,13 +352,23 @@ export default function Home() {
         </a>
       </p>
 
-      {/* Accounting connections — where approved invoices post as draft bills. */}
+      {/* Accounting connection — where approved invoices post as draft bills.
+          One platform at a time: connecting one hides the other, and posting
+          only ever targets whichever is connected (lib/accounting.ts). */}
       <section style={connBarStyle}>
         <span style={{ fontSize: 12, fontWeight: 700, color: "#8892a0", letterSpacing: 0.4 }}>
           ACCOUNTING
         </span>
-        <ConnectionControl name="Xero" path="/api/xero/connect" status={connections?.xero} />
-        <ConnectionControl name="QuickBooks" path="/api/quickbooks/connect" status={connections?.quickbooks} />
+        <AccountingConnection
+          configured={configured}
+          xeroStatus={xeroStatus}
+          qboStatus={qboStatus}
+          confirmingDisconnect={confirmingDisconnect}
+          disconnecting={disconnecting}
+          onRequestDisconnect={setConfirmingDisconnect}
+          onCancelDisconnect={() => setConfirmingDisconnect(null)}
+          onDisconnect={disconnectAccounting}
+        />
       </section>
 
       {justConnected && (
@@ -642,23 +696,132 @@ export default function Home() {
   );
 }
 
-function ConnectionControl({
-  name,
-  path,
-  status,
+const PROVIDER_LABEL: Record<AccountingProvider, string> = {
+  xero: "Xero",
+  quickbooks: "QuickBooks",
+};
+const PROVIDER_CONNECT_PATH: Record<AccountingProvider, string> = {
+  xero: "/api/xero/connect",
+  quickbooks: "/api/quickbooks/connect",
+};
+
+/**
+ * One accounting platform at a time. Bills only ever post to whichever is
+ * connected (lib/accounting.ts prefers Xero, but only ever tries the other one
+ * when the first isn't connected), so the UI mirrors that: pick one, and the
+ * other disappears rather than sitting there as a second, confusing button.
+ */
+function AccountingConnection({
+  configured,
+  xeroStatus,
+  qboStatus,
+  confirmingDisconnect,
+  disconnecting,
+  onRequestDisconnect,
+  onCancelDisconnect,
+  onDisconnect,
 }: {
-  name: string;
-  path: string;
-  status?: PlatformStatus;
+  configured: ConfiguredStatus | null;
+  xeroStatus: LiveStatus;
+  qboStatus: LiveStatus;
+  confirmingDisconnect: AccountingProvider | null;
+  disconnecting: AccountingProvider | null;
+  onRequestDisconnect: (provider: AccountingProvider) => void;
+  onCancelDisconnect: () => void;
+  onDisconnect: (provider: AccountingProvider) => void;
 }) {
-  if (!status) return <span style={connMutedStyle}>{name} …</span>; // still loading
-  if (status.connected) return <span style={connOkStyle}>✓ {name} connected</span>;
-  if (!status.configured) return <span style={connMutedStyle}>{name} — not configured</span>;
-  // Configured but not connected: a plain link that kicks off the OAuth redirect.
+  if (!configured || !xeroStatus || !qboStatus) {
+    return <span style={connMutedStyle}>Checking accounting connections…</span>;
+  }
+
+  const statusByProvider: Record<AccountingProvider, LiveStatus> = {
+    xero: xeroStatus,
+    quickbooks: qboStatus,
+  };
+  const connectedProviders = (["xero", "quickbooks"] as AccountingProvider[]).filter(
+    (p) => statusByProvider[p]?.connected,
+  );
+
+  // One or both already connected: show a card per connected platform, each
+  // with its own disconnect. (Both at once can only happen from a connection
+  // made before this one-at-a-time UI existed — shown rather than hidden, so
+  // it's obvious and fixable instead of silently picking one.)
+  if (connectedProviders.length > 0) {
+    return (
+      <>
+        {connectedProviders.map((provider) => {
+          const label = PROVIDER_LABEL[provider];
+          const accountName = statusByProvider[provider]?.accountName;
+
+          if (confirmingDisconnect === provider) {
+            return (
+              <div key={provider} style={disconnectConfirmStyle}>
+                <span style={{ flex: 1 }}>
+                  Disconnect {label}? Approved invoices will stop posting there until you
+                  reconnect.
+                </span>
+                <button
+                  style={disconnecting === provider ? { ...dangerSmallStyle, opacity: 0.5 } : dangerSmallStyle}
+                  onClick={() => onDisconnect(provider)}
+                  disabled={disconnecting === provider}
+                >
+                  {disconnecting === provider ? "Disconnecting…" : "Yes, disconnect"}
+                </button>
+                <button style={connLinkBtnStyle} onClick={onCancelDisconnect}>
+                  Cancel
+                </button>
+              </div>
+            );
+          }
+
+          return (
+            <span key={provider} style={connOkStyle}>
+              ✅ {label} Connected{accountName ? ` (Account: ${accountName})` : ""}
+              <button
+                style={disconnectLinkStyle}
+                onClick={() => onRequestDisconnect(provider)}
+              >
+                Disconnect
+              </button>
+            </span>
+          );
+        })}
+      </>
+    );
+  }
+
+  // Neither connected: pick one. Choosing a radio option starts that
+  // platform's OAuth flow immediately — there's nothing to "confirm" locally
+  // before that, since nothing is actually connected until OAuth completes.
+  const anyConfigured = configured.xero.configured || configured.quickbooks.configured;
+  if (!anyConfigured) {
+    return <span style={connMutedStyle}>Accounting — not configured</span>;
+  }
+
   return (
-    <a href={path} style={connBtnStyle}>
-      Connect {name}
-    </a>
+    <fieldset style={radioGroupStyle}>
+      <legend style={radioLegendStyle}>Connect an accounting platform</legend>
+      {(["xero", "quickbooks"] as AccountingProvider[]).map((provider) => {
+        const isConfigured = configured[provider].configured;
+        return (
+          <label
+            key={provider}
+            style={isConfigured ? radioOptionStyle : { ...radioOptionStyle, opacity: 0.5 }}
+          >
+            <input
+              type="radio"
+              name="accountingPlatform"
+              disabled={!isConfigured}
+              onChange={() => {
+                window.location.href = PROVIDER_CONNECT_PATH[provider];
+              }}
+            />
+            {PROVIDER_LABEL[provider]}
+            {!isConfigured && " — not configured"}
+          </label>
+        );
+      })}
+    </fieldset>
   );
 }
 
@@ -855,17 +1018,10 @@ const connBarStyle: React.CSSProperties = {
   gap: 10,
   marginBottom: 24,
 };
-const connBtnStyle: React.CSSProperties = {
-  display: "inline-block",
-  padding: "6px 14px",
-  background: "#1a2b4a",
-  color: "#fff",
-  borderRadius: 8,
-  fontWeight: 600,
-  fontSize: 13,
-  textDecoration: "none",
-};
 const connOkStyle: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 8,
   padding: "6px 12px",
   background: "#e8f8f0",
   color: "#1e8449",
@@ -882,6 +1038,74 @@ const connMutedStyle: React.CSSProperties = {
   borderRadius: 8,
   fontWeight: 600,
   fontSize: 13,
+};
+const disconnectLinkStyle: React.CSSProperties = {
+  padding: "2px 8px",
+  background: "#fff",
+  color: "#1e8449",
+  border: "1px solid #a9dfbf",
+  borderRadius: 6,
+  cursor: "pointer",
+  fontWeight: 600,
+  fontSize: 12,
+};
+const disconnectConfirmStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  flexWrap: "wrap",
+  padding: "10px 12px",
+  background: "#fdecea",
+  border: "1px solid #e6b0aa",
+  borderRadius: 8,
+  color: "#c0392b",
+  fontSize: 13,
+  fontWeight: 600,
+};
+const dangerSmallStyle: React.CSSProperties = {
+  padding: "6px 14px",
+  background: "#c0392b",
+  color: "#fff",
+  border: "none",
+  borderRadius: 8,
+  cursor: "pointer",
+  fontWeight: 600,
+  fontSize: 13,
+};
+const connLinkBtnStyle: React.CSSProperties = {
+  padding: "5px 12px",
+  background: "#fff",
+  color: "#1a2b4a",
+  border: "1px solid #d5dbdb",
+  borderRadius: 8,
+  cursor: "pointer",
+  fontWeight: 600,
+  fontSize: 12,
+};
+const radioGroupStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  flexWrap: "wrap",
+  gap: 14,
+  padding: "6px 12px",
+  border: "1px solid #e6eaee",
+  borderRadius: 8,
+  margin: 0,
+};
+const radioLegendStyle: React.CSSProperties = {
+  padding: "0 4px",
+  fontSize: 12,
+  fontWeight: 600,
+  color: "#8892a0",
+};
+const radioOptionStyle: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
+  fontSize: 13,
+  fontWeight: 600,
+  color: "#1a2b4a",
+  cursor: "pointer",
 };
 const chipOk: React.CSSProperties = {
   background: "#e8f8f0",
