@@ -1,9 +1,16 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { REVIEWABLE_FIELDS, type DocumentType, type InvoiceExtraction } from "@/lib/schema";
-import { fieldLabels } from "@/lib/validation";
+import { REVIEWABLE_FIELDS, type DocumentType, type InvoiceExtraction, type ReviewableField } from "@/lib/schema";
+import {
+  effectiveConfidence,
+  fieldLabels,
+  gateApproval,
+  gateReasonSummary,
+  type ApprovalGate,
+} from "@/lib/validation";
 import { formatMoney } from "@/lib/currency";
+import EditableField from "./EditableField";
 // Type-only: erased at compile time, so the server-side bulk-approve module (and
 // its Xero/Supabase chain) never reaches the client bundle.
 import type { BulkApproveResult, BulkItemResult } from "@/lib/bulk-approve";
@@ -55,6 +62,39 @@ function confidenceChipStyle(confidence: number): React.CSSProperties {
   return confidence >= CONFIDENCE_POOR ? chipWarn : chipBad;
 }
 
+/**
+ * Effective confidence per field once the human's edits are taken into account,
+ * and the same approval gate every other screen runs over the result. No
+ * "confirm as-is" here — only a typed correction clears a field's confidence.
+ */
+function effectiveConfidences(
+  x: InvoiceExtraction,
+  edited: Record<string, string>,
+): Record<ReviewableField, number> {
+  const out = {} as Record<ReviewableField, number>;
+  for (const f of REVIEWABLE_FIELDS) {
+    const node = (x as any)[f] as { value: unknown; confidence: number };
+    out[f] = effectiveConfidence(node.confidence, String(node.value), edited[f], false);
+  }
+  return out;
+}
+
+function computeGate(x: InvoiceExtraction, edited: Record<string, string>): ApprovalGate {
+  return gateApproval(effectiveConfidences(x, edited), {
+    documentType: x.documentType?.value ?? "invoice",
+    taxItemized: x.taxItemized,
+    documentTypeConfidence: x.documentType?.confidence,
+  });
+}
+
+/** True once the human has typed a real change into at least one field. */
+function hasEdits(x: InvoiceExtraction, edited: Record<string, string>): boolean {
+  return REVIEWABLE_FIELDS.some((f) => {
+    const original = String((x as any)[f].value);
+    return edited[f] !== undefined && edited[f] !== original;
+  });
+}
+
 export default function PendingDocuments({
   /** Shows the demo-seed control. The parent knows whether we're in demo mode. */
   demo = false,
@@ -68,6 +108,12 @@ export default function PendingDocuments({
   /** Which row is expanded, and the detail once it has arrived. */
   const [openId, setOpenId] = useState<string | null>(null);
   const [detail, setDetail] = useState<PendingDetail | null>(null);
+  /** Edits made in the open row's detail panel, keyed by reviewable field. */
+  const [edited, setEdited] = useState<Record<string, string>>({});
+  /** A direct approve came back as a possible duplicate — armed to proceed anyway. */
+  const [duplicateWarning, setDuplicateWarning] = useState<{ id: string; message: string } | null>(
+    null,
+  );
   /** Ids currently being approved — disables their row button and the batch one. */
   const [busy, setBusy] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
@@ -136,6 +182,66 @@ export default function PendingDocuments({
     }
   }
 
+  /** Commit one field's edit in the open detail panel. */
+  function commitEdit(field: ReviewableField, value: string) {
+    setEdited((prev) => ({ ...prev, [field]: value }));
+    // A changed value invalidates any duplicate warning from a previous attempt —
+    // it has to be checked against the ledger again.
+    setDuplicateWarning(null);
+  }
+
+  /**
+   * Approve the open document with its edits, via the same review route the
+   * batch-upload screen uses. This is the only way an edit from /pending reaches
+   * the server — an untouched row still goes through `approve()` below.
+   */
+  async function approveDirect(id: string, proceedDuplicate: boolean) {
+    if (!detail || detail.id !== id) return;
+    setBusy(new Set([id]));
+    setError(null);
+    setDuplicateWarning(null);
+    try {
+      const x = detail.extraction;
+      const documentType = x.documentType?.value ?? "invoice";
+      const res = await fetch("/api/approve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          documentId: id,
+          extraction: x,
+          edited: Object.fromEntries(
+            REVIEWABLE_FIELDS.map((f) => [f, edited[f] ?? String((x as any)[f].value)]),
+          ),
+          documentType,
+          proceedDuplicate,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error ?? "Approve failed.");
+        return;
+      }
+      if (data.status === "duplicate") {
+        const processedOn = new Date(data.duplicate.processedOn).toLocaleDateString("en-GB");
+        setDuplicateWarning({
+          id,
+          message:
+            `Possible duplicate of a ${data.duplicate.documentType ?? "document"} already ` +
+            `processed on ${processedOn}.`,
+        });
+        return;
+      }
+      setOpenId(null);
+      setDetail(null);
+      setEdited({});
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Approve failed.");
+    } finally {
+      setBusy(new Set());
+      await refresh();
+    }
+  }
+
   /**
    * Delete a queued document. Only ever reached from the confirmation step —
    * there is no undo, so the click that destroys is never the first click.
@@ -173,10 +279,14 @@ export default function PendingDocuments({
     if (openId === id) {
       setOpenId(null);
       setDetail(null);
+      setEdited({});
+      setDuplicateWarning(null);
       return;
     }
     setOpenId(id);
     setDetail(null); // clear the previous row's data so it can't render under this one
+    setEdited({}); // a different document's edits don't carry over
+    setDuplicateWarning(null);
     try {
       const res = await fetch(`/api/pending/${id}`);
       const data = await res.json();
@@ -251,6 +361,13 @@ export default function PendingDocuments({
           {docs.map((d) => {
             const isSelected = selected.has(d.id);
             const isOpen = openId === d.id;
+            // Edits only exist for the row whose detail panel is open — this is
+            // what decides whether Approve goes through the direct review route
+            // (with the human's values) or the untouched bulk route (by id alone).
+            const rowExtraction = isOpen && detail && detail.id === d.id ? detail.extraction : null;
+            const rowEdited = rowExtraction !== null && hasEdits(rowExtraction, edited);
+            const rowGate = rowExtraction && rowEdited ? computeGate(rowExtraction, edited) : null;
+            const rowBlocked = rowGate !== null && rowGate.status !== "ready";
             return (
               <div key={d.id} style={isSelected ? rowSelected : row}>
                 <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
@@ -310,12 +427,33 @@ export default function PendingDocuments({
                           Cancel
                         </button>
                       </div>
+                    ) : duplicateWarning?.id === d.id ? (
+                      <div style={confirmBar}>
+                        <span style={{ flex: 1 }}>
+                          {duplicateWarning.message} Approve again to post it anyway.
+                        </span>
+                        <button
+                          style={busy.has(d.id) ? { ...dangerSmall, opacity: 0.5 } : dangerSmall}
+                          onClick={() => approveDirect(d.id, true)}
+                          disabled={busy.has(d.id)}
+                        >
+                          {busy.has(d.id) ? "Approving…" : "Approve anyway"}
+                        </button>
+                        <button style={linkBtn} onClick={() => setDuplicateWarning(null)}>
+                          Cancel
+                        </button>
+                      </div>
                     ) : (
                       <div style={{ display: "flex", gap: 8, marginTop: 10, alignItems: "center" }}>
                         <button
-                          style={working ? { ...approveSmall, opacity: 0.5 } : approveSmall}
-                          onClick={() => approve([d.id])}
-                          disabled={working}
+                          style={
+                            working || rowBlocked
+                              ? { ...approveSmall, opacity: 0.5, cursor: "not-allowed" }
+                              : approveSmall
+                          }
+                          onClick={() => (rowEdited ? approveDirect(d.id, false) : approve([d.id]))}
+                          disabled={working || rowBlocked}
+                          title={rowBlocked ? "Fix the flagged field first" : "Approve this document now"}
                         >
                           {busy.has(d.id) ? "Approving…" : "✓ Approve"}
                         </button>
@@ -334,7 +472,14 @@ export default function PendingDocuments({
                       </div>
                     )}
 
-                    {isOpen && <DetailPanel documentId={d.id} detail={detail} />}
+                    {isOpen && (
+                      <DetailPanel
+                        documentId={d.id}
+                        detail={detail}
+                        edited={edited}
+                        onEdit={commitEdit}
+                      />
+                    )}
                   </div>
                 </div>
               </div>
@@ -385,13 +530,22 @@ export default function PendingDocuments({
   );
 }
 
-/** The full extraction behind one row: every field, with the confidence for it. */
+/**
+ * The full extraction behind one row: every field, editable in place. Click a
+ * value to correct it — the confidence chip flips to "✓ edited" immediately, and
+ * an edit that clears the last flagged field unblocks this row's Approve button
+ * without a round trip, same as the batch-upload screen.
+ */
 function DetailPanel({
   documentId,
   detail,
+  edited,
+  onEdit,
 }: {
   documentId: string;
   detail: PendingDetail | null;
+  edited: Record<string, string>;
+  onEdit: (field: ReviewableField, value: string) => void;
 }) {
   if (!detail || detail.id !== documentId) {
     return <p style={mutedNote}>Loading details…</p>;
@@ -400,6 +554,8 @@ function DetailPanel({
   const x = detail.extraction;
   const type = x.documentType?.value ?? "invoice";
   const labels = fieldLabels(type);
+  const confidences = effectiveConfidences(x, edited);
+  const gate = hasEdits(x, edited) ? computeGate(x, edited) : null;
 
   return (
     <div style={detailPanel}>
@@ -410,34 +566,30 @@ function DetailPanel({
         {!x.taxItemized && <span style={chipMuted}>No tax broken out</span>}
       </div>
 
-      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-        <tbody>
-          {REVIEWABLE_FIELDS.map((f) => {
-            const node = (x as any)[f] as { value: unknown; confidence: number };
-            const value = String(node.value);
-            // A field the document never stated is not a failed read — show it as
-            // absent rather than as a 0% score the human can never satisfy.
-            const absent = value.trim() === "" || node.confidence === 0;
-            return (
-              <tr key={f}>
-                <td style={detailLabel}>{labels[f]}</td>
-                <td style={detailValue}>
-                  {absent ? <span style={{ color: "#8892a0" }}>not stated</span> : value}
-                </td>
-                <td style={{ padding: "6px 0", textAlign: "right" }}>
-                  {absent ? (
-                    <span style={chipMuted}>—</span>
-                  ) : (
-                    <span style={confidenceChipStyle(node.confidence)}>
-                      {(node.confidence * 100).toFixed(0)}%
-                    </span>
-                  )}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+      {gate && gate.status !== "ready" && (
+        <p style={rowBlockedNote}>⚠️ {gateReasonSummary(gate, type)}</p>
+      )}
+
+      {REVIEWABLE_FIELDS.map((f) => {
+        const node = (x as any)[f] as { value: unknown; confidence: number };
+        const original = String(node.value);
+        // A field the document never stated is not a failed read — show it as
+        // absent rather than as a 0% score the human can never satisfy.
+        const absent = original.trim() === "" || node.confidence === 0;
+        return (
+          <EditableField
+            key={f}
+            label={labels[f]}
+            value={edited[f] ?? original}
+            original={original}
+            confidence={confidences[f]}
+            absent={absent}
+            edited={edited[f] !== undefined && edited[f] !== original}
+            affirmed={false}
+            onCommit={(v) => onEdit(f, v)}
+          />
+        );
+      })}
 
       {x.lineItems.length > 0 && (
         <div style={{ marginTop: 12 }}>
@@ -573,17 +725,6 @@ const detailPanel: React.CSSProperties = {
   background: "#fafbfc",
   border: "1px solid #eef1f4",
   borderRadius: 8,
-};
-const detailLabel: React.CSSProperties = {
-  padding: "6px 8px 6px 0",
-  color: "#8892a0",
-  whiteSpace: "nowrap",
-};
-const detailValue: React.CSSProperties = {
-  padding: "6px 8px 6px 0",
-  color: "#1a2b4a",
-  fontWeight: 600,
-  width: "100%",
 };
 const emptyStyle: React.CSSProperties = {
   padding: "28px 24px",
