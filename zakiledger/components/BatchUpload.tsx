@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ReviewableField } from "@/lib/schema";
 import type { BulkItemResult } from "@/lib/bulk-approve";
 import BatchResultRow from "./BatchResultRow";
@@ -44,12 +44,18 @@ export default function BatchUpload({
   files,
   onCancel,
   onDone,
+  onRunningChange,
 }: {
   files: File[];
   /** Back out before uploading, or leave the results screen once finished. */
   onCancel: () => void;
   /** Fired whenever the queue may have changed, so the parent can recount. */
   onDone: () => void;
+  /**
+   * Reported while the stream is being read, so the parent can stop a second
+   * selection from replacing a batch that is still delivering results.
+   */
+  onRunningChange?: (running: boolean) => void;
 }) {
   const [rows, setRows] = useState<ResultRow[] | null>(null); // null = not started
   const [summary, setSummary] = useState<Summary | null>(null);
@@ -66,8 +72,17 @@ export default function BatchUpload({
 
   const completed = rows ? rows.filter((r) => r.read !== "extracting").length : 0;
 
+  // Unmounting mid-read must clear the parent's "busy" flag. Otherwise the one
+  // path that could strand it — this component going away while a stream is
+  // open — would leave the upload button disabled for good, which is a worse
+  // failure than the one the flag exists to prevent.
+  const reportRunning = useRef(onRunningChange);
+  reportRunning.current = onRunningChange;
+  useEffect(() => () => reportRunning.current?.(false), []);
+
   async function upload() {
     setRunning(true);
+    onRunningChange?.(true);
     setError(null);
     setSummary(null);
     // Everything is in flight the moment the request opens — the server reads up
@@ -140,6 +155,7 @@ export default function BatchUpload({
       setError(e instanceof Error ? e.message : "Upload failed.");
     } finally {
       setRunning(false);
+      onRunningChange?.(false);
       onDone();
     }
   }

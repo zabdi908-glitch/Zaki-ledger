@@ -106,6 +106,20 @@ export default function Home() {
   const [pendingCount, setPendingCount] = useState(0);
   // Set when 2+ files were picked — hands off to the parallel batch flow.
   const [batchFiles, setBatchFiles] = useState<File[] | null>(null);
+  /**
+   * Bumped on every batch selection, and used as BatchUpload's `key`.
+   *
+   * Without it, picking a second batch while the first one's results were still
+   * on screen did nothing visible: React kept the same BatchUpload instance, its
+   * `rows` state survived the prop change, and the component short-circuited
+   * straight back to the old results — so the new files were never read and the
+   * app looked like it only accepted one upload. A new selection is a new batch,
+   * so it gets a new component rather than one carrying the last batch's state.
+   */
+  const [batchNonce, setBatchNonce] = useState(0);
+  // True while a batch is actually being read, so a second pick can't abandon a
+  // stream that is still delivering results.
+  const [batchRunning, setBatchRunning] = useState(false);
 
   async function refreshConnections() {
     try {
@@ -165,6 +179,7 @@ export default function Home() {
     // review screen below, which is still the heart of the product.
     if (picked.length > 1) {
       setBatchFiles(picked);
+      setBatchNonce((n) => n + 1); // a new selection is a new batch, not the old one
       setResult(null);
       setApproved(null);
       setError(null);
@@ -256,6 +271,8 @@ export default function Home() {
   const taxItemized = result?.extraction.taxItemized ?? true;
   const labels = fieldLabels(documentType);
   const isReceipt = documentType === "receipt";
+  /** A read is in flight — either the single-document one or a batch. */
+  const busy = loading || batchRunning;
 
   // Recomputed every render, so editing a flagged field re-evaluates live —
   // both the gate below and the per-field confidence badges read from this map.
@@ -307,15 +324,23 @@ export default function Home() {
         </p>
       )}
 
-      <label style={loading ? { ...btnStyle, opacity: 0.7 } : btnStyle}>
-        {loading ? "Reading document…" : "＋ Upload invoices or receipts (PDF or images)"}
+      {/* Busy during a single read OR a batch read. The batch case matters: a
+          second pick mid-stream would replace the component still receiving
+          results, so those documents would land in the queue having never
+          appeared on screen. */}
+      <label style={busy ? { ...btnStyle, opacity: 0.7 } : btnStyle}>
+        {loading
+          ? "Reading document…"
+          : batchRunning
+            ? "Reading documents…"
+            : "＋ Upload invoices or receipts (PDF or images)"}
         <input
           type="file"
           accept="application/pdf,image/*"
           multiple
           onChange={onUpload}
           hidden
-          disabled={loading}
+          disabled={busy}
         />
       </label>
       <p style={{ margin: "8px 0 0", fontSize: 13, color: "#8892a0" }}>
@@ -327,9 +352,11 @@ export default function Home() {
       {/* 2+ files: parallel read, live progress, per-file result. */}
       {batchFiles && (
         <BatchUpload
+          key={batchNonce}
           files={batchFiles}
           onCancel={() => setBatchFiles(null)}
           onDone={refreshPending}
+          onRunningChange={setBatchRunning}
         />
       )}
 
