@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { deleteConnection } from "@/lib/oauth-store";
+import { requireUser } from "@/lib/auth";
 
 /**
  * POST /api/quickbooks/disconnect
@@ -9,6 +10,9 @@ import { deleteConnection } from "@/lib/oauth-store";
  * on this.
  */
 export async function POST() {
-  await deleteConnection("quickbooks");
+  const user = await requireUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  await deleteConnection(user.id, "quickbooks");
   return NextResponse.json({ disconnected: true });
 }

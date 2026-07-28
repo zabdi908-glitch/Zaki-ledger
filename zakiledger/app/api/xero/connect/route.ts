@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { callbackUrl } from "@/lib/config";
 import { isXeroConfigured, xeroAuthorizeUrl } from "@/lib/xero";
+import { requireUser } from "@/lib/auth";
 
 /**
  * POST/GET /api/xero/connect
@@ -11,7 +12,10 @@ import { isXeroConfigured, xeroAuthorizeUrl } from "@/lib/xero";
  * friendly 200 explaining that — consistent with the rest of the app degrading
  * gracefully when keys are absent, rather than erroring.
  */
-function start(): NextResponse {
+async function start(): Promise<NextResponse> {
+  const user = await requireUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
   if (!isXeroConfigured()) {
     return NextResponse.json({
       connected: false,

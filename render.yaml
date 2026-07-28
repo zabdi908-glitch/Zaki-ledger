@@ -2,18 +2,26 @@
 #
 # In Render:  New +  →  Blueprint  →  connect this repo  →  Apply.
 # Then set the secret env vars (marked sync:false) in the dashboard when prompted:
+#   - SUPABASE_URL               (required — login/signup has no offline mode)
+#   - SUPABASE_ANON_KEY          (required — same)
+#   - SUPABASE_SERVICE_ROLE_KEY  (required for data to persist across restarts —
+#                                  without it, every logged-in user still shares
+#                                  the one in-memory queue/ledger)
 #   - ANTHROPIC_API_KEY          (required to test real extraction + learning)
-#   - SUPABASE_URL               (optional — for persistence across restarts)
-#   - SUPABASE_SERVICE_ROLE_KEY  (optional)
 #   - XERO_CLIENT_ID             (optional — to connect Xero for draft bills)
 #   - XERO_CLIENT_SECRET         (optional)
 #   - QUICKBOOKS_CLIENT_ID       (optional — to connect QuickBooks for bills)
 #   - QUICKBOOKS_CLIENT_SECRET   (optional)
 #
-# With NO keys it still boots in demo mode. With ANTHROPIC_API_KEY set, it does
-# real extraction and the per-supplier learning loop. With the Xero/QuickBooks
-# client credentials set, approved invoices post as draft bills to the connected
-# platform.
+# Also required once, in the Supabase dashboard (Authentication → Settings):
+# enable the Email/Password provider, and turn OFF "Confirm email" so signup
+# logs a user in immediately rather than leaving them on a check-your-email
+# screen this app doesn't build.
+#
+# With no ANTHROPIC_API_KEY it still runs a logged-in demo (a realistic sample
+# extraction instead of a real Claude read). With the Xero/QuickBooks client
+# credentials set, approved invoices post as draft bills to whichever platform
+# the logged-in user has connected.
 services:
   - type: web
     name: zaki-ledger
@@ -28,6 +36,8 @@ services:
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
         sync: false
       - key: SUPABASE_SERVICE_ROLE_KEY
         sync: false

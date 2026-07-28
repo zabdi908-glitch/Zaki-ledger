@@ -112,22 +112,24 @@ export async function refreshQuickBooksToken(refreshToken: string): Promise<Toke
  * Return a valid access token + realmId for the stored connection, refreshing
  * the access token first if it's expired. Returns null when not connected.
  */
-export async function getValidQboAccess(): Promise<{ accessToken: string; realmId: string } | null> {
-  let conn = await getConnection("quickbooks");
+export async function getValidQboAccess(
+  userId: string,
+): Promise<{ accessToken: string; realmId: string } | null> {
+  let conn = await getConnection(userId, "quickbooks");
   if (!conn) return null;
 
   if (isExpired(conn)) {
     const tokens = await refreshQuickBooksToken(conn.refreshToken);
-    conn = await saveConnection("quickbooks", tokens, conn.orgId);
+    conn = await saveConnection(userId, "quickbooks", tokens, conn.orgId);
   }
 
   if (!conn.orgId) throw new Error("QuickBooks connection has no realmId — reconnect required.");
   return { accessToken: conn.accessToken, realmId: conn.orgId };
 }
 
-/** True when there is a usable QuickBooks connection stored. */
-export async function isQuickBooksConnected(): Promise<boolean> {
-  return (await getConnection("quickbooks")) !== null;
+/** True when this user has a usable QuickBooks connection stored. */
+export async function isQuickBooksConnected(userId: string): Promise<boolean> {
+  return (await getConnection(userId, "quickbooks")) !== null;
 }
 
 /**
@@ -137,12 +139,12 @@ export async function isQuickBooksConnected(): Promise<boolean> {
  * A revoked or otherwise broken token reports as disconnected instead of
  * throwing.
  */
-export async function quickBooksConnectionStatus(): Promise<{
+export async function quickBooksConnectionStatus(userId: string): Promise<{
   connected: boolean;
   accountName?: string;
 }> {
   try {
-    const access = await getValidQboAccess();
+    const access = await getValidQboAccess(userId);
     if (!access) return { connected: false };
 
     const info = (await qboGet(
@@ -253,8 +255,8 @@ async function firstExpenseAccountId(accessToken: string, realmId: string): Prom
  * a VendorRef (we find/create the vendor by name) and each line needs an
  * AccountRef (we use the first Expense account). Amount = the approved total.
  */
-export async function createQuickBooksBill(bill: ApprovedBill): Promise<string> {
-  const access = await getValidQboAccess();
+export async function createQuickBooksBill(userId: string, bill: ApprovedBill): Promise<string> {
+  const access = await getValidQboAccess(userId);
   if (!access) throw new Error("QuickBooks is not connected.");
   const { accessToken, realmId } = access;
 

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { extractOneDocument } from "@/lib/extract-pipeline";
+import { requireUser } from "@/lib/auth";
 
 /**
  * POST /api/extract
@@ -11,6 +12,9 @@ import { extractOneDocument } from "@/lib/extract-pipeline";
  * logic, not a copy of it.
  */
 export async function POST(req: NextRequest) {
+  const user = await requireUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
   try {
     const form = await req.formData();
     const file = form.get("file");
@@ -18,7 +22,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "No file uploaded." }, { status: 400 });
     }
 
-    return NextResponse.json(await extractOneDocument(file));
+    return NextResponse.json(await extractOneDocument(user.id, file));
   } catch (err) {
     const message = err instanceof Error ? err.message : "Extraction failed.";
     return NextResponse.json({ error: message }, { status: 500 });

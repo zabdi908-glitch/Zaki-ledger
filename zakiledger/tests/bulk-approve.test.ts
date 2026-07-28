@@ -21,7 +21,7 @@ const xero = vi.hoisted(() => ({
 vi.mock("@/lib/xero", () => ({
   isXeroConfigured: () => true,
   isXeroConnected: async () => xero.connected,
-  createXeroDraftBill: async (bill: any) => {
+  createXeroDraftBill: async (_userId: string, bill: any) => {
     if (xero.failFor && bill.supplierName === xero.failFor) {
       throw new Error("Xero bill creation failed (400): currency not enabled");
     }
@@ -32,6 +32,15 @@ vi.mock("@/lib/xero", () => ({
     });
     return `XERO-BILL-${xero.calls.length}`;
   },
+}));
+
+const TEST_USER_ID = "test-user";
+
+// No real Supabase session exists in a unit test — stand in for one, the same
+// user for every request in this file, so route handlers see the documents
+// this file queues directly via lib/store.
+vi.mock("@/lib/auth", () => ({
+  requireUser: async () => ({ id: TEST_USER_ID }),
 }));
 
 const { POST: bulkRoute } = await import("@/app/api/approve/bulk/route");
@@ -59,7 +68,7 @@ async function bulkApproveRequest(documentIds: string[]) {
 /** Queue a batch and return its ids, in the order given. */
 async function queue(batch: Array<{ filename: string; extraction: InvoiceExtraction }>) {
   const ids: string[] = [];
-  for (const b of batch) ids.push(await savePendingDocument(b));
+  for (const b of batch) ids.push(await savePendingDocument(TEST_USER_ID, b));
   return ids;
 }
 
@@ -142,7 +151,7 @@ describe("the mixed batch: 3 clean receipts, 1 low-confidence merchant, 1 bad cu
   });
 
   it("clears approved documents from the queue and keeps the rest, with reasons", async () => {
-    const stillQueued = await listPendingDocuments();
+    const stillQueued = await listPendingDocuments(TEST_USER_ID);
     expect(stillQueued.map((d) => d.extraction.supplierName.value).sort()).toEqual([
       "Shinjuku Station Kiosk",
       "The Corner Cafe",

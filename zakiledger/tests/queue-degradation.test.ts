@@ -34,6 +34,11 @@ vi.mock("@/lib/store", async () => {
   };
 });
 
+// No real Supabase session exists in a unit test — stand in for one.
+vi.mock("@/lib/auth", () => ({
+  requireUser: async () => ({ id: "test-user" }),
+}));
+
 const { POST: extractRoute } = await import("@/app/api/extract/route");
 const { POST: approveRoute } = await import("@/app/api/approve/route");
 const { REVIEWABLE_FIELDS } = await import("@/lib/schema");

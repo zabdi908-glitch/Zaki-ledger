@@ -7,6 +7,7 @@ import {
 import { gateApproval, gateReasonSummary } from "@/lib/validation";
 import type { InvoiceExtraction, ReviewableField } from "@/lib/schema";
 import { REVIEWABLE_FIELDS } from "@/lib/schema";
+import { requireUser } from "@/lib/auth";
 
 /**
  * POST /api/extract-batch
@@ -59,6 +60,9 @@ function confidencesOf(extraction: InvoiceExtraction): Record<ReviewableField, n
 }
 
 export async function POST(req: NextRequest) {
+  const user = await requireUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
   let files: File[];
   try {
     const form = await req.formData();
@@ -96,7 +100,7 @@ export async function POST(req: NextRequest) {
           async (file, index): Promise<BatchFileResult> => {
             const filename = file.name || `file-${index + 1}`;
             try {
-              const doc = await extractOneDocument(file);
+              const doc = await extractOneDocument(user.id, file);
 
               // Same gate the review screen and bulk approve use — so a document
               // flagged here is flagged for exactly the reason it will be later,

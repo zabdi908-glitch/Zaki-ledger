@@ -56,12 +56,12 @@ export {
  * when both happen to be connected. Returns null when neither is connected, so
  * the caller can treat "not connected" and "posted" uniformly.
  */
-export async function postApprovedBill(bill: ApprovedBill): Promise<PostedBill | null> {
-  if (await isXeroConnected()) {
-    return { platform: "xero", billId: await createXeroDraftBill(bill) };
+export async function postApprovedBill(userId: string, bill: ApprovedBill): Promise<PostedBill | null> {
+  if (await isXeroConnected(userId)) {
+    return { platform: "xero", billId: await createXeroDraftBill(userId, bill) };
   }
-  if (await isQuickBooksConnected()) {
-    return { platform: "quickbooks", billId: await createQuickBooksBill(bill) };
+  if (await isQuickBooksConnected(userId)) {
+    return { platform: "quickbooks", billId: await createQuickBooksBill(userId, bill) };
   }
   return null;
 }

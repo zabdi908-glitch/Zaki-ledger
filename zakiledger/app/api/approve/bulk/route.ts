@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { bulkApprove } from "@/lib/bulk-approve";
+import { requireUser } from "@/lib/auth";
 
 /**
  * POST /api/approve/bulk
@@ -11,6 +12,9 @@ import { bulkApprove } from "@/lib/bulk-approve";
  * here means the request itself was unusable.
  */
 export async function POST(req: NextRequest) {
+  const user = await requireUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
   try {
     const { documentIds } = (await req.json()) as { documentIds?: unknown };
 
@@ -24,7 +28,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "No documents selected." }, { status: 400 });
     }
 
-    const { results, summary } = await bulkApprove(documentIds as string[]);
+    const { results, summary } = await bulkApprove(user.id, documentIds as string[]);
     console.log(
       `[bulk-approve] ${documentIds.length} submitted → ${summary.approved} approved, ` +
         `${summary.blocked} blocked, ${summary.errors} error(s), posted ${summary.postedLabel}`,

@@ -104,12 +104,17 @@ export interface PendingDocument {
  *
  * This only affects the keyless/no-database mode. With Supabase configured these
  * arrays are never touched — Postgres is the shared state.
+ *
+ * Every entry carries a `userId` tag (not part of the public interfaces above —
+ * callers already scoped their query, so it isn't echoed back) purely so the
+ * in-memory fallback can filter the same way `.eq("user_id", userId)` does
+ * against Postgres.
  */
 interface MemoryStore {
-  corrections: Correction[];
-  invoices: StoredInvoiceSummary[];
-  confirmations: Confirmation[];
-  pending: PendingDocument[];
+  corrections: (Correction & { userId: string })[];
+  invoices: (StoredInvoiceSummary & { userId: string })[];
+  confirmations: (Confirmation & { userId: string })[];
+  pending: (PendingDocument & { userId: string })[];
 }
 
 const globalForMemory = globalThis as unknown as { __zakiLedgerMemory?: MemoryStore };
@@ -172,14 +177,16 @@ function mapConfirmationRow(row: Record<string, unknown>): Confirmation {
  * facts, never updated or deleted.
  */
 export async function recordCorrection(
+  userId: string,
   c: Omit<Correction, "id" | "createdAt">,
 ): Promise<Correction> {
   const db = getSupabase();
   if (!db) {
-    const entry: Correction = {
+    const entry: Correction & { userId: string } = {
       ...c,
       id: crypto.randomUUID(),
       createdAt: new Date().toISOString(),
+      userId,
     };
     memCorrections.push(entry);
     return entry;
@@ -189,6 +196,7 @@ export async function recordCorrection(
     .from("corrections")
     .insert({
       invoice_id: c.invoiceId ?? null,
+      user_id: userId,
       supplier_name: c.supplierName,
       field: c.field,
       ai_value: c.aiValue,
@@ -207,14 +215,16 @@ export async function recordCorrection(
  * read. Append-only, same as corrections: a historical fact about a correct read.
  */
 export async function recordConfirmation(
+  userId: string,
   c: Omit<Confirmation, "id" | "createdAt">,
 ): Promise<Confirmation> {
   const db = getSupabase();
   if (!db) {
-    const entry: Confirmation = {
+    const entry: Confirmation & { userId: string } = {
       ...c,
       id: crypto.randomUUID(),
       createdAt: new Date().toISOString(),
+      userId,
     };
     memConfirmations.push(entry);
     return entry;
@@ -224,6 +234,7 @@ export async function recordConfirmation(
     .from("confirmations")
     .insert({
       invoice_id: c.invoiceId ?? null,
+      user_id: userId,
       supplier_name: c.supplierName,
       field: c.field,
       value: c.value,
@@ -249,8 +260,12 @@ export interface ConfirmationStat {
  * the most recent correction for that field. An edit means the system got that
  * field wrong, so it resets the track record: the count (calibration bonus) and
  * the floor (established trust) both rebuild from scratch afterwards.
+ *
+ * Scoped to `userId`: one bookkeeper's history with a supplier doesn't calibrate
+ * another bookkeeper's reads of a similarly-named supplier.
  */
 export async function confirmationStatsForSupplier(
+  userId: string,
   supplierName: string,
 ): Promise<Partial<Record<ReviewableField, ConfirmationStat>>> {
   const supplier = supplierName.toLowerCase();
@@ -260,12 +275,24 @@ export async function confirmationStatsForSupplier(
 
   const db = getSupabase();
   if (!db) {
-    corrections = memCorrections.filter((c) => c.supplierName.toLowerCase() === supplier);
-    confirmations = memConfirmations.filter((c) => c.supplierName.toLowerCase() === supplier);
+    corrections = memCorrections.filter(
+      (c) => c.userId === userId && c.supplierName.toLowerCase() === supplier,
+    );
+    confirmations = memConfirmations.filter(
+      (c) => c.userId === userId && c.supplierName.toLowerCase() === supplier,
+    );
   } else {
     const [corrRes, confRes] = await Promise.all([
-      db.from("corrections").select("field, created_at").ilike("supplier_name", supplierName),
-      db.from("confirmations").select("field, created_at, confidence").ilike("supplier_name", supplierName),
+      db
+        .from("corrections")
+        .select("field, created_at")
+        .eq("user_id", userId)
+        .ilike("supplier_name", supplierName),
+      db
+        .from("confirmations")
+        .select("field, created_at, confidence")
+        .eq("user_id", userId)
+        .ilike("supplier_name", supplierName),
     ]);
     if (corrRes.error) throw new Error(`Failed to load corrections: ${corrRes.error.message}`);
     if (confRes.error) throw new Error(`Failed to load confirmations: ${confRes.error.message}`);
@@ -297,19 +324,21 @@ export async function confirmationStatsForSupplier(
 
 /** Recent corrections for a supplier — the raw material for per-vendor learning. */
 export async function correctionsForSupplier(
+  userId: string,
   supplierName: string,
   limit = 20,
 ): Promise<Correction[]> {
   const db = getSupabase();
   if (!db) {
     return memCorrections
-      .filter((c) => c.supplierName.toLowerCase() === supplierName.toLowerCase())
+      .filter((c) => c.userId === userId && c.supplierName.toLowerCase() === supplierName.toLowerCase())
       .slice(-limit);
   }
 
   const { data, error } = await db
     .from("corrections")
     .select()
+    .eq("user_id", userId)
     .ilike("supplier_name", supplierName)
     .order("created_at", { ascending: false })
     .limit(limit);
@@ -321,13 +350,14 @@ export async function correctionsForSupplier(
 }
 
 /** Recent corrections across all suppliers — used before we know the supplier. */
-export async function recentCorrections(limit = 20): Promise<Correction[]> {
+export async function recentCorrections(userId: string, limit = 20): Promise<Correction[]> {
   const db = getSupabase();
-  if (!db) return memCorrections.slice(-limit);
+  if (!db) return memCorrections.filter((c) => c.userId === userId).slice(-limit);
 
   const { data, error } = await db
     .from("corrections")
     .select()
+    .eq("user_id", userId)
     .order("created_at", { ascending: false })
     .limit(limit);
 
@@ -340,7 +370,7 @@ export async function recentCorrections(limit = 20): Promise<Correction[]> {
  * corrections back to it). In fallback mode it records a lightweight summary in
  * memory so duplicate detection still works without a database.
  */
-export async function saveApprovedInvoice(inv: ApprovedInvoice): Promise<string | null> {
+export async function saveApprovedInvoice(userId: string, inv: ApprovedInvoice): Promise<string | null> {
   const db = getSupabase();
   if (!db) {
     const id = crypto.randomUUID();
@@ -353,6 +383,7 @@ export async function saveApprovedInvoice(inv: ApprovedInvoice): Promise<string 
       total: inv.total,
       status: "approved",
       createdAt: new Date().toISOString(),
+      userId,
     });
     return id;
   }
@@ -361,6 +392,7 @@ export async function saveApprovedInvoice(inv: ApprovedInvoice): Promise<string 
     .from("invoices")
     .insert({
       document_type: inv.documentType,
+      user_id: userId,
       supplier_name: inv.supplierName,
       invoice_number: inv.invoiceNumber,
       invoice_date: inv.invoiceDate,
@@ -385,8 +417,12 @@ export async function saveApprovedInvoice(inv: ApprovedInvoice): Promise<string 
  * Scope is deliberately just supplier + invoice number — a supplier re-sending a
  * corrected version is explicitly out of scope until we have a pilot example.
  * A blank supplier or invoice number is unmatchable, so it never flags.
+ *
+ * Scoped to `userId`: two different bookkeepers legitimately both having a
+ * supplier called "Acme Ltd" must never flag each other's invoices as duplicates.
  */
 export async function findDuplicateInvoice(
+  userId: string,
   supplierName: string,
   invoiceNumber: string,
 ): Promise<StoredInvoiceSummary | null> {
@@ -398,6 +434,7 @@ export async function findDuplicateInvoice(
     for (let i = memInvoices.length - 1; i >= 0; i--) {
       const inv = memInvoices[i];
       if (
+        inv.userId === userId &&
         inv.supplierName.toLowerCase() === supplierName.toLowerCase() &&
         inv.invoiceNumber === invoiceNumber
       ) {
@@ -410,6 +447,7 @@ export async function findDuplicateInvoice(
   const { data, error } = await db
     .from("invoices")
     .select(DUP_COLUMNS)
+    .eq("user_id", userId)
     .ilike("supplier_name", supplierName)
     .eq("invoice_number", invoiceNumber)
     .in("status", ["approved", "pending_review"])
@@ -434,8 +472,10 @@ export async function findDuplicateInvoice(
  * can wave through. Same contract as the invoice check: warn, never block.
  *
  * A blank merchant, missing date, or absent total is unmatchable, so it never flags.
+ * Scoped to `userId`, same reasoning as findDuplicateInvoice.
  */
 export async function findDuplicateReceipt(
+  userId: string,
   merchantName: string,
   receiptDate: string | null,
   total: number | null,
@@ -449,6 +489,7 @@ export async function findDuplicateReceipt(
     for (let i = memInvoices.length - 1; i >= 0; i--) {
       const inv = memInvoices[i];
       if (
+        inv.userId === userId &&
         inv.documentType === "receipt" &&
         inv.supplierName.toLowerCase() === merchantName.toLowerCase() &&
         inv.invoiceDate === receiptDate &&
@@ -464,6 +505,7 @@ export async function findDuplicateReceipt(
   const { data, error } = await db
     .from("invoices")
     .select(DUP_COLUMNS)
+    .eq("user_id", userId)
     .eq("document_type", "receipt")
     .ilike("supplier_name", merchantName)
     .eq("invoice_date", receiptDate)
@@ -484,12 +526,13 @@ export async function findDuplicateReceipt(
  * two stay in lockstep as the rules evolve.
  */
 export async function findDuplicateDocument(
+  userId: string,
   documentType: DocumentType,
   d: { supplierName: string; invoiceNumber: string; invoiceDate: string | null; total: number | null },
 ): Promise<StoredInvoiceSummary | null> {
   return documentType === "receipt"
-    ? findDuplicateReceipt(d.supplierName, d.invoiceDate, d.total)
-    : findDuplicateInvoice(d.supplierName, d.invoiceNumber);
+    ? findDuplicateReceipt(userId, d.supplierName, d.invoiceDate, d.total)
+    : findDuplicateInvoice(userId, d.supplierName, d.invoiceNumber);
 }
 
 // --- Pending queue ----------------------------------------------------------
@@ -512,13 +555,13 @@ function mapPendingRow(row: Record<string, unknown>): PendingDocument {
  * a document addressable: until now an extraction only existed in the browser, so
  * "approve these five" had nothing to name them by.
  */
-export async function savePendingDocument(p: {
-  extraction: InvoiceExtraction;
-  filename?: string | null;
-}): Promise<string> {
+export async function savePendingDocument(
+  userId: string,
+  p: { extraction: InvoiceExtraction; filename?: string | null },
+): Promise<string> {
   const db = getSupabase();
   if (!db) {
-    const entry: PendingDocument = {
+    const entry: PendingDocument & { userId: string } = {
       id: crypto.randomUUID(),
       createdAt: new Date().toISOString(),
       filename: p.filename ?? null,
@@ -527,6 +570,7 @@ export async function savePendingDocument(p: {
       lastOutcome: null,
       lastReason: null,
       invoiceId: null,
+      userId,
     };
     memPending.push(entry);
     return entry.id;
@@ -538,6 +582,7 @@ export async function savePendingDocument(p: {
       extraction: p.extraction,
       filename: p.filename ?? null,
       status: "pending",
+      user_id: userId,
     })
     .select("id")
     .single();
@@ -548,15 +593,19 @@ export async function savePendingDocument(p: {
 
 /**
  * The queue, oldest first — a work queue reads FIFO. Resolved documents drop out;
- * blocked and errored ones stay, because they still need a human.
+ * blocked and errored ones stay, because they still need a human. Scoped to
+ * `userId`: one bookkeeper's queue is never another's.
  */
-export async function listPendingDocuments(limit = 100): Promise<PendingDocument[]> {
+export async function listPendingDocuments(userId: string, limit = 100): Promise<PendingDocument[]> {
   const db = getSupabase();
-  if (!db) return memPending.filter((p) => p.status === "pending").slice(0, limit);
+  if (!db) {
+    return memPending.filter((p) => p.userId === userId && p.status === "pending").slice(0, limit);
+  }
 
   const { data, error } = await db
     .from("pending_documents")
     .select()
+    .eq("user_id", userId)
     .eq("status", "pending")
     .order("created_at", { ascending: true })
     .limit(limit);
@@ -565,15 +614,20 @@ export async function listPendingDocuments(limit = 100): Promise<PendingDocument
   return (data ?? []).map((r) => mapPendingRow(r as Record<string, unknown>));
 }
 
-/** One pending document by id, or null when the id is unknown. */
-export async function getPendingDocument(id: string): Promise<PendingDocument | null> {
+/**
+ * One pending document by id, or null when the id is unknown OR belongs to a
+ * different user — a foreign id looks exactly like an unknown one, rather than
+ * revealing that it exists.
+ */
+export async function getPendingDocument(userId: string, id: string): Promise<PendingDocument | null> {
   const db = getSupabase();
-  if (!db) return memPending.find((p) => p.id === id) ?? null;
+  if (!db) return memPending.find((p) => p.id === id && p.userId === userId) ?? null;
 
   const { data, error } = await db
     .from("pending_documents")
     .select()
     .eq("id", id)
+    .eq("user_id", userId)
     .maybeSingle();
 
   if (error) throw new Error(`Failed to load pending document: ${error.message}`);
@@ -594,25 +648,27 @@ export type DeletePendingResult = "deleted" | "not_found" | "already_resolved";
  * trail exists to prevent. The queue list only offers pending documents anyway,
  * so this guards the endpoint, not the button.
  */
-export async function deletePendingDocument(id: string): Promise<DeletePendingResult> {
-  const existing = await getPendingDocument(id);
+export async function deletePendingDocument(userId: string, id: string): Promise<DeletePendingResult> {
+  const existing = await getPendingDocument(userId, id);
   if (!existing) return "not_found";
   if (existing.status === "resolved") return "already_resolved";
 
   const db = getSupabase();
   if (!db) {
-    const i = memPending.findIndex((p) => p.id === id);
+    const i = memPending.findIndex((p) => p.id === id && p.userId === userId);
     if (i === -1) return "not_found";
     memPending.splice(i, 1);
     return "deleted";
   }
 
-  // Scoped to still-pending rows, so a document approved between the check above
-  // and this write is not deleted out from under the ledger.
+  // Scoped to still-pending rows owned by this user, so a document approved
+  // between the check above and this write is not deleted out from under the
+  // ledger, and one user can never delete another's queue entry.
   const { error } = await db
     .from("pending_documents")
     .delete()
     .eq("id", id)
+    .eq("user_id", userId)
     .eq("status", "pending");
 
   if (error) throw new Error(`Failed to delete pending document: ${error.message}`);
@@ -630,6 +686,7 @@ export async function deletePendingDocument(id: string): Promise<DeletePendingRe
  * they stay queued for the human to fix and re-submit.
  */
 export async function resolvePendingDocument(
+  userId: string,
   id: string,
   r: { outcome: PendingOutcome; reason?: string | null; invoiceId?: string | null },
 ): Promise<void> {
@@ -637,7 +694,7 @@ export async function resolvePendingDocument(
 
   const db = getSupabase();
   if (!db) {
-    const entry = memPending.find((p) => p.id === id);
+    const entry = memPending.find((p) => p.id === id && p.userId === userId);
     if (!entry) return;
     entry.status = status;
     entry.lastOutcome = r.outcome;
@@ -655,7 +712,8 @@ export async function resolvePendingDocument(
       invoice_id: r.invoiceId ?? null,
       resolved_at: status === "resolved" ? new Date().toISOString() : null,
     })
-    .eq("id", id);
+    .eq("id", id)
+    .eq("user_id", userId);
 
   if (error) throw new Error(`Failed to update pending document: ${error.message}`);
 }

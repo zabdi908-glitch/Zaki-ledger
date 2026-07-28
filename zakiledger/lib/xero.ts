@@ -127,29 +127,31 @@ export async function fetchXeroTenantId(accessToken: string): Promise<string | u
  * the token first if it's expired and persisting the rotated tokens. Returns
  * null when Xero isn't connected.
  */
-export async function getValidXeroAccess(): Promise<{ accessToken: string; tenantId: string } | null> {
-  let conn = await getConnection("xero");
+export async function getValidXeroAccess(
+  userId: string,
+): Promise<{ accessToken: string; tenantId: string } | null> {
+  let conn = await getConnection(userId, "xero");
   if (!conn) return null;
 
   if (isExpired(conn)) {
     const tokens = await refreshXeroToken(conn.refreshToken);
-    conn = await saveConnection("xero", tokens, conn.orgId);
+    conn = await saveConnection(userId, "xero", tokens, conn.orgId);
   }
 
   let tenantId = conn.orgId;
   if (!tenantId) {
     // Recover the tenantId if it was never captured (e.g. an older connection).
     tenantId = await fetchXeroTenantId(conn.accessToken);
-    if (tenantId) await setConnectionOrgId("xero", tenantId);
+    if (tenantId) await setConnectionOrgId(userId, "xero", tenantId);
   }
   if (!tenantId) throw new Error("Xero connection has no tenantId — reconnect required.");
 
   return { accessToken: conn.accessToken, tenantId };
 }
 
-/** True when there is a usable Xero connection stored. */
-export async function isXeroConnected(): Promise<boolean> {
-  return (await getConnection("xero")) !== null;
+/** True when this user has a usable Xero connection stored. */
+export async function isXeroConnected(userId: string): Promise<boolean> {
+  return (await getConnection(userId, "xero")) !== null;
 }
 
 /**
@@ -159,12 +161,12 @@ export async function isXeroConnected(): Promise<boolean> {
  * trusting the stored expiry. A revoked or otherwise broken token reports as
  * disconnected instead of throwing.
  */
-export async function xeroConnectionStatus(): Promise<{
+export async function xeroConnectionStatus(userId: string): Promise<{
   connected: boolean;
   accountName?: string;
 }> {
   try {
-    const access = await getValidXeroAccess();
+    const access = await getValidXeroAccess(userId);
     if (!access) return { connected: false };
 
     const res = await fetch(`${API_BASE}/Organisation`, {
@@ -188,8 +190,8 @@ export async function xeroConnectionStatus(): Promise<{
  * the created bill's InvoiceID. Draft status means Xero accepts an incomplete
  * bill (no account codes required) for a human to finalise inside Xero.
  */
-export async function createXeroDraftBill(bill: ApprovedBill): Promise<string> {
-  const access = await getValidXeroAccess();
+export async function createXeroDraftBill(userId: string, bill: ApprovedBill): Promise<string> {
+  const access = await getValidXeroAccess(userId);
   if (!access) throw new Error("Xero is not connected.");
 
   // Prefer the extracted line items; fall back to a single summary line so the

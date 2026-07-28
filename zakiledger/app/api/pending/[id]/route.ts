@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { deletePendingDocument, getPendingDocument } from "@/lib/store";
+import { requireUser } from "@/lib/auth";
 
 /**
  * GET /api/pending/[id] — one queued document in full, including every field's
@@ -11,9 +12,12 @@ import { deletePendingDocument, getPendingDocument } from "@/lib/store";
  * the human actually wants the breakdown, so that's when it's fetched.
  */
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
+  const user = await requireUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
   try {
     const { id } = await params;
-    const doc = await getPendingDocument(id);
+    const doc = await getPendingDocument(user.id, id);
 
     if (!doc) {
       return NextResponse.json({ error: "Document not found." }, { status: 404 });
@@ -44,9 +48,12 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
  * Refuses a document that already reached the ledger — see deletePendingDocument.
  */
 export async function DELETE(_req: Request, { params }: { params: Promise<{ id: string }> }) {
+  const user = await requireUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
   try {
     const { id } = await params;
-    const outcome = await deletePendingDocument(id);
+    const outcome = await deletePendingDocument(user.id, id);
 
     if (outcome === "not_found") {
       return NextResponse.json({ error: "Document not found." }, { status: 404 });

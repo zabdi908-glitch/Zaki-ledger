@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { sampleBulkBatch } from "@/lib/demo";
 import { savePendingDocument } from "@/lib/store";
+import { requireUser } from "@/lib/auth";
 
 /**
  * POST /api/pending/demo — seed the queue with the mixed demo batch (3 clean
@@ -12,6 +13,9 @@ import { savePendingDocument } from "@/lib/store";
  * connected Xero organisation is not something to leave one fetch away.
  */
 export async function POST() {
+  const user = await requireUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
   if (process.env.ANTHROPIC_API_KEY) {
     return NextResponse.json(
       { error: "The demo batch is only available in demo mode (no ANTHROPIC_API_KEY set)." },
@@ -22,7 +26,7 @@ export async function POST() {
   try {
     const ids: string[] = [];
     for (const { filename, extraction } of sampleBulkBatch()) {
-      ids.push(await savePendingDocument({ extraction, filename }));
+      ids.push(await savePendingDocument(user.id, { extraction, filename }));
     }
     return NextResponse.json({ seeded: ids.length, documentIds: ids });
   } catch (err) {

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { appBaseUrl, callbackUrl } from "@/lib/config";
 import { saveConnection } from "@/lib/oauth-store";
 import { exchangeQuickBooksCode, isQuickBooksConfigured } from "@/lib/quickbooks";
+import { requireUser } from "@/lib/auth";
 
 /**
  * GET /api/quickbooks/callback
@@ -10,6 +11,9 @@ import { exchangeQuickBooksCode, isQuickBooksConfigured } from "@/lib/quickbooks
  * tokens together with the realmId — which every subsequent API call needs.
  */
 export async function GET(req: NextRequest) {
+  const user = await requireUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
   if (!isQuickBooksConfigured()) {
     return NextResponse.json({ error: "QuickBooks is not configured." }, { status: 400 });
   }
@@ -41,7 +45,7 @@ export async function GET(req: NextRequest) {
   try {
     const redirectUri = callbackUrl("/api/quickbooks/callback");
     const tokens = await exchangeQuickBooksCode(code, redirectUri);
-    await saveConnection("quickbooks", tokens, realmId);
+    await saveConnection(user.id, "quickbooks", tokens, realmId);
 
     const res = NextResponse.redirect(`${appBaseUrl()}/?connected=quickbooks`);
     res.cookies.delete("quickbooks_oauth_state");

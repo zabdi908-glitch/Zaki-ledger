@@ -44,13 +44,14 @@ export interface ExtractedDocument {
  * or has no history, and never invents confidence for a field we didn't read.
  */
 async function calibrateExtractionConfidence(
+  userId: string,
   extraction: InvoiceExtraction,
 ): Promise<{ calibrated: string[]; memory: SupplierMemory }> {
   const supplier = extraction.supplierName.value.trim();
   const memory: SupplierMemory = {};
   if (!supplier) return { calibrated: [], memory };
 
-  const stats = await confirmationStatsForSupplier(supplier);
+  const stats = await confirmationStatsForSupplier(userId, supplier);
   const calibrated: string[] = [];
 
   for (const field of REVIEWABLE_FIELDS) {
@@ -91,7 +92,7 @@ async function calibrateExtractionConfidence(
  * write that fails is returned as `queueError`, not thrown, because the read
  * still succeeded and the human can still approve it on screen.
  */
-export async function extractOneDocument(file: File): Promise<ExtractedDocument> {
+export async function extractOneDocument(userId: string, file: File): Promise<ExtractedDocument> {
   // Demo mode: with no Anthropic key, return a realistic sample so the full
   // review → approve → learn flow works with zero setup. Real key = real Claude.
   const demo = !process.env.ANTHROPIC_API_KEY;
@@ -117,7 +118,7 @@ export async function extractOneDocument(file: File): Promise<ExtractedDocument>
     // target a supplier's hints yet because we don't know the supplier until
     // the model reads the document. This same pass also classifies the document
     // as an invoice or a receipt — detection is not a separate call.
-    const generalHints = await buildHints();
+    const generalHints = await buildHints(userId);
     extraction = await extractDocument(base64, mediaType, generalHints);
 
     // Pass 2 — per-supplier learning. Now that we know the supplier, if we hold
@@ -129,7 +130,7 @@ export async function extractOneDocument(file: File): Promise<ExtractedDocument>
     // skip the re-run. No history for a supplier → no extra call, no extra cost.
     const supplier = extraction.supplierName.value.trim();
     if (supplier) {
-      const supplierHints = await buildHints(supplier);
+      const supplierHints = await buildHints(userId, supplier);
       if (supplierHints) {
         extraction = await extractDocument(base64, mediaType, supplierHints);
         refinedForSupplier = supplier;
@@ -143,7 +144,7 @@ export async function extractOneDocument(file: File): Promise<ExtractedDocument>
   // field (e.g. an O/0 invoice number) trends up instead of being re-guessed.
   // Only raises confidence, and only for fields we actually read a value for.
   const { calibrated: calibratedFields, memory: supplierMemory } =
-    await calibrateExtractionConfidence(extraction);
+    await calibrateExtractionConfidence(userId, extraction);
 
   // Consistency check — flag internally-inconsistent extractions for a human,
   // regardless of the model's stated confidence.
@@ -163,7 +164,7 @@ export async function extractOneDocument(file: File): Promise<ExtractedDocument>
   const dupInvoiceNumber = extraction.invoiceNumber.value.trim();
   const dupDate = extraction.invoiceDate.value.trim() || null;
   const dupTotal = extraction.total.value;
-  const existing = await findDuplicateDocument(documentType, {
+  const existing = await findDuplicateDocument(userId, documentType, {
     supplierName: dupSupplier,
     invoiceNumber: dupInvoiceNumber,
     invoiceDate: dupDate,
@@ -202,7 +203,7 @@ export async function extractOneDocument(file: File): Promise<ExtractedDocument>
   let documentId: string | null = null;
   let queueError: string | null = null;
   try {
-    documentId = await savePendingDocument({ extraction, filename: file.name ?? null });
+    documentId = await savePendingDocument(userId, { extraction, filename: file.name ?? null });
   } catch (err) {
     queueError = err instanceof Error ? err.message : String(err);
     console.error(

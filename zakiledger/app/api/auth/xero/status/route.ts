@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { xeroConnectionStatus } from "@/lib/xero";
+import { requireUser } from "@/lib/auth";
 
 /**
  * GET /api/auth/xero/status
@@ -8,6 +9,9 @@ import { xeroConnectionStatus } from "@/lib/xero";
  * itself, only whether it's usable and the organisation it's connected to.
  */
 export async function GET() {
-  const status = await xeroConnectionStatus();
+  const user = await requireUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const status = await xeroConnectionStatus(user.id);
   return NextResponse.json(status);
 }

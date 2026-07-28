@@ -117,34 +117,53 @@ One table, two payoffs. It is populated from invoice #1 — never bolt it on lat
 
 ## Running it — three tiers of testing
 
-You can test at three levels, from zero-setup to fully wired. All of them are the
-same app; each tier just adds a capability.
+Zaki Ledger has Supabase Auth in front of it, and that part has no offline mode:
+every page requires `SUPABASE_URL` + `SUPABASE_ANON_KEY` even before you touch any
+of the tiers below, and the first account you create adopts any pre-existing data
+in the project (see "Auth setup" below). Once you're logged in, you can still test
+at three levels from there, from zero-setup extraction to fully wired persistence
+— each tier just adds a capability.
 
 ```
 cd zakiledger
 npm install
-npm run dev          # → http://localhost:3000
+npm run dev          # → http://localhost:3000, redirects to /login
 ```
 
-**Tier 1 — Demo mode (no keys, no database).** Just run it. With no
-`ANTHROPIC_API_KEY` set, uploading *any* file returns a realistic sample invoice
-so you can click the whole flow: review → edit a flagged field → approve → see
-"correction recorded." Corrections live in memory (reset on restart). Perfect for
-showing an accountant the UX in 30 seconds.
+**Tier 1 — Demo extraction (no Anthropic key, no persistence).** Sign up, then
+upload anything. With no `ANTHROPIC_API_KEY` set, uploading *any* file returns a
+realistic sample invoice so you can click the whole flow: review → edit a flagged
+field → approve → see "correction recorded." Corrections live in memory (reset on
+restart, and — without `SUPABASE_SERVICE_ROLE_KEY`, see tier 3 — shared by whoever
+is logged in, since there's no database backing per-user isolation yet). Perfect
+for showing an accountant the UX in 30 seconds.
 
 **Tier 2 — Real extraction.** Copy `.env.example` to `.env.local` and set
 `ANTHROPIC_API_KEY`. Now uploads are read by Claude vision — real invoices, real
 confidence scores. Corrections still in memory unless you add tier 3.
 
-**Tier 3 — Real persistence.** Also set `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY`,
-and run `db/schema.sql` in your Supabase project's SQL editor. Now approved
-invoices and the correction ledger persist across restarts — the moat is live.
-(`db/schema.sql` is idempotent — re-run it after pulling to pick up the
-`pending_documents` table that bulk approve reads from.)
+**Tier 3 — Real persistence.** Also set `SUPABASE_SERVICE_ROLE_KEY`, and run
+`db/schema.sql` in your Supabase project's SQL editor. Now approved invoices and
+the correction ledger persist across restarts, scoped per user — the moat is live.
+(`db/schema.sql` is idempotent — re-run it after pulling to pick up new columns,
+including the `pending_documents` table bulk approve reads from and the per-user
+`user_id` columns auth added.)
 
 In demo mode the queue starts empty; **Load a demo batch** seeds five documents —
 three clean receipts, one smudged merchant name, one unpostable currency — so
-bulk approve can be exercised end to end with no key and no database.
+bulk approve can be exercised end to end with no Anthropic key.
+
+### Auth setup
+
+1. In the Supabase dashboard: **Authentication → Settings** — enable the
+   Email/Password provider, and turn OFF "Confirm email" so signup logs a user in
+   immediately (this app doesn't build a check-your-email screen).
+2. Set `SUPABASE_URL` and `SUPABASE_ANON_KEY` (Project Settings → API).
+3. Sign up. **The first account ever created in the project adopts every row that
+   predates auth** (any pending documents, invoices, and corrections written
+   before this feature existed, plus an existing Xero/QuickBooks connection) —
+   see `lib/auth.ts`. If you're deploying somewhere public, sign up immediately
+   after your first deploy, before anyone else finds the URL.
 
 #### Uploads succeed but `/pending` stays empty
 

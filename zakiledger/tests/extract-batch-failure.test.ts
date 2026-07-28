@@ -20,14 +20,19 @@ vi.mock("@/lib/extract-pipeline", async () => {
   );
   return {
     ...actual,
-    extractOneDocument: async (file: File) => {
+    extractOneDocument: async (userId: string, file: File) => {
       if (pipeline.failFor.has(file.name)) {
         throw new Error("Could not extract text from image");
       }
-      return actual.extractOneDocument(file);
+      return actual.extractOneDocument(userId, file);
     },
   };
 });
+
+// No real Supabase session exists in a unit test — stand in for one.
+vi.mock("@/lib/auth", () => ({
+  requireUser: async () => ({ id: "test-user" }),
+}));
 
 const { POST: batchRoute } = await import("@/app/api/extract-batch/route");
 const { GET: listRoute } = await import("@/app/api/pending/route");

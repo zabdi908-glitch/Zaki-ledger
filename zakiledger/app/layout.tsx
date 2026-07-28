@@ -1,12 +1,24 @@
+import AccountBar from "@/components/AccountBar";
+import { getSessionUser } from "@/lib/auth";
+
 export const metadata = {
   title: "Zaki Ledger",
   description: "AI copilot that kills manual accounting data entry — and learns from every correction.",
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+/**
+ * Async so it can read the session server-side and show who's logged in.
+ * Only renders the account bar when there IS a session — /login and /signup
+ * are reached exactly because there isn't one, and showing a logout button
+ * there would be nonsensical.
+ */
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  const user = await getSessionUser();
+
   return (
     <html lang="en">
       <body style={{ fontFamily: "system-ui, sans-serif", margin: 0, background: "#f6f7f9" }}>
+        {user && <AccountBar email={user.email ?? ""} />}
         {children}
       </body>
     </html>

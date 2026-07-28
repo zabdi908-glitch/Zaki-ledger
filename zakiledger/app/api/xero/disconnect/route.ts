@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { deleteConnection } from "@/lib/oauth-store";
+import { requireUser } from "@/lib/auth";
 
 /**
  * POST /api/xero/disconnect
@@ -8,6 +9,9 @@ import { deleteConnection } from "@/lib/oauth-store";
  * until a platform is reconnected — nothing else in the app depends on this.
  */
 export async function POST() {
-  await deleteConnection("xero");
+  const user = await requireUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  await deleteConnection(user.id, "xero");
   return NextResponse.json({ disconnected: true });
 }

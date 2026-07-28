@@ -17,6 +17,7 @@ create table if not exists invoices (
   id                 uuid primary key default gen_random_uuid(),
   document_id        uuid references documents(id),
   document_type      text not null default 'invoice',  -- invoice | receipt
+  user_id            uuid references auth.users(id),  -- who approved it; null = pre-auth data
   supplier_name      text,               -- supplier (invoice) / merchant (receipt)
   invoice_number     text,               -- optional on a receipt
   invoice_date       date,
@@ -33,6 +34,11 @@ create table if not exists invoices (
 -- Existing deployments: add the column without touching stored rows. Anything
 -- already in the table predates receipts, so the 'invoice' default is correct.
 alter table invoices add column if not exists document_type text not null default 'invoice';
+
+-- Existing deployments: add the owner column. Nullable — rows written before
+-- auth existed have no owner until the first-signup backfill (see
+-- app/api/auth/signup/route.ts) assigns them one.
+alter table invoices add column if not exists user_id uuid references auth.users(id);
 
 -- Receipt duplicate detection matches on merchant + date + total (a receipt
 -- usually has no number), so index that path.
@@ -58,6 +64,7 @@ create table if not exists pending_documents (
   last_outcome  text,                    -- approved | blocked | error
   last_reason   text,                    -- why it was blocked/errored
   invoice_id    uuid references invoices(id),
+  user_id       uuid references auth.users(id),  -- who queued it; null = pre-auth data
   created_at    timestamptz not null default now(),
   resolved_at   timestamptz
 );
@@ -82,19 +89,20 @@ alter table pending_documents add column if not exists status        text not nu
 alter table pending_documents add column if not exists last_outcome  text;
 alter table pending_documents add column if not exists last_reason   text;
 alter table pending_documents add column if not exists invoice_id    uuid references invoices(id);
+alter table pending_documents add column if not exists user_id       uuid references auth.users(id);
 alter table pending_documents add column if not exists created_at    timestamptz not null default now();
 alter table pending_documents add column if not exists resolved_at   timestamptz;
 
--- Same divergence, second symptom: a pending_documents table from a multi-tenant
--- definition carries a NOT NULL `user_id`, which no insert here can ever satisfy.
+-- Same divergence, second symptom: a pending_documents table from an earlier
+-- multi-tenant definition could carry a NOT NULL `user_id`, which nothing
+-- written before the first signup could ever satisfy.
 --
--- Zaki Ledger is single-tenant and has NO authentication — no login, no Supabase
--- session, no users table. The API routes reach Postgres with the service-role
--- key, so there is no "current user" to attribute a document to, and inventing
--- one to satisfy a constraint would put fabricated data in the audit trail of a
--- bookkeeping system. Relaxing the constraint is the honest fix while the app has
--- no users; if it ever grows real accounts, a genuine user_id gets plumbed
--- through savePendingDocument and this becomes NOT NULL again on purpose.
+-- Zaki Ledger now has Supabase Auth (see lib/auth.ts, app/api/auth/signup), but
+-- `user_id` stays nullable here regardless: rows written before auth existed
+-- have no real owner, and the first-signup backfill (app/api/auth/signup/route.ts)
+-- is what assigns them one, not a schema constraint. Once that backfill has run,
+-- every row genuinely has an owner in practice, but the column keeps its
+-- nullability rather than a NOT NULL nobody enforces going forward.
 --
 -- Guarded and non-destructive: it touches nothing on a clean install, drops no
 -- data, and is safe to re-run.
@@ -108,7 +116,7 @@ begin
       and is_nullable  = 'NO'
   ) then
     alter table pending_documents alter column user_id drop not null;
-    raise notice 'pending_documents.user_id: dropped NOT NULL (this app has no auth)';
+    raise notice 'pending_documents.user_id: dropped NOT NULL (backfilled on first signup, not enforced by schema)';
   end if;
 end $$;
 
@@ -132,6 +140,7 @@ notify pgrst, 'reload schema';
 create table if not exists corrections (
   id             uuid primary key default gen_random_uuid(),
   invoice_id     uuid references invoices(id),
+  user_id        uuid references auth.users(id),  -- who made the correction; null = pre-auth data
   supplier_name  text not null,         -- key for per-vendor learning
   field          text not null,         -- which field the human changed
   ai_value       text,                  -- what the AI predicted
@@ -139,6 +148,9 @@ create table if not exists corrections (
   ai_confidence  numeric(4,3),          -- the AI's confidence when it was corrected
   created_at     timestamptz not null default now()
 );
+
+-- Existing deployments: add the owner column without touching stored rows.
+alter table corrections add column if not exists user_id uuid references auth.users(id);
 
 -- Fast lookups when building few-shot hints for the next extraction.
 create index if not exists corrections_supplier_idx
@@ -155,6 +167,7 @@ create index if not exists corrections_supplier_idx
 create table if not exists confirmations (
   id             uuid primary key default gen_random_uuid(),
   invoice_id     uuid references invoices(id),
+  user_id        uuid references auth.users(id),  -- who confirmed it; null = pre-auth data
   supplier_name  text not null,         -- key for per-vendor calibration
   field          text not null,         -- which field was confirmed correct
   value          text,                  -- the confirmed value (audit/explainability)
@@ -162,22 +175,65 @@ create table if not exists confirmations (
   created_at     timestamptz not null default now()
 );
 
+-- Existing deployments: add the owner column without touching stored rows.
+alter table confirmations add column if not exists user_id uuid references auth.users(id);
+
 -- Fast per-supplier, per-field confirmation counts for confidence calibration.
 create index if not exists confirmations_supplier_field_idx
   on confirmations (lower(supplier_name), field, created_at desc);
 
 -- =========================================================================
 -- Accounting-platform OAuth connections (Xero, QuickBooks).
--- One row per provider (single-tenant MVP). Access tokens are short-lived and
--- get overwritten on every refresh; the refresh token keeps the link alive.
--- Falls back to an in-memory store when Supabase isn't configured — see
--- lib/oauth-store.ts.
+-- One row per (user, provider) — each bookkeeper connects their own Xero or
+-- QuickBooks; Francisco's tokens never answer for anyone else's approval.
+-- Access tokens are short-lived and get overwritten on every refresh; the
+-- refresh token keeps the link alive. Falls back to an in-memory store when
+-- Supabase isn't configured — see lib/oauth-store.ts.
 -- =========================================================================
 create table if not exists oauth_connections (
-  provider      text primary key,        -- 'xero' | 'quickbooks'
+  id            uuid primary key default gen_random_uuid(),
+  user_id       uuid references auth.users(id),  -- owner; null = pre-auth data
+  provider      text not null,           -- 'xero' | 'quickbooks'
   access_token  text not null,
   refresh_token text not null,
   expires_at    timestamptz not null,    -- when the access token expires
   org_id        text,                    -- Xero tenantId / QuickBooks realmId
   updated_at    timestamptz not null default now()
 );
+
+-- Converge an EXISTING table from the old single-tenant shape (`provider` was
+-- the primary key — exactly one row per provider, globally) onto the per-user
+-- shape above. Same reasoning as the pending_documents convergence block:
+-- `create table if not exists` is a no-op against a table that already exists
+-- with the old columns, so a real deployment needs this repair path.
+alter table oauth_connections add column if not exists id uuid default gen_random_uuid();
+alter table oauth_connections add column if not exists user_id uuid references auth.users(id);
+update oauth_connections set id = gen_random_uuid() where id is null;
+alter table oauth_connections alter column id set not null;
+
+-- Swap the primary key from (provider) to (id), only if it hasn't been swapped
+-- already — safe to re-run, no-op on a fresh install or an already-migrated one.
+do $$
+begin
+  if exists (
+    select 1 from information_schema.table_constraints
+    where table_schema = 'public' and table_name = 'oauth_connections'
+      and constraint_name = 'oauth_connections_pkey'
+  ) and not exists (
+    select 1 from information_schema.key_column_usage
+    where table_schema = 'public' and table_name = 'oauth_connections'
+      and constraint_name = 'oauth_connections_pkey' and column_name = 'id'
+  ) then
+    alter table oauth_connections drop constraint oauth_connections_pkey;
+    alter table oauth_connections add constraint oauth_connections_pkey primary key (id);
+  end if;
+end $$;
+
+-- One connection per user per provider — replaces the old global "one row per
+-- provider" uniqueness now that `provider` alone is no longer the key.
+create unique index if not exists oauth_connections_user_provider_idx
+  on oauth_connections (user_id, provider);
+
+-- Second reload: covers the user_id/oauth_connections changes made after the
+-- first notify above, same reasoning.
+notify pgrst, 'reload schema';

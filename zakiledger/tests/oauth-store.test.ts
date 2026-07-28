@@ -9,6 +9,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
  * visitor after an idle spin-down or a deploy got a 500 from /api/connections.
  */
 
+const TEST_USER_ID = "test-user";
+
 const ROW = {
   provider: "xero",
   access_token: "at-123",
@@ -52,7 +54,7 @@ describe("getConnection cold-start retry", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     const { getConnection } = await loadStore(client);
-    const conn = await getConnection("xero");
+    const conn = await getConnection(TEST_USER_ID, "xero");
 
     expect(maybeSingle).toHaveBeenCalledTimes(2);
     expect(conn?.accessToken).toBe("at-123");
@@ -69,7 +71,7 @@ describe("getConnection cold-start retry", () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
 
     const { getConnection } = await loadStore(client);
-    expect((await getConnection("xero"))?.orgId).toBe("tenant-1");
+    expect((await getConnection(TEST_USER_ID, "xero"))?.orgId).toBe("tenant-1");
     expect(maybeSingle).toHaveBeenCalledTimes(2);
   });
 
@@ -81,7 +83,7 @@ describe("getConnection cold-start retry", () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
 
     const { getConnection } = await loadStore(client);
-    await expect(getConnection("xero")).rejects.toThrow(
+    await expect(getConnection(TEST_USER_ID, "xero")).rejects.toThrow(
       "Failed to load xero connection: JWT issued at future",
     );
     expect(maybeSingle).toHaveBeenCalledTimes(2);
@@ -91,7 +93,7 @@ describe("getConnection cold-start retry", () => {
     const { client, maybeSingle } = stubSupabase([{ data: ROW, error: null }]);
 
     const { getConnection } = await loadStore(client);
-    expect(await getConnection("xero")).not.toBeNull();
+    expect(await getConnection(TEST_USER_ID, "xero")).not.toBeNull();
     expect(maybeSingle).toHaveBeenCalledTimes(1);
   });
 
@@ -99,7 +101,7 @@ describe("getConnection cold-start retry", () => {
     const { client, maybeSingle } = stubSupabase([{ data: null, error: null }]);
 
     const { getConnection } = await loadStore(client);
-    expect(await getConnection("quickbooks")).toBeNull();
+    expect(await getConnection(TEST_USER_ID, "quickbooks")).toBeNull();
     expect(maybeSingle).toHaveBeenCalledTimes(1);
   });
 });

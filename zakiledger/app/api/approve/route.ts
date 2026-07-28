@@ -8,6 +8,7 @@ import {
 } from "@/lib/store";
 import { REVIEWABLE_FIELDS, type DocumentType, type InvoiceExtraction } from "@/lib/schema";
 import { postApprovedBill, type PostedBill } from "@/lib/accounting";
+import { requireUser } from "@/lib/auth";
 
 /** Parse a human-facing string into a number, or null when it isn't one. */
 function toNumber(s: string): number | null {
@@ -25,6 +26,9 @@ function toNumber(s: string): number | null {
  * training data for the next extraction.
  */
 export async function POST(req: NextRequest) {
+  const user = await requireUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
   try {
     const { extraction, edited, proceedDuplicate, documentType: overriddenType, documentId } =
       (await req.json()) as {
@@ -62,7 +66,7 @@ export async function POST(req: NextRequest) {
     // values now match an existing document.
     // Warn, don't save: return so the UI can prompt proceed/discard.
     if (!proceedDuplicate) {
-      const dup = await findDuplicateDocument(documentType, {
+      const dup = await findDuplicateDocument(user.id, documentType, {
         supplierName,
         invoiceNumber,
         invoiceDate,
@@ -88,7 +92,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Persist the human-approved document first, so corrections can link to it.
-    const invoiceId = await saveApprovedInvoice({
+    const invoiceId = await saveApprovedInvoice(user.id, {
       documentType,
       supplierName,
       invoiceNumber,
@@ -113,7 +117,7 @@ export async function POST(req: NextRequest) {
 
       if (changed) {
         corrections.push(
-          await recordCorrection({
+          await recordCorrection(user.id, {
             invoiceId: invoiceId ?? undefined,
             supplierName,
             field,
@@ -135,7 +139,7 @@ export async function POST(req: NextRequest) {
         //     confirmed-correct read. That would build a per-merchant track record
         //     out of absences, and calibration would later inflate a genuinely
         //     uncertain tax read on the strength of it.
-        await recordConfirmation({
+        await recordConfirmation(user.id, {
           invoiceId: invoiceId ?? undefined,
           supplierName,
           field,
@@ -156,7 +160,7 @@ export async function POST(req: NextRequest) {
     let posted: PostedBill | null = null;
     let billError: string | undefined;
     try {
-      posted = await postApprovedBill({
+      posted = await postApprovedBill(user.id, {
         documentType,
         supplierName,
         // A receipt often has no number; the providers already omit the field
@@ -183,7 +187,7 @@ export async function POST(req: NextRequest) {
     // lingers in the queue, where bulk approve's already-approved check catches it.
     if (documentId) {
       try {
-        await resolvePendingDocument(documentId, { outcome: "approved", invoiceId });
+        await resolvePendingDocument(user.id, documentId, { outcome: "approved", invoiceId });
       } catch (err) {
         console.error(
           `[pending-queue] approved ${invoiceId} but could not clear queue entry ` +

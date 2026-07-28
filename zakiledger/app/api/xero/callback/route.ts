@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { appBaseUrl, callbackUrl } from "@/lib/config";
 import { saveConnection } from "@/lib/oauth-store";
 import { exchangeXeroCode, fetchXeroTenantId, isXeroConfigured } from "@/lib/xero";
+import { requireUser } from "@/lib/auth";
 
 /**
  * GET /api/xero/callback
@@ -10,6 +11,9 @@ import { exchangeXeroCode, fetchXeroTenantId, isXeroConfigured } from "@/lib/xer
  * call /connections to capture the tenantId and store everything.
  */
 export async function GET(req: NextRequest) {
+  const user = await requireUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
   if (!isXeroConfigured()) {
     return NextResponse.json({ error: "Xero is not configured." }, { status: 400 });
   }
@@ -35,7 +39,7 @@ export async function GET(req: NextRequest) {
     const redirectUri = callbackUrl("/api/xero/callback");
     const tokens = await exchangeXeroCode(code, redirectUri);
     const tenantId = await fetchXeroTenantId(tokens.accessToken);
-    await saveConnection("xero", tokens, tenantId);
+    await saveConnection(user.id, "xero", tokens, tenantId);
 
     // Land the user back on the app with a success flag; clear the state cookie.
     const res = NextResponse.redirect(`${appBaseUrl()}/?connected=xero`);

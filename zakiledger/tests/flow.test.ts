@@ -1,8 +1,14 @@
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { NextRequest } from "next/server";
-import { POST as extractRoute } from "@/app/api/extract/route";
-import { POST as approveRoute } from "@/app/api/approve/route";
 import { REVIEWABLE_FIELDS, type DocumentType, type InvoiceExtraction } from "@/lib/schema";
+
+// No real Supabase session exists in a unit test — stand in for one.
+vi.mock("@/lib/auth", () => ({
+  requireUser: async () => ({ id: "test-user" }),
+}));
+
+const { POST: extractRoute } = await import("@/app/api/extract/route");
+const { POST: approveRoute } = await import("@/app/api/approve/route");
 
 /**
  * End-to-end route tests: upload → extract → approve → duplicate detection,

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { callbackUrl } from "@/lib/config";
 import { isQuickBooksConfigured, quickbooksAuthorizeUrl } from "@/lib/quickbooks";
+import { requireUser } from "@/lib/auth";
 
 /**
  * GET /api/quickbooks/connect
@@ -11,6 +12,9 @@ import { isQuickBooksConfigured, quickbooksAuthorizeUrl } from "@/lib/quickbooks
  * return a friendly 200 rather than erroring.
  */
 export async function GET() {
+  const user = await requireUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
   if (!isQuickBooksConfigured()) {
     return NextResponse.json({
       connected: false,

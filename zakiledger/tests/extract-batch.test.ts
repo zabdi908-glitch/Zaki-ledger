@@ -1,8 +1,14 @@
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { NextRequest } from "next/server";
-import { POST as batchRoute } from "@/app/api/extract-batch/route";
-import { GET as listRoute } from "@/app/api/pending/route";
-import { EXTRACT_CONCURRENCY, mapWithConcurrency } from "@/lib/extract-pipeline";
+
+// No real Supabase session exists in a unit test — stand in for one.
+vi.mock("@/lib/auth", () => ({
+  requireUser: async () => ({ id: "test-user" }),
+}));
+
+const { POST: batchRoute } = await import("@/app/api/extract-batch/route");
+const { GET: listRoute } = await import("@/app/api/pending/route");
+const { EXTRACT_CONCURRENCY, mapWithConcurrency } = await import("@/lib/extract-pipeline");
 
 /**
  * Batch upload: many files, read in parallel, one result each.

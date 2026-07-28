@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { listPendingDocuments } from "@/lib/store";
+import { requireUser } from "@/lib/auth";
 
 /**
  * GET /api/pending — the approval queue: documents read but not yet in the ledger.
@@ -10,8 +11,11 @@ import { listPendingDocuments } from "@/lib/store";
  * the browser just to render a checkbox row.
  */
 export async function GET() {
+  const user = await requireUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
   try {
-    const pending = await listPendingDocuments();
+    const pending = await listPendingDocuments(user.id);
 
     return NextResponse.json({
       documents: pending.map((p) => ({

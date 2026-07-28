@@ -106,7 +106,7 @@ function identityOf(doc: PendingDocument) {
  * throwing is reserved for genuinely unexpected failures, which `bulkApprove`
  * catches and turns into an error result.
  */
-async function approveOne(doc: PendingDocument): Promise<BulkItemResult> {
+async function approveOne(userId: string, doc: PendingDocument): Promise<BulkItemResult> {
   const id = identityOf(doc);
   const x = doc.extraction;
   const documentType = id.documentType;
@@ -123,7 +123,7 @@ async function approveOne(doc: PendingDocument): Promise<BulkItemResult> {
   // and only then discovering the document was never postable.
   if (!isSupportedCurrency(id.currency)) {
     const reason = unsupportedCurrencyReason(x.currency.value);
-    await resolvePendingDocument(doc.id, { outcome: "error", reason });
+    await resolvePendingDocument(userId, doc.id, { outcome: "error", reason });
     return { ...id, status: "error", reason };
   }
 
@@ -136,7 +136,7 @@ async function approveOne(doc: PendingDocument): Promise<BulkItemResult> {
   });
   if (gate.status !== "ready") {
     const reason = `Needs review: ${gateReasonSummary(gate, documentType)}`;
-    await resolvePendingDocument(doc.id, { outcome: "blocked", reason });
+    await resolvePendingDocument(userId, doc.id, { outcome: "blocked", reason });
     return { ...id, status: "blocked", reason };
   }
 
@@ -147,7 +147,7 @@ async function approveOne(doc: PendingDocument): Promise<BulkItemResult> {
     const reason =
       `Totals don't add up — subtotal + tax = ${expected.toFixed(2)}, ` +
       `but the total reads ${x.total.value.toFixed(2)}.`;
-    await resolvePendingDocument(doc.id, { outcome: "blocked", reason });
+    await resolvePendingDocument(userId, doc.id, { outcome: "blocked", reason });
     return { ...id, status: "blocked", reason };
   }
 
@@ -155,7 +155,7 @@ async function approveOne(doc: PendingDocument): Promise<BulkItemResult> {
   // human here to decide, so in bulk they block — the safe half of that choice.
   const invoiceNumber = x.invoiceNumber.value.trim();
   const invoiceDate = x.invoiceDate.value.trim() || null;
-  const dup = await findDuplicateDocument(documentType, {
+  const dup = await findDuplicateDocument(userId, documentType, {
     supplierName: id.merchantName,
     invoiceNumber,
     invoiceDate,
@@ -165,12 +165,12 @@ async function approveOne(doc: PendingDocument): Promise<BulkItemResult> {
     const reason =
       `Possible duplicate of a ${documentType} already processed on ` +
       `${new Date(dup.createdAt).toLocaleDateString("en-GB")} — approve it individually to confirm.`;
-    await resolvePendingDocument(doc.id, { outcome: "blocked", reason });
+    await resolvePendingDocument(userId, doc.id, { outcome: "blocked", reason });
     return { ...id, status: "blocked", reason };
   }
 
   // --- Committed from here: it clears the gate, so it enters the ledger. ---
-  const invoiceId = await saveApprovedInvoice({
+  const invoiceId = await saveApprovedInvoice(userId, {
     documentType,
     supplierName: id.merchantName,
     invoiceNumber,
@@ -190,7 +190,7 @@ async function approveOne(doc: PendingDocument): Promise<BulkItemResult> {
     const node = (x as any)[field] as { value: unknown; confidence: number };
     const value = String(node.value);
     if (value.trim() === "" || node.confidence <= 0) continue;
-    await recordConfirmation({
+    await recordConfirmation(userId, {
       invoiceId: invoiceId ?? undefined,
       supplierName: id.merchantName,
       field,
@@ -204,7 +204,7 @@ async function approveOne(doc: PendingDocument): Promise<BulkItemResult> {
   // approve route) — but bulk reports it as an error rather than burying it,
   // because nobody is reading a success message per document.
   try {
-    const posted = await postApprovedBill({
+    const posted = await postApprovedBill(userId, {
       documentType,
       supplierName: id.merchantName,
       invoiceNumber: invoiceNumber || null,
@@ -215,7 +215,7 @@ async function approveOne(doc: PendingDocument): Promise<BulkItemResult> {
       total: id.total,
       lineItems: x.lineItems,
     });
-    await resolvePendingDocument(doc.id, { outcome: "approved", invoiceId });
+    await resolvePendingDocument(userId, doc.id, { outcome: "approved", invoiceId });
     return {
       ...id,
       status: "approved",
@@ -229,7 +229,7 @@ async function approveOne(doc: PendingDocument): Promise<BulkItemResult> {
       `${err instanceof Error ? err.message : "unknown error"}`;
     // Resolved despite the error: it IS in the ledger, and re-running it would
     // double-post. The reason tells the human to finish it in the platform.
-    await resolvePendingDocument(doc.id, { outcome: "error", reason, invoiceId });
+    await resolvePendingDocument(userId, doc.id, { outcome: "error", reason, invoiceId });
     return { ...id, status: "error", reason, invoiceId: invoiceId ?? undefined };
   }
 }
@@ -244,7 +244,7 @@ function formatPostedTotals(totals: Record<string, number>): string {
  * Approve a batch of queued documents. Never throws for a per-document problem —
  * every id in, exactly one result out, in the order given.
  */
-export async function bulkApprove(documentIds: string[]): Promise<BulkApproveResult> {
+export async function bulkApprove(userId: string, documentIds: string[]): Promise<BulkApproveResult> {
   // A repeated id in one batch would otherwise be approved, then flagged as its
   // own duplicate on the second pass. It's one document; approve it once.
   const ids = [...new Set(documentIds)];
@@ -252,7 +252,7 @@ export async function bulkApprove(documentIds: string[]): Promise<BulkApproveRes
 
   for (const documentId of ids) {
     try {
-      const doc = await getPendingDocument(documentId);
+      const doc = await getPendingDocument(userId, documentId);
       if (!doc) {
         results.push({
           documentId,
@@ -265,7 +265,7 @@ export async function bulkApprove(documentIds: string[]): Promise<BulkApproveRes
         });
         continue;
       }
-      results.push(await approveOne(doc));
+      results.push(await approveOne(userId, doc));
     } catch (err) {
       // The isolation guarantee: whatever went wrong with this one document, the
       // rest of the batch still gets processed.

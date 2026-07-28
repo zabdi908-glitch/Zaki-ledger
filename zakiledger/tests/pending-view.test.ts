@@ -1,6 +1,4 @@
-import { beforeAll, describe, expect, it } from "vitest";
-import { GET as listRoute } from "@/app/api/pending/route";
-import { DELETE as deleteRoute, GET as detailRoute } from "@/app/api/pending/[id]/route";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { resolvePendingDocument, savePendingDocument } from "@/lib/store";
 import { sampleMessyReceiptExtraction, sampleReceiptExtraction } from "@/lib/demo";
 
@@ -13,6 +11,18 @@ import { sampleMessyReceiptExtraction, sampleReceiptExtraction } from "@/lib/dem
  * a list that quietly starts shipping full extractions would pass any test that
  * only checked the fields it renders.
  */
+
+const TEST_USER_ID = "test-user";
+
+// No real Supabase session exists in a unit test — stand in for one, the same
+// user for every request in this file, so route handlers see the documents
+// the test queued directly via lib/store.
+vi.mock("@/lib/auth", () => ({
+  requireUser: async () => ({ id: TEST_USER_ID }),
+}));
+
+const { GET: listRoute } = await import("@/app/api/pending/route");
+const { DELETE: deleteRoute, GET: detailRoute } = await import("@/app/api/pending/[id]/route");
 
 beforeAll(() => {
   delete process.env.ANTHROPIC_API_KEY;
@@ -36,7 +46,7 @@ describe("the queue list", () => {
   let id: string;
 
   beforeAll(async () => {
-    id = await savePendingDocument({
+    id = await savePendingDocument(TEST_USER_ID, {
       extraction: sampleReceiptExtraction(),
       filename: "receipt-greenway-fuel.png",
     });
@@ -75,7 +85,7 @@ describe("the queue list", () => {
 
 describe("the detail view", () => {
   it("returns the full extraction, with a confidence for every field", async () => {
-    const id = await savePendingDocument({
+    const id = await savePendingDocument(TEST_USER_ID, {
       extraction: sampleReceiptExtraction(),
       filename: "detail-me.png",
     });
@@ -91,7 +101,7 @@ describe("the detail view", () => {
   it("preserves a field the document never stated as an absence, not a zero-confidence read", async () => {
     // A till receipt with no number: the view has to tell "not printed on the
     // document" apart from "read it badly", and this is the data that decides it.
-    const id = await savePendingDocument({
+    const id = await savePendingDocument(TEST_USER_ID, {
       extraction: sampleMessyReceiptExtraction(),
       filename: "messy-till-receipt.png",
     });
@@ -118,7 +128,7 @@ describe("deleting a queued document", () => {
   }
 
   it("removes it from the queue for good", async () => {
-    const id = await savePendingDocument({
+    const id = await savePendingDocument(TEST_USER_ID, {
       extraction: sampleReceiptExtraction(),
       filename: "duplicate-to-bin.png",
     });
@@ -144,11 +154,11 @@ describe("deleting a queued document", () => {
   it("refuses to delete a document that already reached the ledger", async () => {
     // The audit-trail guard: this row is what links an approved bill back to the
     // extraction it came from, so deleting it would orphan the bill's origin.
-    const id = await savePendingDocument({
+    const id = await savePendingDocument(TEST_USER_ID, {
       extraction: sampleMessyReceiptExtraction(),
       filename: "already-approved.png",
     });
-    await resolvePendingDocument(id, { outcome: "approved", invoiceId: "inv-1" });
+    await resolvePendingDocument(TEST_USER_ID, id, { outcome: "approved", invoiceId: "inv-1" });
 
     const { status, body } = await del(id);
     expect(status).toBe(409);

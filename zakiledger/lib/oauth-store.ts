@@ -5,8 +5,9 @@ import { getSupabase } from "./supabase";
  *
  * Mirrors the pattern in lib/store.ts: persist to Supabase/Postgres when it's
  * configured (see the `oauth_connections` table in db/schema.sql), otherwise fall
- * back to an in-memory map so the flow is runnable without a database. This is a
- * single-tenant MVP, so we keep exactly one connection per provider.
+ * back to an in-memory map so the flow is runnable without a database. One
+ * connection per (user, provider) — each bookkeeper connects their own Xero or
+ * QuickBooks, never the other's.
  *
  * Access tokens are short-lived (Xero ~30 min, QuickBooks ~60 min); the refresh
  * token is what keeps a connection alive across sessions, so it is stored here
@@ -42,12 +43,19 @@ export interface TokenSet {
  * to succeed and then every approval would report "not connected".
  * Irrelevant once Supabase is configured; the `oauth_connections` table is then
  * the shared state.
+ *
+ * Keyed by `${userId}:${provider}` rather than provider alone, now that more
+ * than one user's connection can exist at once.
  */
 const globalForConnections = globalThis as unknown as {
-  __zakiLedgerConnections?: Map<OAuthProvider, OAuthConnection>;
+  __zakiLedgerConnections?: Map<string, OAuthConnection>;
 };
-const memConnections: Map<OAuthProvider, OAuthConnection> =
+const memConnections: Map<string, OAuthConnection> =
   (globalForConnections.__zakiLedgerConnections ??= new Map());
+
+function memKey(userId: string, provider: OAuthProvider): string {
+  return `${userId}:${provider}`;
+}
 
 function mapConnectionRow(row: Record<string, unknown>): OAuthConnection {
   return {
@@ -66,10 +74,11 @@ function expiryFromNow(expiresIn: number): string {
 }
 
 /**
- * Upsert the connection for a provider. One row per provider (provider is the
- * primary key), so re-connecting or refreshing overwrites in place.
+ * Upsert the connection for a (user, provider) pair — re-connecting or
+ * refreshing overwrites in place rather than accumulating rows.
  */
 export async function saveConnection(
+  userId: string,
   provider: OAuthProvider,
   tokens: TokenSet,
   orgId?: string,
@@ -85,7 +94,7 @@ export async function saveConnection(
 
   const db = getSupabase();
   if (!db) {
-    memConnections.set(provider, entry);
+    memConnections.set(memKey(userId, provider), entry);
     return entry;
   }
 
@@ -93,6 +102,7 @@ export async function saveConnection(
     .from("oauth_connections")
     .upsert(
       {
+        user_id: userId,
         provider,
         access_token: entry.accessToken,
         refresh_token: entry.refreshToken,
@@ -100,7 +110,7 @@ export async function saveConnection(
         org_id: entry.orgId ?? null,
         updated_at: entry.updatedAt,
       },
-      { onConflict: "provider" },
+      { onConflict: "user_id,provider" },
     )
     .select()
     .single();
@@ -111,12 +121,13 @@ export async function saveConnection(
 
 /** Update just the org identifier (Xero tenantId / QuickBooks realmId). */
 export async function setConnectionOrgId(
+  userId: string,
   provider: OAuthProvider,
   orgId: string,
 ): Promise<void> {
   const db = getSupabase();
   if (!db) {
-    const existing = memConnections.get(provider);
+    const existing = memConnections.get(memKey(userId, provider));
     if (existing) existing.orgId = orgId;
     return;
   }
@@ -124,6 +135,7 @@ export async function setConnectionOrgId(
   const { error } = await db
     .from("oauth_connections")
     .update({ org_id: orgId, updated_at: new Date().toISOString() })
+    .eq("user_id", userId)
     .eq("provider", provider);
 
   if (error) throw new Error(`Failed to set ${provider} org id: ${error.message}`);
@@ -136,7 +148,8 @@ export async function setConnectionOrgId(
 const COLD_START_RETRY_DELAY_MS = 300;
 
 /**
- * The stored connection for a provider, or null if never connected.
+ * The stored connection for a (user, provider) pair, or null if never
+ * connected.
  *
  * Retries once on failure. This is not a general retry policy — it exists for one
  * specific observed race: the FIRST Supabase call from a freshly-started instance
@@ -152,13 +165,14 @@ const COLD_START_RETRY_DELAY_MS = 300;
  * A second attempt lands after the clock settles.
  */
 export async function getConnection(
+  userId: string,
   provider: OAuthProvider,
 ): Promise<OAuthConnection | null> {
   const db = getSupabase();
-  if (!db) return memConnections.get(provider) ?? null;
+  if (!db) return memConnections.get(memKey(userId, provider)) ?? null;
 
   const load = () =>
-    db.from("oauth_connections").select().eq("provider", provider).maybeSingle();
+    db.from("oauth_connections").select().eq("user_id", userId).eq("provider", provider).maybeSingle();
 
   let { data, error } = await load();
 
@@ -181,14 +195,18 @@ export function isExpired(conn: OAuthConnection): boolean {
   return Date.parse(conn.expiresAt) - Date.now() <= 60_000;
 }
 
-/** Forget a provider's connection entirely — the disconnect action. */
-export async function deleteConnection(provider: OAuthProvider): Promise<void> {
+/** Forget a user's connection to a provider entirely — the disconnect action. */
+export async function deleteConnection(userId: string, provider: OAuthProvider): Promise<void> {
   const db = getSupabase();
   if (!db) {
-    memConnections.delete(provider);
+    memConnections.delete(memKey(userId, provider));
     return;
   }
 
-  const { error } = await db.from("oauth_connections").delete().eq("provider", provider);
+  const { error } = await db
+    .from("oauth_connections")
+    .delete()
+    .eq("user_id", userId)
+    .eq("provider", provider);
   if (error) throw new Error(`Failed to disconnect ${provider}: ${error.message}`);
 }
