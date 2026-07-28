@@ -63,18 +63,22 @@ function confidenceChipStyle(confidence: number): React.CSSProperties {
 }
 
 /**
- * Effective confidence per field once the human's edits are taken into account,
- * and the same approval gate every other screen runs over the result. No
- * "confirm as-is" here — only a typed correction clears a field's confidence.
+ * Effective confidence per field once the human's edits (or an explicit
+ * "confirm as-is") are taken into account — same rule the main upload screen
+ * applies. A field the model already read correctly shouldn't require the
+ * human to retype its own value just to clear the gate; affirming it as-is
+ * clears the gate the same way an edit does, and is recorded as a
+ * confirmation rather than a correction.
  */
 function effectiveConfidences(
   x: InvoiceExtraction,
   edited: Record<string, string>,
+  affirmed: Record<string, boolean>,
 ): Record<ReviewableField, number> {
   const out = {} as Record<ReviewableField, number>;
   for (const f of REVIEWABLE_FIELDS) {
     const node = (x as any)[f] as { value: unknown; confidence: number };
-    out[f] = effectiveConfidence(node.confidence, String(node.value), edited[f], false);
+    out[f] = effectiveConfidence(node.confidence, String(node.value), edited[f], affirmed[f] === true);
   }
   return out;
 }
@@ -82,10 +86,11 @@ function effectiveConfidences(
 function computeGate(
   x: InvoiceExtraction,
   edited: Record<string, string>,
+  affirmed: Record<string, boolean>,
   documentType: DocumentType,
   documentTypeConfirmed: boolean,
 ): ApprovalGate {
-  return gateApproval(effectiveConfidences(x, edited), {
+  return gateApproval(effectiveConfidences(x, edited, affirmed), {
     documentType,
     taxItemized: x.taxItemized,
     documentTypeConfidence: x.documentType?.confidence,
@@ -99,6 +104,11 @@ function hasEdits(x: InvoiceExtraction, edited: Record<string, string>): boolean
     const original = String((x as any)[f].value);
     return edited[f] !== undefined && edited[f] !== original;
   });
+}
+
+/** True once the human has affirmed at least one field as correct as-is. */
+function hasAffirmations(affirmed: Record<string, boolean>): boolean {
+  return REVIEWABLE_FIELDS.some((f) => affirmed[f] === true);
 }
 
 export default function PendingDocuments({
@@ -116,6 +126,12 @@ export default function PendingDocuments({
   const [detail, setDetail] = useState<PendingDetail | null>(null);
   /** Edits made in the open row's detail panel, keyed by reviewable field. */
   const [edited, setEdited] = useState<Record<string, string>>({});
+  /**
+   * Fields the human affirmed as-is in the open row — the AI read it right, so
+   * there's nothing to retype. Clears the gate exactly like an edit does,
+   * without forcing the human to reproduce a value that was already correct.
+   */
+  const [affirmed, setAffirmed] = useState<Record<string, boolean>>({});
   /**
    * The human settled an uncertain invoice-vs-receipt classification for the open
    * row — mirrors app/page.tsx's type-confirm flow. The type isn't a field the
@@ -171,18 +187,19 @@ export default function PendingDocuments({
    * same endpoint — the batch of one is not a special case.
    *
    * Exception: if the row currently open for editing is part of this batch AND
-   * the human actually touched it (edited a field or confirmed the document
-   * type), it cannot go through the plain bulk endpoint — that re-checks the
-   * ORIGINAL unedited read against the strict, no-human-present gate and blocks
-   * it, silently discarding the edit. So that one document is sent through the
-   * same edited-review route the single-row Approve button uses, first; the
-   * rest of the batch still goes through bulk, unaffected.
+   * the human actually touched it (edited a field, confirmed the document
+   * type, or affirmed a field as correct as-is), it cannot go through the
+   * plain bulk endpoint — that re-checks the ORIGINAL unedited read against the
+   * strict, no-human-present gate and blocks it, silently discarding the
+   * touch. So that one document is sent through the same edited-review route
+   * the single-row Approve button uses, first; the rest of the batch still
+   * goes through bulk, unaffected.
    */
   async function approve(ids: string[]) {
     if (ids.length === 0) return;
     const touchedId =
       openId && detail && detail.id === openId && ids.includes(openId) &&
-      (hasEdits(detail.extraction, edited) || typeConfirmed)
+      (hasEdits(detail.extraction, edited) || typeConfirmed || hasAffirmations(affirmed))
         ? openId
         : null;
     const bulkIds = ids.filter((id) => id !== touchedId);
@@ -222,6 +239,11 @@ export default function PendingDocuments({
     // A changed value invalidates any duplicate warning from a previous attempt —
     // it has to be checked against the ledger again.
     setDuplicateWarning(null);
+  }
+
+  /** Affirm a field as correct as-is — the AI read it right, nothing to retype. */
+  function affirmField(field: ReviewableField) {
+    setAffirmed((prev) => ({ ...prev, [field]: true }));
   }
 
   /**
@@ -270,6 +292,7 @@ export default function PendingDocuments({
       setOpenId(null);
       setDetail(null);
       setEdited({});
+      setAffirmed({});
       setTypeConfirmed(false);
       setTypeOverride(null);
     } catch (e) {
@@ -318,6 +341,7 @@ export default function PendingDocuments({
       setOpenId(null);
       setDetail(null);
       setEdited({});
+      setAffirmed({});
       setTypeConfirmed(false);
       setTypeOverride(null);
       setDuplicateWarning(null);
@@ -326,6 +350,7 @@ export default function PendingDocuments({
     setOpenId(id);
     setDetail(null); // clear the previous row's data so it can't render under this one
     setEdited({}); // a different document's edits don't carry over
+    setAffirmed({});
     setTypeConfirmed(false);
     setTypeOverride(null);
     setDuplicateWarning(null);
@@ -409,12 +434,12 @@ export default function PendingDocuments({
             // values) or the untouched bulk route (by id alone).
             const rowExtraction = isOpen && detail && detail.id === d.id ? detail.extraction : null;
             const rowEdited = rowExtraction !== null && hasEdits(rowExtraction, edited);
-            const rowTouched = rowEdited || typeConfirmed;
+            const rowTouched = rowEdited || typeConfirmed || hasAffirmations(affirmed);
             const rowDocumentType: DocumentType =
               typeOverride ?? rowExtraction?.documentType?.value ?? d.documentType;
             const rowGate =
               rowExtraction && rowTouched
-                ? computeGate(rowExtraction, edited, rowDocumentType, typeConfirmed)
+                ? computeGate(rowExtraction, edited, affirmed, rowDocumentType, typeConfirmed)
                 : null;
             const rowBlocked = rowGate !== null && rowGate.status !== "ready";
             return (
@@ -531,6 +556,8 @@ export default function PendingDocuments({
                         detail={detail}
                         edited={edited}
                         onEdit={commitEdit}
+                        affirmed={affirmed}
+                        onAffirm={affirmField}
                         typeConfirmed={typeConfirmed}
                         typeOverride={typeOverride}
                         onConfirmType={(t, detectedType) => {
@@ -600,6 +627,8 @@ function DetailPanel({
   detail,
   edited,
   onEdit,
+  affirmed,
+  onAffirm,
   typeConfirmed,
   typeOverride,
   onConfirmType,
@@ -608,6 +637,8 @@ function DetailPanel({
   detail: PendingDetail | null;
   edited: Record<string, string>;
   onEdit: (field: ReviewableField, value: string) => void;
+  affirmed: Record<string, boolean>;
+  onAffirm: (field: ReviewableField) => void;
   typeConfirmed: boolean;
   typeOverride: DocumentType | null;
   onConfirmType: (chosen: DocumentType, detectedType: DocumentType) => void;
@@ -621,9 +652,11 @@ function DetailPanel({
   const type = typeOverride ?? detectedType;
   const typeConfidence = x.documentType?.confidence ?? 1;
   const labels = fieldLabels(type);
-  const confidences = effectiveConfidences(x, edited);
+  const confidences = effectiveConfidences(x, edited, affirmed);
   const gate =
-    hasEdits(x, edited) || typeConfirmed ? computeGate(x, edited, type, typeConfirmed) : null;
+    hasEdits(x, edited) || typeConfirmed || hasAffirmations(affirmed)
+      ? computeGate(x, edited, affirmed, type, typeConfirmed)
+      : null;
 
   return (
     <div style={detailPanel}>
@@ -671,18 +704,33 @@ function DetailPanel({
         // A field the document never stated is not a failed read — show it as
         // absent rather than as a 0% score the human can never satisfy.
         const absent = original.trim() === "" || node.confidence === 0;
+        const isEdited = edited[f] !== undefined && edited[f] !== original;
+        const isAffirmed = affirmed[f] === true && !isEdited;
+        // Below the same bar EditableField uses to shade a field amber — this is
+        // when "confirm as-is" actually has something to offer.
+        const low = !absent && node.confidence < 0.85;
         return (
-          <EditableField
-            key={f}
-            label={labels[f]}
-            value={edited[f] ?? original}
-            original={original}
-            confidence={confidences[f]}
-            absent={absent}
-            edited={edited[f] !== undefined && edited[f] !== original}
-            affirmed={false}
-            onCommit={(v) => onEdit(f, v)}
-          />
+          <div key={f}>
+            <EditableField
+              label={labels[f]}
+              value={edited[f] ?? original}
+              original={original}
+              confidence={confidences[f]}
+              absent={absent}
+              edited={isEdited}
+              affirmed={isAffirmed}
+              onCommit={(v) => onEdit(f, v)}
+            />
+            {/* The AI often reads a field right but timidly — retyping the same
+                value just to clear the gate would be busywork. This affirms it
+                without an edit, clearing the gate and recording a confirmation
+                (not a correction) once approved. */}
+            {low && !isEdited && !isAffirmed && (
+              <button style={confirmAsIsBtn} onClick={() => onAffirm(f)}>
+                ✓ Confirm this is correct
+              </button>
+            )}
+          </div>
         );
       })}
 
@@ -803,6 +851,17 @@ const chipMuted: React.CSSProperties = {
   ...chipOk,
   background: "#f4f6f8",
   color: "#8892a0",
+};
+const confirmAsIsBtn: React.CSSProperties = {
+  margin: "-4px 0 10px",
+  padding: "4px 10px",
+  background: "#fff",
+  color: "#1e8449",
+  border: "1px solid #a9dfbf",
+  borderRadius: 8,
+  cursor: "pointer",
+  fontWeight: 600,
+  fontSize: 12,
 };
 const rowBlockedNote: React.CSSProperties = {
   margin: "8px 0 0",

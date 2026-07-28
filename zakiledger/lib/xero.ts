@@ -160,6 +160,18 @@ export async function isXeroConnected(userId: string): Promise<boolean> {
  * connection, not a dead one), then proves it with a real API call rather than
  * trusting the stored expiry. A revoked or otherwise broken token reports as
  * disconnected instead of throwing.
+ *
+ * The proving call hits /Invoices, not /Organisation: reading Organisation
+ * details is gated behind the `accounting.settings` scope in Xero's granular
+ * scope model, which SCOPE above never requests (only `accounting.invoices
+ * offline_access`). A perfectly healthy, fully-authorized connection 403s on
+ * /Organisation every time — that was reporting every connection as
+ * disconnected the moment anything (a page load, a status poll) re-verified
+ * it, regardless of whether the token was actually fine. /Invoices is inside
+ * the scope this app actually has, so it proves what we can really do:
+ * read/write bills. The organisation name is then best-effort only — if
+ * fetching it fails (missing scope, transient error), that alone must not
+ * flip `connected` to false.
  */
 export async function xeroConnectionStatus(userId: string): Promise<{
   connected: boolean;
@@ -169,17 +181,27 @@ export async function xeroConnectionStatus(userId: string): Promise<{
     const access = await getValidXeroAccess(userId);
     if (!access) return { connected: false };
 
-    const res = await fetch(`${API_BASE}/Organisation`, {
-      headers: {
-        Authorization: `Bearer ${access.accessToken}`,
-        "Xero-tenant-id": access.tenantId,
-        Accept: "application/json",
-      },
-    });
+    const headers = {
+      Authorization: `Bearer ${access.accessToken}`,
+      "Xero-tenant-id": access.tenantId,
+      Accept: "application/json",
+    };
+
+    const res = await fetch(`${API_BASE}/Invoices?page=1`, { headers });
     if (!res.ok) return { connected: false };
 
-    const body = (await res.json()) as { Organisations?: Array<{ Name?: string }> };
-    return { connected: true, accountName: body.Organisations?.[0]?.Name };
+    let accountName: string | undefined;
+    try {
+      const orgRes = await fetch(`${API_BASE}/Organisation`, { headers });
+      if (orgRes.ok) {
+        const body = (await orgRes.json()) as { Organisations?: Array<{ Name?: string }> };
+        accountName = body.Organisations?.[0]?.Name;
+      }
+    } catch {
+      /* accountName is a display nicety, not part of the connectivity proof */
+    }
+
+    return { connected: true, accountName };
   } catch {
     return { connected: false };
   }
