@@ -3,6 +3,19 @@
 import { useState } from "react";
 
 /**
+ * Only ever redirect somewhere inside this app. `next` comes straight from the
+ * URL — middleware only ever sets it to a pathname, but nothing stops a
+ * crafted link (`/login?next=https://evil.example`) from using a real login
+ * to send the browser to an attacker's page right after it. A single leading
+ * slash (and not two — `//evil.example` is browser-speak for "same scheme,
+ * different host") is what makes a path same-origin.
+ */
+function safeNext(raw: string | null): string {
+  if (raw && raw.startsWith("/") && !raw.startsWith("//")) return raw;
+  return "/";
+}
+
+/**
  * Email + password login. Plain fetch to /api/auth/login (not a client-side
  * Supabase call) — same convention as the rest of this app, which talks to its
  * own API routes rather than calling third-party SDKs from the browser.
@@ -32,8 +45,7 @@ export default function LoginPage() {
         setError(data.error ?? "Login failed.");
         return;
       }
-      const next = new URLSearchParams(window.location.search).get("next") || "/";
-      window.location.href = next;
+      window.location.href = safeNext(new URLSearchParams(window.location.search).get("next"));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Login failed.");
     } finally {

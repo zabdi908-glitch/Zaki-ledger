@@ -204,7 +204,12 @@ export default function PendingDocuments({
         : null;
     const bulkIds = ids.filter((id) => id !== touchedId);
 
-    setBusy(new Set(ids));
+    // Merge into busy rather than replace it: approveDirect (below) also
+    // writes this same state, and a second approve firing while an earlier
+    // one is still in flight must not make that row's button look free to
+    // click again — a double-click here would be a second POST for a document
+    // that's still mid-approval, not just a UI glitch.
+    setBusy((prev) => new Set([...prev, ...ids]));
     setError(null);
     try {
       if (touchedId) await approveDirect(touchedId, false);
@@ -226,7 +231,12 @@ export default function PendingDocuments({
     } catch (e) {
       setError(e instanceof Error ? e.message : "Approve failed.");
     } finally {
-      setBusy(new Set());
+      // touchedId was already cleared by approveDirect's own finally.
+      setBusy((prev) => {
+        const next = new Set(prev);
+        for (const id of bulkIds) next.delete(id);
+        return next;
+      });
       // Approved documents leave the queue; blocked and errored ones stay, now
       // carrying the reason they came back with.
       await refresh();
@@ -253,7 +263,7 @@ export default function PendingDocuments({
    */
   async function approveDirect(id: string, proceedDuplicate: boolean) {
     if (!detail || detail.id !== id) return;
-    setBusy(new Set([id]));
+    setBusy((prev) => new Set([...prev, id]));
     setError(null);
     setDuplicateWarning(null);
     try {
@@ -298,7 +308,11 @@ export default function PendingDocuments({
     } catch (e) {
       setError(e instanceof Error ? e.message : "Approve failed.");
     } finally {
-      setBusy(new Set());
+      setBusy((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
       await refresh();
     }
   }

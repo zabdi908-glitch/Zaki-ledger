@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { ReviewableField } from "@/lib/schema";
+import type { DocumentType, ReviewableField } from "@/lib/schema";
 import type { BulkItemResult } from "@/lib/bulk-approve";
 import BatchResultRow from "./BatchResultRow";
 import {
@@ -141,6 +141,7 @@ export default function BatchUpload({
                 failure: msg.status === "error" ? msg.reason : undefined,
                 edited: {},
                 affirmed: {},
+                typeConfirmed: false,
               };
               return next;
             });
@@ -187,6 +188,31 @@ export default function BatchUpload({
   }
 
   /**
+   * Settle an uncertain invoice-vs-receipt classification on one row — the type
+   * isn't a reviewable field, so it needs its own commit path rather than going
+   * through editField. Clearing outcome/duplicate-arming mirrors editField: a
+   * row that was blocked by the type gate gets a fresh shot at approval instead
+   * of staying frozen on a now-stale reason.
+   */
+  function confirmType(index: number, chosen: DocumentType, detectedType: DocumentType) {
+    setRows((prev) => {
+      if (!prev) return prev;
+      return prev.map((r) =>
+        r.index === index
+          ? {
+              ...r,
+              typeConfirmed: true,
+              typeOverride: chosen === detectedType ? null : chosen,
+              outcome: undefined,
+              outcomeReason: undefined,
+              proceedDuplicate: false,
+            }
+          : r,
+      );
+    });
+  }
+
+  /**
    * Approve a set of rows. Untouched documents go through the server-side bulk
    * gate by id; documents the human edited or confirmed go through the review
    * route with their values, which is also what records the corrections. See
@@ -195,8 +221,12 @@ export default function BatchUpload({
   async function approve(indexes: number[]) {
     if (!rows || indexes.length === 0) return;
     const plan = planApproval(rows, indexes);
+    const touchedIndexes = [...plan.queued, ...plan.direct].map((p) => p.index);
 
-    setBusy(new Set([...plan.queued, ...plan.direct].map((p) => p.index)));
+    // Merge into busy rather than replace it: a second approve (a different
+    // row, or the batch button) firing while an earlier one is still in flight
+    // must not make that earlier row's button look free to click again.
+    setBusy((prev) => new Set([...prev, ...touchedIndexes]));
     setError(null);
     setSkipped(
       plan.skipped.map((s) => ({
@@ -268,7 +298,11 @@ export default function BatchUpload({
         }
       }
     } finally {
-      setBusy(new Set());
+      setBusy((prev) => {
+        const next = new Set(prev);
+        for (const i of touchedIndexes) next.delete(i);
+        return next;
+      });
       // Approved documents have left the queue.
       setSelected((prev) => new Set([...prev].filter((i) => !indexes.includes(i))));
       onDone();
@@ -409,6 +443,7 @@ export default function BatchUpload({
             selected={selected.has(r.index)}
             onSelect={selectRow}
             onEdit={editField}
+            onConfirmType={confirmType}
             onApprove={(i) => approve([i])}
             busy={busy.has(r.index)}
           />

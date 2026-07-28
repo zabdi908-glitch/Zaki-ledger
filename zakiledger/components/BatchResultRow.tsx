@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { REVIEWABLE_FIELDS, type ReviewableField } from "@/lib/schema";
+import { REVIEWABLE_FIELDS, type DocumentType, type ReviewableField } from "@/lib/schema";
 import { fieldLabels } from "@/lib/validation";
 import { formatMoney } from "@/lib/currency";
 import EditableField from "./EditableField";
@@ -36,6 +36,7 @@ export default function BatchResultRow({
   selected,
   onSelect,
   onEdit,
+  onConfirmType,
   onApprove,
   busy,
 }: {
@@ -44,6 +45,8 @@ export default function BatchResultRow({
   onSelect: (index: number, checked: boolean) => void;
   /** Commit a field: the human's value, plus whether they affirmed it unchanged. */
   onEdit: (index: number, field: ReviewableField, value: string) => void;
+  /** Settle an uncertain invoice-vs-receipt classification. */
+  onConfirmType: (index: number, chosen: DocumentType, detectedType: DocumentType) => void;
   onApprove: (index: number) => void;
   busy: boolean;
 }) {
@@ -94,7 +97,17 @@ export default function BatchResultRow({
 
           {/* --- The extraction, editable in place ------------------------- */}
           {row.extraction && status !== "approved" && expanded && (
-            <FieldTable row={row} onEdit={onEdit} />
+            <>
+              {/* An uncertain classification blocks approval on its own, because
+                  the type decides which fields are required and how duplicates
+                  are matched. It isn't a reviewable field, so fixing every field
+                  below can never clear this by itself — without this picker the
+                  row would stay stuck amber forever. */}
+              {(row.extraction.documentType?.confidence ?? 1) < 0.8 && !row.typeConfirmed && (
+                <TypePicker row={row} onConfirmType={onConfirmType} />
+              )}
+              <FieldTable row={row} onEdit={onEdit} />
+            </>
           )}
 
           {/* --- Row actions ----------------------------------------------- */}
@@ -122,6 +135,38 @@ export default function BatchResultRow({
             </div>
           )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+/** Settle an uncertain invoice-vs-receipt classification for one row. */
+function TypePicker({
+  row,
+  onConfirmType,
+}: {
+  row: ResultRow;
+  onConfirmType: (index: number, chosen: DocumentType, detectedType: DocumentType) => void;
+}) {
+  const detectedType = rowDocumentType(row);
+  const confidence = row.extraction!.documentType?.confidence ?? 1;
+  return (
+    <div style={typePickerStyle}>
+      <div style={{ fontWeight: 700, marginBottom: 4 }}>Is this an invoice or a receipt?</div>
+      <p style={{ margin: "0 0 10px", fontSize: 13 }}>
+        We read it as a <strong>{detectedType}</strong> but only at {(confidence * 100).toFixed(0)}%
+        confidence. This decides which fields are required, so please confirm before approving.
+      </p>
+      <div style={{ display: "flex", gap: 10 }}>
+        {(["invoice", "receipt"] as DocumentType[]).map((t) => (
+          <button
+            key={t}
+            style={t === detectedType ? approveSmall : linkBtn}
+            onClick={() => onConfirmType(row.index, t, detectedType)}
+          >
+            {t === "receipt" ? "🧾 Receipt" : "📄 Invoice"}
+          </button>
+        ))}
       </div>
     </div>
   );
@@ -251,6 +296,14 @@ const fieldPanel: React.CSSProperties = {
   border: "1px solid #eef1f4",
   borderRadius: 8,
   color: "#445",
+};
+const typePickerStyle: React.CSSProperties = {
+  marginTop: 10,
+  padding: "10px 12px",
+  background: "#fff8ec",
+  border: "1px solid #f0c986",
+  borderRadius: 8,
+  color: "#7d4a00",
 };
 const lineItemRow: React.CSSProperties = {
   display: "flex",

@@ -155,6 +155,7 @@ async function uploadAndBuildRows(filenames: string[]): Promise<ResultRow[]> {
       failure: msg.status === "error" ? msg.reason : undefined,
       edited: {},
       affirmed: {},
+      typeConfirmed: false,
     };
   }
   return rows;

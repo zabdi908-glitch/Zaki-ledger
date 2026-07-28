@@ -1,4 +1,5 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import type { NextRequest } from "next/server";
 import { resolvePendingDocument, savePendingDocument } from "@/lib/store";
 import { sampleMessyReceiptExtraction, sampleReceiptExtraction } from "@/lib/demo";
 
@@ -23,6 +24,7 @@ vi.mock("@/lib/auth", () => ({
 
 const { GET: listRoute } = await import("@/app/api/pending/route");
 const { DELETE: deleteRoute, GET: detailRoute } = await import("@/app/api/pending/[id]/route");
+const { POST: approveRoute } = await import("@/app/api/approve/route");
 
 beforeAll(() => {
   delete process.env.ANTHROPIC_API_KEY;
@@ -163,5 +165,37 @@ describe("deleting a queued document", () => {
     const { status, body } = await del(id);
     expect(status).toBe(409);
     expect(body.error).toContain("already been approved");
+  });
+});
+
+describe("approving the same document twice", () => {
+  async function approveOnce(id: string, extraction: ReturnType<typeof sampleReceiptExtraction>) {
+    const req = new Request("http://test/api/approve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ documentId: id, extraction, edited: {}, documentType: "receipt" }),
+    });
+    const res = await approveRoute(req as unknown as NextRequest);
+    return { status: res.status, body: (await res.json()) as any };
+  }
+
+  it("refuses a second post once the queue entry is already resolved", async () => {
+    // The scenario this guards: two concurrent Approve clicks (a slow network, an
+    // impatient double-click, two tabs) racing the same document through — both
+    // would otherwise pass the duplicate check before either has written
+    // anything, and both save an invoice and post a bill.
+    const extraction = sampleReceiptExtraction();
+    const id = await savePendingDocument(TEST_USER_ID, {
+      extraction,
+      filename: "double-click.png",
+    });
+
+    const first = await approveOnce(id, extraction);
+    expect(first.status).toBe(200);
+    expect(first.body.status).toBe("approved");
+
+    const second = await approveOnce(id, extraction);
+    expect(second.status).toBe(409);
+    expect(second.body.error).toContain("Already approved");
   });
 });

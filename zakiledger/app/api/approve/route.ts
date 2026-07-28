@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   findDuplicateDocument,
+  getPendingDocument,
   recordConfirmation,
   recordCorrection,
   resolvePendingDocument,
@@ -50,6 +51,23 @@ export async function POST(req: NextRequest) {
     // otherwise the AI's proposed value.
     const finalOf = (field: string) =>
       edited[field] ?? String((extraction as any)[field].value);
+
+    // A document already resolved must not be posted a second time — the same
+    // guard lib/bulk-approve.ts's approveOne() already applies for the bulk
+    // route. Without it, two concurrent Approve clicks on the same document (a
+    // slow connection, an impatient double-click, two browser tabs) each pass
+    // the duplicate check below before either has written anything — it's a
+    // TOCTOU race, not a UI-only glitch — and both save an invoice and post a
+    // real bill to Xero/QuickBooks.
+    if (documentId) {
+      const existing = await getPendingDocument(user.id, documentId);
+      if (existing?.status === "resolved") {
+        return NextResponse.json(
+          { error: "Already approved — not posted again." },
+          { status: 409 },
+        );
+      }
+    }
 
     const supplierName = finalOf("supplierName");
     const invoiceNumber = finalOf("invoiceNumber");

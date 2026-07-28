@@ -12,6 +12,7 @@ import {
   type ResultRow,
 } from "@/lib/batch-results";
 import {
+  sampleAmbiguousExtraction,
   sampleForeignCurrencyReceiptExtraction,
   sampleMessyReceiptExtraction,
   sampleReceiptExtraction,
@@ -68,6 +69,27 @@ describe("what a row is", () => {
 
   it("stays 'extracting' until its line arrives", () => {
     expect(rowStatus(pendingRow("waiting.png", 0))).toBe("extracting");
+  });
+
+  it("flags a document the model can't classify, even though every field reads well", () => {
+    // Every field is confident here — the only problem is documentType itself,
+    // which isn't a reviewable field, so no amount of editing the fields below
+    // could ever clear this on its own.
+    const ambiguous = row(sampleAmbiguousExtraction());
+    expect(rowStatus(ambiguous)).toBe("flagged");
+    expect(flagReason(ambiguous)).toContain("invoice or a receipt");
+  });
+
+  it("turns ready the moment the human confirms the type, with no other input", () => {
+    const confirmed = row(sampleAmbiguousExtraction(), { typeConfirmed: true });
+    expect(hasHumanInput(confirmed)).toBe(true);
+    expect(rowStatus(confirmed)).toBe("ready");
+
+    // And the plan routes it through the review endpoint (not the untouched
+    // bulk gate), the same way an edited field does — a human vouched for it.
+    const plan = planApproval([confirmed], [confirmed.index]);
+    expect(plan.direct.map((d) => d.index)).toEqual([confirmed.index]);
+    expect(plan.queued).toHaveLength(0);
   });
 });
 

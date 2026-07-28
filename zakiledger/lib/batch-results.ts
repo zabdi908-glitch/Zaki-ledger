@@ -54,6 +54,15 @@ export interface ResultRow {
   edited: Record<string, string>;
   /** Fields the human affirmed as correct without changing them. */
   affirmed: Record<string, boolean>;
+  /**
+   * The human settled an uncertain invoice-vs-receipt classification. The type
+   * isn't a reviewable field — editing every field on screen can't clear a
+   * low-confidence documentType read, so without this a row like that could
+   * never turn green here (see gateApproval's Rule 0 in lib/validation.ts).
+   */
+  typeConfirmed: boolean;
+  /** Set only when the human picked the OTHER type than the one detected. */
+  typeOverride?: DocumentType | null;
   /** Set once this row has been through an approval attempt. */
   outcome?: RowOutcome;
   /** Why it was blocked or errored; on approval, where the bill landed. */
@@ -76,7 +85,7 @@ export type RowStatus = "extracting" | "ready" | "flagged" | "failed" | "approve
 
 /** A fresh row for a file that hasn't been read yet. */
 export function pendingRow(filename: string, index: number): ResultRow {
-  return { index, filename, read: "extracting", edited: {}, affirmed: {} };
+  return { index, filename, read: "extracting", edited: {}, affirmed: {}, typeConfirmed: false };
 }
 
 /** The value that would be approved for a field: the human's if they set one. */
@@ -109,9 +118,9 @@ export function effectiveConfidences(row: ResultRow): Record<ReviewableField, nu
   return out;
 }
 
-/** The document type in force: the model's read (nothing overrides it here). */
+/** The document type in force: the human's override if they set one. */
 export function rowDocumentType(row: ResultRow): DocumentType {
-  return row.extraction?.documentType?.value ?? "invoice";
+  return row.typeOverride ?? row.extraction?.documentType?.value ?? "invoice";
 }
 
 /** Run the shared confidence gate over a row. Null when there is nothing to gate. */
@@ -121,6 +130,7 @@ export function rowGate(row: ResultRow): ApprovalGate | null {
     documentType: rowDocumentType(row),
     taxItemized: row.extraction.taxItemized,
     documentTypeConfidence: row.extraction.documentType?.confidence,
+    documentTypeConfirmed: row.typeConfirmed,
   });
 }
 
@@ -143,10 +153,13 @@ export function flagReason(row: ResultRow): string | null {
   return gateReasonSummary(gate, rowDocumentType(row));
 }
 
-/** True when the human has changed or affirmed anything on this row. */
+/** True when the human has changed, affirmed, or type-confirmed anything on this row. */
 export function hasHumanInput(row: ResultRow): boolean {
-  return REVIEWABLE_FIELDS.some(
-    (f) => row.affirmed[f] === true || (row.edited[f] !== undefined && row.edited[f] !== originalValue(row, f)),
+  return (
+    row.typeConfirmed ||
+    REVIEWABLE_FIELDS.some(
+      (f) => row.affirmed[f] === true || (row.edited[f] !== undefined && row.edited[f] !== originalValue(row, f)),
+    )
   );
 }
 
