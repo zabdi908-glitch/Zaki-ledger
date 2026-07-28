@@ -169,24 +169,43 @@ export default function PendingDocuments({
   /**
    * Approve a set of documents. One document or ten, it's the same request to the
    * same endpoint — the batch of one is not a special case.
+   *
+   * Exception: if the row currently open for editing is part of this batch AND
+   * the human actually touched it (edited a field or confirmed the document
+   * type), it cannot go through the plain bulk endpoint — that re-checks the
+   * ORIGINAL unedited read against the strict, no-human-present gate and blocks
+   * it, silently discarding the edit. So that one document is sent through the
+   * same edited-review route the single-row Approve button uses, first; the
+   * rest of the batch still goes through bulk, unaffected.
    */
   async function approve(ids: string[]) {
     if (ids.length === 0) return;
+    const touchedId =
+      openId && detail && detail.id === openId && ids.includes(openId) &&
+      (hasEdits(detail.extraction, edited) || typeConfirmed)
+        ? openId
+        : null;
+    const bulkIds = ids.filter((id) => id !== touchedId);
+
     setBusy(new Set(ids));
     setError(null);
     try {
-      const res = await fetch("/api/approve/bulk", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ documentIds: ids }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error ?? "Approve failed.");
-        return;
+      if (touchedId) await approveDirect(touchedId, false);
+
+      if (bulkIds.length > 0) {
+        const res = await fetch("/api/approve/bulk", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ documentIds: bulkIds }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          setError(data.error ?? "Approve failed.");
+          return;
+        }
+        setResults(data.results);
+        setSummary(data.summary);
       }
-      setResults(data.results);
-      setSummary(data.summary);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Approve failed.");
     } finally {
