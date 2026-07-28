@@ -190,6 +190,35 @@ export function sampleForFilename(filename: string): InvoiceExtraction {
   if (name.includes("foreign") || name.includes("jpy")) {
     return sampleForeignCurrencyReceiptExtraction();
   }
-  if (name.includes("receipt")) return sampleReceiptExtraction();
+  if (name.includes("receipt")) return cleanReceiptForName(name);
   return sampleExtraction();
+}
+
+/**
+ * A clean receipt, varied by any digit in the filename.
+ *
+ * Without this, uploading receipt-1 … receipt-5 in demo mode returns five copies
+ * of the same receipt — and copies two and three correctly block as duplicates of
+ * copy one. That is the duplicate rule working exactly as intended, but it left
+ * the batch flow impossible to demonstrate without an API key: the one thing the
+ * demo data exists to prevent. The three distinct receipts are the ones the
+ * "Load a demo batch" button already seeds, reused rather than re-invented.
+ */
+function cleanReceiptForName(name: string): InvoiceExtraction {
+  const pool = sampleBulkBatch()
+    .slice(0, 3)
+    .map((b) => b.extraction);
+  const digit = name.match(/\d/)?.[0];
+  return digit ? pool[(Number(digit) - 1 + pool.length) % pool.length] : pool[0];
+}
+
+/**
+ * Demo-mode filenames that stand for an unreadable file. Demo extraction always
+ * succeeds otherwise, which left the one outcome the batch screen has to handle
+ * gracefully — a file that simply can't be read — unreachable without a real API
+ * key and a genuinely corrupt document.
+ */
+export function isDemoUnreadable(filename: string): boolean {
+  const name = filename.toLowerCase();
+  return name.includes("broken") || name.includes("corrupt") || name.includes("unreadable");
 }

@@ -3,7 +3,7 @@ import { buildHints } from "./learning";
 import { arithmeticMismatch, REVIEWABLE_FIELDS, type InvoiceExtraction } from "./schema";
 import { confirmationStatsForSupplier, findDuplicateDocument, savePendingDocument } from "./store";
 import { calibrateConfidence, FLOOR_MIN_CONFIRMATIONS } from "./calibration";
-import { sampleForFilename } from "./demo";
+import { isDemoUnreadable, sampleForFilename } from "./demo";
 
 /**
  * Reading one document, start to finish: extract → calibrate → check → queue.
@@ -101,6 +101,12 @@ export async function extractOneDocument(file: File): Promise<ExtractedDocument>
   let refinedForSupplier: string | undefined;
 
   if (demo) {
+    // The unreadable-file path, reachable without an API key. Thrown rather than
+    // returned, because that is precisely what a failed read does here — and the
+    // batch route's per-file isolation is only exercised by a real throw.
+    if (isDemoUnreadable(file.name ?? "")) {
+      throw new Error("Could not extract text from this file — it may be corrupt or unreadable.");
+    }
     extraction = sampleForFilename(file.name ?? "");
   } else {
     const buffer = Buffer.from(await file.arrayBuffer());
