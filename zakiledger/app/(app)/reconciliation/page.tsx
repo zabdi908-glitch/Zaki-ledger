@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useShellToast } from "@/components/AppShell";
 import {
   disabledOverride,
@@ -22,10 +22,12 @@ import {
  * (see lib/reconciliation-store.ts computeAndPersistMatches), not a fake
  * timer.
  *
- * There's no live QuickBooks/Xero sync yet (that's Phase 3 Session 2), so
- * the accounting side is a CSV import for now — the mockup doesn't show this
- * step at all, so it's folded in as a secondary card beneath the main
- * matched-summary card rather than disrupting the primary upload flow.
+ * The accounting side (Step 2 below) live-syncs from Xero/QuickBooks when
+ * connected (lib/xero.ts listXeroBankTransactions / lib/quickbooks.ts
+ * listQuickBooksPurchases), falling back to CSV import when neither is
+ * connected — the mockup doesn't show this step at all, so it's folded in
+ * as a secondary card beneath the main matched-summary card rather than
+ * disrupting the primary upload flow.
  */
 
 type Stage = "idle" | "processing" | "matched";
@@ -44,6 +46,24 @@ export default function ReconciliationUploadPage() {
 
   const [qbBusy, setQbBusy] = useState(false);
   const [qbError, setQbError] = useState<string | null>(null);
+
+  const [connectedProvider, setConnectedProvider] = useState<"xero" | "quickbooks" | null>(null);
+  const [syncBusy, setSyncBusy] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
+
+  useEffect(() => {
+    Promise.all([
+      fetch("/api/auth/xero/status").then((r) => (r.ok ? r.json() : { connected: false })),
+      fetch("/api/auth/quickbooks/status").then((r) => (r.ok ? r.json() : { connected: false })),
+    ])
+      .then(([xero, qbo]) => {
+        if (xero.connected) setConnectedProvider("xero");
+        else if (qbo.connected) setConnectedProvider("quickbooks");
+      })
+      .catch(() => {
+        /* live sync just won't be offered; CSV import still works */
+      });
+  }, []);
 
   async function refreshMatchCounts(id: string) {
     const res = await fetch(`/api/reconciliation/${id}/transactions`);
@@ -80,6 +100,30 @@ export default function ReconciliationUploadPage() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Upload failed.");
       setStage("idle");
+    }
+  }
+
+  async function onSync() {
+    if (!statementId) return;
+    setSyncBusy(true);
+    setSyncError(null);
+    try {
+      const res = await fetch("/api/reconciliation/qb-transactions/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ statementId }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setSyncError(data.error ?? "Sync failed.");
+        return;
+      }
+      showToast(`Synced ${data.imported} transaction${data.imported === 1 ? "" : "s"} from ${data.provider === "xero" ? "Xero" : "QuickBooks"}.`);
+      await refreshMatchCounts(statementId);
+    } catch (err) {
+      setSyncError(err instanceof Error ? err.message : "Sync failed.");
+    } finally {
+      setSyncBusy(false);
     }
   }
 
@@ -131,7 +175,7 @@ export default function ReconciliationUploadPage() {
               CSV, OFX, or PDF — we&apos;ll match it against your QuickBooks entries
             </div>
             <span style={shellButton("primary", "lg")}>Choose statement</span>
-            <input type="file" accept=".csv,.ofx,.qfx" onChange={onUploadStatement} hidden />
+            <input type="file" accept=".csv,.ofx,.qfx,.pdf" onChange={onUploadStatement} hidden />
           </label>
           {error && <p style={{ ...shellCard({ padding: "12px 16px", marginTop: 16 }), color: shellColor.low }}>{error}</p>}
         </div>
@@ -169,15 +213,29 @@ export default function ReconciliationUploadPage() {
                   Accounting transactions
                 </div>
                 <p style={{ margin: "8px 0 0", color: shellColor.inkSoft, fontSize: 13.5, maxWidth: 460 }}>
-                  No live QuickBooks/Xero connection yet — import a CSV export for this period. {qbCount} on file.
+                  {connectedProvider
+                    ? `Live-synced from ${connectedProvider === "xero" ? "Xero" : "QuickBooks"}. ${qbCount} on file.`
+                    : `No live QuickBooks/Xero connection yet — import a CSV export for this period. ${qbCount} on file.`}
                 </p>
               </div>
-              <label style={qbBusy ? { ...shellButton("outline"), ...disabledOverride() } : shellButton("outline")}>
-                {qbBusy ? "Importing…" : "＋ Import CSV"}
-                <input type="file" accept=".csv" onChange={onUploadQbCsv} hidden disabled={qbBusy} />
-              </label>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                {connectedProvider && (
+                  <button
+                    style={syncBusy ? { ...shellButton("primary", "sm"), ...disabledOverride() } : shellButton("primary", "sm")}
+                    onClick={onSync}
+                    disabled={syncBusy}
+                  >
+                    {syncBusy ? "Syncing…" : `Sync from ${connectedProvider === "xero" ? "Xero" : "QuickBooks"}`}
+                  </button>
+                )}
+                <label style={qbBusy ? { ...shellButton("outline", "sm"), ...disabledOverride() } : shellButton("outline", "sm")}>
+                  {qbBusy ? "Importing…" : "＋ Import CSV"}
+                  <input type="file" accept=".csv" onChange={onUploadQbCsv} hidden disabled={qbBusy} />
+                </label>
+              </div>
             </div>
             {qbError && <p style={{ marginTop: 12, color: shellColor.low, fontSize: 13.5 }}>{qbError}</p>}
+            {syncError && <p style={{ marginTop: 12, color: shellColor.low, fontSize: 13.5 }}>{syncError}</p>}
           </div>
         </div>
       )}

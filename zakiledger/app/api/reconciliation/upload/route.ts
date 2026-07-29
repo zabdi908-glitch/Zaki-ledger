@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { parseCsvStatement, parseOfxStatement } from "@/lib/bank-parsers";
+import { parsePdfStatement } from "@/lib/bank-statement-pdf";
 import { saveBankStatement } from "@/lib/reconciliation-store";
 import { requireUser } from "@/lib/auth";
 import type { FileFormat } from "@/lib/reconciliation-schema";
 
-/** File extension -> parser. PDF isn't wired up yet (tomorrow's Claude extraction). */
+/** File extension -> parser. */
 function detectFormat(fileName: string): FileFormat | null {
   const ext = fileName.toLowerCase().split(".").pop();
   if (ext === "csv") return "csv";
@@ -15,7 +16,7 @@ function detectFormat(fileName: string): FileFormat | null {
 
 /**
  * POST /api/reconciliation/upload
- * Body: multipart form with a single "file" (bank statement, CSV or OFX).
+ * Body: multipart form with a single "file" (bank statement, CSV, OFX, or PDF).
  * Returns the statement id + summary so the caller can immediately hit
  * GET /api/reconciliation/[id]/transactions to see matches.
  */
@@ -33,19 +34,17 @@ export async function POST(req: NextRequest) {
     const format = detectFormat(file.name);
     if (!format) {
       return NextResponse.json(
-        { error: "Unsupported file type — expected .csv, .ofx, or .qfx." },
-        { status: 400 },
-      );
-    }
-    if (format === "pdf") {
-      return NextResponse.json(
-        { error: "PDF bank statements aren't supported yet — CSV or OFX only for now." },
+        { error: "Unsupported file type — expected .csv, .ofx, .qfx, or .pdf." },
         { status: 400 },
       );
     }
 
-    const text = await file.text();
-    const parsed = format === "csv" ? parseCsvStatement(text) : parseOfxStatement(text);
+    const parsed =
+      format === "csv"
+        ? parseCsvStatement(await file.text())
+        : format === "ofx"
+          ? parseOfxStatement(await file.text())
+          : await parsePdfStatement(file);
 
     if (parsed.transactions.length === 0) {
       return NextResponse.json(

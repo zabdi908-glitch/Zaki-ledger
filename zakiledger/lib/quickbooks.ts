@@ -5,6 +5,7 @@ import {
   type TokenSet,
 } from "./oauth-store";
 import { billLineDescription, type ApprovedBill } from "./accounting";
+import type { QbTransactionInput } from "./reconciliation-schema";
 
 /**
  * QuickBooks Online OAuth 2.0 + Accounting API integration.
@@ -248,6 +249,79 @@ async function firstExpenseAccountId(accessToken: string, realmId: string): Prom
   const id = found.QueryResponse?.Account?.[0]?.Id;
   if (!id) throw new Error("QuickBooks company has no Expense account to book the bill against.");
   return id;
+}
+
+/**
+ * The accounting side of reconciliation, pulled live instead of a CSV import:
+ * every QuickBooks Purchase (Expense/Check/CreditCardCredit — the entity QBO
+ * uses for money actually spent, as opposed to a Bill, which is money owed)
+ * posted within the given date range. Mapped onto the same QbTransactionInput
+ * shape saveQbTransactions() already takes from the CSV-import stand-in (see
+ * lib/bank-parsers.ts parsedTransactionsToQbInputs), so the matching
+ * algorithm doesn't need to know which source a transaction came from.
+ *
+ * QBO's query API paginates via STARTPOSITION/MAXRESULTS; 1000 per page is
+ * the platform's own max page size.
+ */
+export async function listQuickBooksPurchases(
+  userId: string,
+  periodStart: string,
+  periodEnd: string,
+): Promise<QbTransactionInput[]> {
+  const access = await getValidQboAccess(userId);
+  if (!access) throw new Error("QuickBooks is not connected.");
+  const { accessToken, realmId } = access;
+
+  type QboPurchase = {
+    Id?: string;
+    TxnDate?: string;
+    TotalAmt?: number;
+    PrivateNote?: string;
+    EntityRef?: { name?: string };
+    AccountRef?: { value?: string; name?: string };
+    PaymentType?: string;
+    CurrencyRef?: { value?: string };
+    Line?: Array<{ Description?: string }>;
+  };
+
+  const results: QbTransactionInput[] = [];
+  let startPosition = 1;
+  const pageSize = 1000;
+
+  // A hard cap on pages, not just a while(true): a runaway loop against a
+  // live API on every /reconciliation/upload would be a real cost/latency
+  // problem, not just a theoretical one. 20k purchases in one statement
+  // period is already an unreasonable amount of data for this flow.
+  for (let page = 0; page < 20; page++) {
+    const query =
+      `select * from Purchase where TxnDate >= '${periodStart}' and TxnDate <= '${periodEnd}' ` +
+      `startposition ${startPosition} maxresults ${pageSize}`;
+    const found = (await qboGet(`query?query=${encodeURIComponent(query)}&minorversion=65`, accessToken, realmId)) as {
+      QueryResponse?: { Purchase?: QboPurchase[] };
+    };
+    const batch = found.QueryResponse?.Purchase ?? [];
+
+    for (const p of batch) {
+      if (p.TxnDate === undefined || p.TotalAmt === undefined) continue;
+      results.push({
+        qbTransactionId: p.Id ?? null,
+        qbAccountId: p.AccountRef?.value ?? null,
+        postedDate: p.TxnDate,
+        // QBO's Purchase.TotalAmt is already a positive "money spent" figure
+        // — the same convention this app uses (positive = debit/money out).
+        amount: p.TotalAmt,
+        description: p.EntityRef?.name ?? p.PrivateNote ?? p.Line?.[0]?.Description ?? null,
+        accountName: p.AccountRef?.name ?? null,
+        accountType: p.PaymentType ?? null,
+        currency: p.CurrencyRef?.value ?? null,
+      });
+    }
+
+    if (batch.length < pageSize) break;
+    startPosition += pageSize;
+  }
+
+  return results;
 }
 
 /**

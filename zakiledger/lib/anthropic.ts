@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { InvoiceExtractionSchema, type InvoiceExtraction } from "./schema";
+import { ParsedStatementSchema, type ParsedStatement } from "./reconciliation-schema";
 
 const client = new Anthropic(); // reads ANTHROPIC_API_KEY from the environment
 
@@ -93,6 +94,58 @@ export async function extractDocument(
 
   if (!response.parsed_output) {
     throw new Error("Extraction failed: the model did not return a valid structured result.");
+  }
+  return response.parsed_output;
+}
+
+const BANK_STATEMENT_SYSTEM_PROMPT = `You extract structured transaction data from bank/credit-card statements
+(PDF) for an accounting reconciliation tool.
+
+Rules:
+- Extract every transaction line on the statement — don't skip small or
+  recurring-looking ones, and don't summarize/aggregate rows together.
+- Never invent a transaction, date, or amount that isn't printed on the page.
+- Dates as ISO 8601 (YYYY-MM-DD).
+- Amount sign convention (IMPORTANT, and the opposite of how most banks print
+  it): positive = a debit / money OUT of the account (a purchase, a fee, a
+  withdrawal); negative = a credit / money IN to the account (a deposit, a
+  refund, a paid-in transfer). If the statement itself uses "-" for
+  withdrawals and no sign (or a "CR" suffix) for deposits, flip the sign
+  before you output it, so your output always follows positive-out /
+  negative-in regardless of how the source document shows it.
+- "merchant" is the payee/description as printed (e.g. "TESCO STORES 2841",
+  "SQ *BLUE BOTTLE"); "description" can repeat the same text or add the
+  statement's own memo/reference if there is one.
+- "transactionId" is the bank's own reference/transaction number if the
+  statement prints one; otherwise null. Never invent one.
+- openingBalance / closingBalance: the statement's own stated balances, or
+  null if not printed. periodStart / periodEnd: the statement period's first
+  and last dates (ISO 8601), or null if you can't determine them.
+- currency: the ISO code (e.g. "GBP", "USD") if determinable from the
+  statement, else null.`;
+
+/**
+ * Extract every transaction from a bank/credit-card statement PDF — the
+ * reconciliation-side counterpart to extractDocument() above. Same
+ * one-call-does-everything shape: no separate "detect the format" pass.
+ */
+export async function extractBankStatement(base64: string, mediaType: string): Promise<ParsedStatement> {
+  const response = await client.messages.parse({
+    model: MODEL,
+    max_tokens: 16000,
+    thinking: { type: "adaptive" },
+    system: BANK_STATEMENT_SYSTEM_PROMPT,
+    messages: [
+      {
+        role: "user",
+        content: [documentBlock(base64, mediaType), { type: "text", text: "Extract every transaction from this bank statement." }],
+      },
+    ],
+    output_config: { format: zodOutputFormat(ParsedStatementSchema) },
+  });
+
+  if (!response.parsed_output) {
+    throw new Error("Statement extraction failed: the model did not return a valid structured result.");
   }
   return response.parsed_output;
 }

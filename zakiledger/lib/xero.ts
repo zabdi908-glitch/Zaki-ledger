@@ -6,6 +6,7 @@ import {
   type TokenSet,
 } from "./oauth-store";
 import { billLineDescription, type ApprovedBill } from "./accounting";
+import type { QbTransactionInput } from "./reconciliation-schema";
 
 /**
  * Xero OAuth 2.0 + Accounting API integration.
@@ -27,7 +28,16 @@ const API_BASE = "https://api.xero.com/api.xro/2.0";
 // covering reading/writing invoices and bills (ACCPAY). Apps created after
 // 2026-03-02 only support these granular scopes — the old broad
 // `accounting.transactions` scope returns invalid_scope for them.
-const SCOPE = "accounting.invoices offline_access";
+//
+// `accounting.banktransactions.read` is added for reconciliation's live
+// sync (listXeroBankTransactions, below) — read-only, since this app never
+// writes bank transactions. NOTE: this exact scope name is the best match
+// per Xero's fine-grained-scopes model but is unverified against a live app
+// registration (no Xero sandbox credentials available while building this) —
+// confirm it in the Xero Developer Portal's scope picker for this app before
+// relying on it, and note that widening the scope means any already-
+// connected user must reconnect (Xero re-prompts consent for new scopes).
+const SCOPE = "accounting.invoices accounting.banktransactions.read offline_access";
 
 /** True when the client id is present. Secret is additionally needed to exchange codes. */
 export function isXeroConfigured(): boolean {
@@ -205,6 +215,102 @@ export async function xeroConnectionStatus(userId: string): Promise<{
   } catch {
     return { connected: false };
   }
+}
+
+/** Xero's default JSON date format: "/Date(1721520000000+0000)/" -> "2024-07-21". */
+function parseXeroDate(raw: string | undefined): string | null {
+  if (!raw) return null;
+  const m = raw.match(/\/Date\((\d+)/);
+  if (!m) return null;
+  return new Date(Number(m[1])).toISOString().slice(0, 10);
+}
+
+/**
+ * The accounting side of reconciliation, pulled live instead of a CSV
+ * import: every Xero bank transaction (SPEND or RECEIVE — Xero's own model
+ * for money actually moving through a bank account, exactly what
+ * reconciliation needs to match against) dated within the given range.
+ * Mapped onto the same QbTransactionInput shape the CSV-import stand-in uses
+ * (see lib/bank-parsers.ts parsedTransactionsToQbInputs) so the matching
+ * algorithm doesn't care which source a transaction came from.
+ *
+ * Requires the `accounting.banktransactions.read` scope (see SCOPE above) —
+ * throws with a clear message if the connected token predates it, since that
+ * reads as a permissions error a reconnect fixes, not a bug.
+ */
+export async function listXeroBankTransactions(
+  userId: string,
+  periodStart: string,
+  periodEnd: string,
+): Promise<QbTransactionInput[]> {
+  const access = await getValidXeroAccess(userId);
+  if (!access) throw new Error("Xero is not connected.");
+
+  const [sy, sm, sd] = periodStart.split("-").map(Number);
+  const [ey, em, ed] = periodEnd.split("-").map(Number);
+  const where = `Date >= DateTime(${sy},${sm},${sd}) && Date <= DateTime(${ey},${em},${ed})`;
+
+  type XeroBankTxn = {
+    BankTransactionID?: string;
+    Type?: "SPEND" | "RECEIVE";
+    Date?: string;
+    Total?: number;
+    Reference?: string;
+    Contact?: { Name?: string };
+    BankAccount?: { AccountID?: string; Name?: string };
+    CurrencyCode?: string;
+    LineItems?: Array<{ Description?: string }>;
+  };
+
+  const results: QbTransactionInput[] = [];
+  // Xero paginates BankTransactions at 100/page; a page cap for the same
+  // cost/latency reason as QuickBooks' listQuickBooksPurchases above.
+  for (let pageNum = 1; pageNum <= 50; pageNum++) {
+    const res = await fetch(
+      `${API_BASE}/BankTransactions?where=${encodeURIComponent(where)}&page=${pageNum}&order=Date`,
+      {
+        headers: {
+          Authorization: `Bearer ${access.accessToken}`,
+          "Xero-tenant-id": access.tenantId,
+          Accept: "application/json",
+        },
+      },
+    );
+    if (!res.ok) {
+      if (res.status === 403) {
+        throw new Error(
+          "Xero refused to read bank transactions (403) — this connection likely predates the " +
+            "accounting.banktransactions.read scope. Disconnect and reconnect Xero to re-consent.",
+        );
+      }
+      throw new Error(`Xero BankTransactions read failed (${res.status}): ${await res.text()}`);
+    }
+
+    const body = (await res.json()) as { BankTransactions?: XeroBankTxn[] };
+    const batch = body.BankTransactions ?? [];
+
+    for (const t of batch) {
+      const postedDate = parseXeroDate(t.Date);
+      if (!postedDate || t.Total === undefined) continue;
+      // Xero's Total is always positive; SPEND/RECEIVE carries the direction.
+      // Flip RECEIVE to our negative-in convention (SPEND is already positive-out).
+      const amount = t.Type === "RECEIVE" ? -t.Total : t.Total;
+      results.push({
+        qbTransactionId: t.BankTransactionID ?? null,
+        qbAccountId: t.BankAccount?.AccountID ?? null,
+        postedDate,
+        amount,
+        description: t.Contact?.Name ?? t.Reference ?? t.LineItems?.[0]?.Description ?? null,
+        accountName: t.BankAccount?.Name ?? null,
+        accountType: t.Type ?? null,
+        currency: t.CurrencyCode ?? null,
+      });
+    }
+
+    if (batch.length < 100) break;
+  }
+
+  return results;
 }
 
 /**
