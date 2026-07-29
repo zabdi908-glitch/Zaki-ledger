@@ -237,3 +237,165 @@ create unique index if not exists oauth_connections_user_provider_idx
 -- Second reload: covers the user_id/oauth_connections changes made after the
 -- first notify above, same reasoning.
 notify pgrst, 'reload schema';
+
+-- =========================================================================
+-- PHASE 3: BANK RECONCILIATION ENGINE
+--
+-- Auto-reconciles bank statements (CSV/OFX today, PDF tomorrow) against
+-- QuickBooks/Xero posted transactions. Unlike `invoices`/`corrections`/
+-- `pending_documents` above, every table here is created AFTER multi-user
+-- auth already existed in this app, so `user_id` is `not null` from the
+-- start — there is no pre-auth data to adopt and no orphan-backfill dance
+-- needed for this feature.
+-- =========================================================================
+
+-- One row per uploaded bank statement file.
+create table if not exists bank_statements (
+  id                      uuid primary key default gen_random_uuid(),
+  user_id                 uuid not null references auth.users(id),
+  file_name               text,
+  file_format             text not null,          -- 'csv' | 'ofx' | 'pdf'
+  upload_date             timestamptz not null default now(),
+  statement_period_start  date,
+  statement_period_end    date,
+  currency                text,                   -- 'GBP', 'USD', 'EUR', ...
+  opening_balance         numeric(12,2),
+  closing_balance         numeric(12,2),
+  transaction_count       int,
+  created_at              timestamptz not null default now()
+);
+
+create index if not exists bank_statements_user_idx
+  on bank_statements (user_id, upload_date desc);
+
+-- Transactions extracted from a bank statement.
+create table if not exists bank_transactions (
+  id                uuid primary key default gen_random_uuid(),
+  statement_id      uuid not null references bank_statements(id),
+  user_id           uuid not null references auth.users(id),
+  transaction_date  date not null,
+  posted_date       date,             -- may differ from transaction_date (pending clearing)
+  merchant          text,
+  description       text,
+  amount            numeric(12,2) not null,  -- signed: positive = debit, negative = credit
+  currency          text,
+  transaction_id    text,             -- the bank's own transaction id, if present
+  memo              text,
+  created_at        timestamptz not null default now()
+);
+
+create index if not exists bank_transactions_statement_idx
+  on bank_transactions (statement_id);
+create index if not exists bank_transactions_user_idx
+  on bank_transactions (user_id, transaction_date);
+
+-- QB/Xero transactions already posted. Populated by `saveQbTransactions` in
+-- lib/reconciliation-store.ts — today via the /api/reconciliation/qb-transactions
+-- import route (a Session-1 stand-in), tomorrow by the live QB/Xero sync calling
+-- the same store function directly. Either way this table is the single write
+-- path, so the matching algorithm never cares which one populated a given row.
+create table if not exists qb_transactions (
+  id                 uuid primary key default gen_random_uuid(),
+  user_id            uuid not null references auth.users(id),
+  qb_transaction_id  text,            -- QB/Xero's own id for this transaction
+  qb_account_id      text,
+  posted_date        date not null,
+  amount             numeric(12,2) not null,
+  description        text,
+  account_name       text,
+  account_type       text,            -- 'bank', 'expense', etc.
+  currency           text,
+  synced_from_qb_at  timestamptz,
+  created_at         timestamptz not null default now()
+);
+
+create index if not exists qb_transactions_user_idx
+  on qb_transactions (user_id, posted_date);
+
+-- Matches between a bank transaction and a QB/Xero transaction, auto-scored
+-- or manually created. `unique(bank_transaction_id, statement_id)` is what
+-- makes "can't match the same bank transaction twice" a database guarantee
+-- rather than an application-level promise.
+create table if not exists reconciliation_matches (
+  id                    uuid primary key default gen_random_uuid(),
+  user_id               uuid not null references auth.users(id),
+  statement_id          uuid not null references bank_statements(id),
+  bank_transaction_id   uuid not null references bank_transactions(id),
+  qb_transaction_id     uuid references qb_transactions(id),  -- null on an unmatched red-flag row
+  confidence            numeric(4,3),        -- 0.000-1.000
+  match_reason          text,                -- e.g. 'amount + date + merchant'
+  flagged_level         text not null,       -- 'green' | 'yellow' | 'red'
+  matched_by            text not null,       -- 'auto' | 'manual'
+  matched_at            timestamptz not null default now(),
+  approved_by           uuid references auth.users(id),
+  approved_at           timestamptz,
+  created_at            timestamptz not null default now(),
+  unique (bank_transaction_id, statement_id)
+);
+
+create index if not exists reconciliation_matches_statement_idx
+  on reconciliation_matches (statement_id);
+
+-- Bank transactions that didn't clear the matching threshold at all (as
+-- opposed to a 'red' flagged_level match, which still has a best-guess
+-- candidate). Recorded so a statement's unmatched items survive independent
+-- of whatever the matching algorithm's current thresholds are.
+create table if not exists unmatched_transactions (
+  id                   uuid primary key default gen_random_uuid(),
+  user_id              uuid not null references auth.users(id),
+  statement_id         uuid not null references bank_statements(id),
+  bank_transaction_id  uuid not null references bank_transactions(id),
+  unmatched_reason     text,        -- 'no qb entry', 'low confidence', etc.
+  created_at           timestamptz not null default now()
+);
+
+create index if not exists unmatched_transactions_statement_idx
+  on unmatched_transactions (statement_id);
+
+-- One row per completed reconciliation approval — the summary a bookkeeper
+-- signs off on.
+create table if not exists reconciliation_reports (
+  id                       uuid primary key default gen_random_uuid(),
+  user_id                  uuid not null references auth.users(id),
+  statement_id             uuid not null references bank_statements(id),
+  period_start             date,
+  period_end               date,
+  bank_opening_balance     numeric(12,2),
+  bank_closing_balance     numeric(12,2),
+  qb_opening_balance       numeric(12,2),
+  qb_closing_balance       numeric(12,2),
+  total_matched            numeric(12,2),
+  total_unmatched_bank     numeric(12,2),
+  total_unmatched_qb       numeric(12,2),
+  variance                 numeric(12,2),
+  is_reconciled            boolean not null default false,
+  reconciled_at            timestamptz,
+  created_at               timestamptz not null default now()
+);
+
+-- One report per statement — approving matches regenerates it in place
+-- (see lib/reconciliation-store.ts generateReport, which upserts on this).
+create unique index if not exists reconciliation_reports_statement_idx
+  on reconciliation_reports (statement_id);
+
+-- Append-only audit trail for match lifecycle events (created/approved/
+-- rejected). Same "never UPDATE or DELETE" rule as `corrections`/
+-- `confirmations` above — this is the compliance record the brief calls
+-- immutable.
+create table if not exists reconciliation_audit_log (
+  id                        uuid primary key default gen_random_uuid(),
+  reconciliation_match_id   uuid not null references reconciliation_matches(id),
+  action                    text not null,   -- 'match_created' | 'match_approved' | 'match_rejected'
+  action_by                 uuid references auth.users(id),
+  action_at                 timestamptz not null default now(),
+  old_confidence            numeric(4,3),
+  new_confidence            numeric(4,3),
+  notes                     text,
+  created_at                timestamptz not null default now()
+);
+
+create index if not exists reconciliation_audit_log_match_idx
+  on reconciliation_audit_log (reconciliation_match_id);
+
+-- Third reload: covers every Phase 3 table added above.
+notify pgrst, 'reload schema';
