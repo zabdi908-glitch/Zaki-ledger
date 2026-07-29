@@ -45,7 +45,12 @@ export async function getDashboardData(userId: string): Promise<DashboardData> {
     getMonthlyInvoiceCounts(userId, 6),
     recentCorrections(userId, 10),
     listRecentApprovedInvoices(userId, 5),
-    listRecentApprovedMatches(userId, 5),
+    // Reconciliation is a newer feature than the invoices/corrections tables
+    // above — its schema may not be provisioned in every environment yet
+    // (see the Phase 3 migration in db/schema.sql). The rest of the
+    // Dashboard shouldn't 500 for a user just because that migration hasn't
+    // run: this source degrades to "no reconciliation activity" instead.
+    listRecentApprovedMatches(userId, 5).catch(() => []),
     quickBooksConnectionStatus(userId).catch(() => ({ connected: false })),
     xeroConnectionStatus(userId).catch(() => ({ connected: false })),
   ]);
