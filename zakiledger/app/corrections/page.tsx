@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import type { Correction } from "@/lib/store";
+import { banner, card, color, figures, font } from "@/lib/theme";
 
 /**
  * The correction ledger, made visible. This is the moat on screen: every human
@@ -19,20 +20,32 @@ export default function CorrectionsPage() {
   }, []);
 
   return (
-    <main style={{ maxWidth: 860, margin: "0 auto", padding: "48px 20px" }}>
-      <a href="/" style={{ color: "#1a2b4a", fontSize: 14 }}>← Back</a>
-      <h1 style={{ marginBottom: 4, marginTop: 12 }}>Correction ledger</h1>
-      <p style={{ color: "#667", marginTop: 0 }}>
-        Every human fix, logged. This is both the audit trail and what makes the AI
-        smarter for next time.
+    <main style={{ maxWidth: 880, margin: "0 auto", padding: "48px 22px 72px" }}>
+      <a href="/" style={{ color: color.inkSoft, fontSize: 14, fontWeight: 600 }}>
+        ← Back
+      </a>
+      <h1
+        style={{
+          marginBottom: 6,
+          marginTop: 14,
+          color: color.ink,
+          fontFamily: font.display,
+          fontWeight: 600,
+          fontSize: 30,
+        }}
+      >
+        Correction ledger
+      </h1>
+      <p style={{ color: color.inkSoft, marginTop: 0, marginBottom: 28, lineHeight: 1.6 }}>
+        Every human fix, logged. This is both the audit trail and what makes the AI smarter for
+        next time.
       </p>
 
-      {error && <p style={{ color: "#c0392b" }}>{error}</p>}
+      {error && <p style={banner("bad")}>{error}</p>}
 
       {corrections && corrections.length === 0 && (
         <p style={emptyStyle}>
-          No corrections yet. Approve an invoice after editing a field, and it will
-          appear here.
+          No corrections yet. Approve an invoice after editing a field, and it will appear here.
         </p>
       )}
 
@@ -45,19 +58,23 @@ export default function CorrectionsPage() {
                 <th style={thStyle}>Field</th>
                 <th style={thStyle}>AI read</th>
                 <th style={thStyle}>Corrected to</th>
-                <th style={thStyle}>AI confidence</th>
+                <th style={{ ...thStyle, textAlign: "right" }}>AI confidence</th>
                 <th style={thStyle}>When</th>
               </tr>
             </thead>
             <tbody>
               {corrections.map((c) => (
                 <tr key={c.id}>
-                  <td style={tdStyle}>{c.supplierName}</td>
+                  <td style={{ ...tdStyle, fontFamily: font.display, fontWeight: 600 }}>
+                    {c.supplierName}
+                  </td>
                   <td style={tdStyle}>{c.field}</td>
-                  <td style={{ ...tdStyle, color: "#c0392b" }}>{c.aiValue}</td>
-                  <td style={{ ...tdStyle, color: "#1e8449", fontWeight: 600 }}>{c.humanValue}</td>
-                  <td style={tdStyle}>{(c.aiConfidence * 100).toFixed(0)}%</td>
-                  <td style={{ ...tdStyle, color: "#889", whiteSpace: "nowrap" }}>
+                  <td style={{ ...tdStyle, color: color.stampDeep }}>{c.aiValue}</td>
+                  <td style={{ ...tdStyle, color: color.forestDeep, fontWeight: 600 }}>{c.humanValue}</td>
+                  <td style={{ ...tdStyle, textAlign: "right", ...figures }}>
+                    {(c.aiConfidence * 100).toFixed(0)}%
+                  </td>
+                  <td style={{ ...tdStyle, color: color.inkFaint, whiteSpace: "nowrap", ...figures }}>
                     {new Date(c.createdAt).toLocaleString()}
                   </td>
                 </tr>
@@ -67,7 +84,7 @@ export default function CorrectionsPage() {
         </div>
       )}
 
-      {!corrections && !error && <p style={{ color: "#889" }}>Loading…</p>}
+      {!corrections && !error && <p style={{ color: color.inkFaint }}>Loading…</p>}
     </main>
   );
 }
@@ -75,29 +92,26 @@ export default function CorrectionsPage() {
 const tableStyle: React.CSSProperties = {
   width: "100%",
   borderCollapse: "collapse",
-  background: "#fff",
-  borderRadius: 12,
+  background: color.paper,
+  borderRadius: 16,
   overflow: "hidden",
-  boxShadow: "0 1px 3px rgba(0,0,0,0.08)",
+  border: `1px solid ${color.paperLine}`,
   fontSize: 14,
 };
 const thStyle: React.CSSProperties = {
   textAlign: "left",
-  padding: "10px 12px",
-  background: "#f0f2f5",
-  color: "#556",
-  fontWeight: 600,
-  borderBottom: "1px solid #e3e7eb",
+  padding: "12px 16px",
+  background: color.paperAlt,
+  color: color.inkSoft,
+  fontWeight: 700,
+  fontSize: 12,
+  letterSpacing: "0.06em",
+  textTransform: "uppercase",
+  borderBottom: `1px solid ${color.paperLine}`,
 };
 const tdStyle: React.CSSProperties = {
-  padding: "10px 12px",
-  borderBottom: "1px solid #eef1f4",
+  padding: "11px 16px",
+  borderBottom: `1px solid ${color.paperAlt}`,
+  color: color.ink,
 };
-const emptyStyle: React.CSSProperties = {
-  marginTop: 24,
-  padding: 24,
-  background: "#fff",
-  borderRadius: 12,
-  color: "#667",
-  boxShadow: "0 1px 3px rgba(0,0,0,0.08)",
-};
+const emptyStyle: React.CSSProperties = card({ marginTop: 24, color: color.inkSoft });

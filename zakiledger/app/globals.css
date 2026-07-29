@@ -1,0 +1,97 @@
+/* Zaki Ledger — global resets and the handful of things inline styles in
+   lib/theme.ts can't reach (pseudo-elements, keyframes, media queries).
+   Color values here mirror lib/theme.ts's `color` export — keep them in
+   sync if either changes. */
+
+:root {
+  --zl-paper: #ffffff;
+  --zl-ink: #17140f;
+  --zl-forest: #0b6b4c;
+  --zl-forest-tint: #e7f3ec;
+  --zl-line: #e7e2d4;
+  --zl-faint: #9c9584;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--zl-paper);
+  color: var(--zl-ink);
+  /* A near-invisible paper grain rather than a flat, clinical white field —
+     the one texture in the whole app, applied once, globally. */
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.025'/%3E%3C/svg%3E");
+}
+
+::selection {
+  background: var(--zl-forest-tint);
+  color: var(--zl-ink);
+}
+
+::placeholder {
+  color: var(--zl-faint);
+  opacity: 1;
+}
+
+a {
+  color: inherit;
+}
+
+button {
+  font: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--zl-forest);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* --- The signature moment: an approval stamped, not just confirmed. ------ */
+@keyframes zl-stamp-in {
+  0% {
+    opacity: 0;
+    transform: scale(1.5) rotate(-18deg);
+  }
+  60% {
+    opacity: 1;
+    transform: scale(0.94) rotate(-2deg);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) rotate(-4deg);
+  }
+}
+
+.zl-stamp {
+  animation: zl-stamp-in 420ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .zl-stamp {
+    animation: none;
+    transform: rotate(-4deg);
+  }
+}
+
+/* Thin, quiet scrollbars — a paper ledger doesn't have chrome. */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--zl-line);
+  border-radius: 999px;
+}

@@ -15,6 +15,22 @@ import {
   gateApproval,
   reasonText,
 } from "@/lib/validation";
+import ApprovalStamp from "@/components/ApprovalStamp";
+import {
+  banner,
+  button,
+  card,
+  chip as chipStyle,
+  color,
+  disabledOverride,
+  eyebrow,
+  figures,
+  font,
+  input as inputStyleFor,
+  radius,
+  seal,
+  typeBadge,
+} from "@/lib/theme";
 
 type ConfiguredStatus = { xero: { configured: boolean }; quickbooks: { configured: boolean }; demo?: boolean };
 /** A provider's live connection status: null while the check is in flight. */
@@ -348,23 +364,29 @@ export default function Home() {
     : null;
 
   return (
-    <main style={{ maxWidth: 680, margin: "0 auto", padding: "40px 20px 64px" }}>
-      <header style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
-        <span style={markStyle}>ZL</span>
+    <main style={{ maxWidth: 700, margin: "0 auto", padding: "48px 22px 72px" }}>
+      <header style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 10 }}>
+        <span style={seal(44)}>ZL</span>
         <div>
-          <div style={{ fontSize: 20, fontWeight: 700, color: "#1a2b4a", lineHeight: 1.1 }}>
+          <div
+            style={{
+              fontSize: 24,
+              fontWeight: 600,
+              color: color.ink,
+              lineHeight: 1.15,
+              fontFamily: font.display,
+            }}
+          >
             Zaki Ledger
           </div>
-          <div style={{ fontSize: 13, color: "#8892a0" }}>
-            AI invoice entry for bookkeepers
-          </div>
+          <div style={{ fontSize: 13, color: color.inkSoft }}>AI invoice entry for bookkeepers</div>
         </div>
       </header>
 
-      <p style={{ color: "#556", marginTop: 0, marginBottom: 20 }}>
+      <p style={{ color: color.inkSoft, marginTop: 0, marginBottom: 24, lineHeight: 1.6 }}>
         The AI drafts every field with a confidence score. You check and approve in one click —
         nothing is saved without you.{" "}
-        <a href="/corrections" style={{ color: "#1a2b4a", fontWeight: 600 }}>
+        <a href="/corrections" style={{ color: color.ink, fontWeight: 700 }}>
           View the correction ledger →
         </a>
       </p>
@@ -373,9 +395,7 @@ export default function Home() {
           One platform at a time: connecting one hides the other, and posting
           only ever targets whichever is connected (lib/accounting.ts). */}
       <section style={connBarStyle}>
-        <span style={{ fontSize: 12, fontWeight: 700, color: "#8892a0", letterSpacing: 0.4 }}>
-          ACCOUNTING
-        </span>
+        <span style={eyebrow}>Accounting</span>
         <AccountingConnection
           configured={configured}
           xeroStatus={xeroStatus}
@@ -389,8 +409,8 @@ export default function Home() {
       </section>
 
       {justConnected && (
-        <p style={learnedStyle}>
-          ✅ Connected to <strong>{justConnected === "quickbooks" ? "QuickBooks" : "Xero"}</strong>.
+        <p style={banner("ok")}>
+          Connected to <strong>{justConnected === "quickbooks" ? "QuickBooks" : "Xero"}</strong>.
           Approved invoices will now post there as draft bills.
         </p>
       )}
@@ -399,7 +419,7 @@ export default function Home() {
           second pick mid-stream would replace the component still receiving
           results, so those documents would land in the queue having never
           appeared on screen. */}
-      <label style={busy ? { ...btnStyle, opacity: 0.7 } : btnStyle}>
+      <label style={busy ? { ...button("primary"), ...disabledOverride() } : button("primary")}>
         {loading
           ? "Reading document…"
           : batchRunning
@@ -414,11 +434,11 @@ export default function Home() {
           disabled={busy}
         />
       </label>
-      <p style={{ margin: "8px 0 0", fontSize: 13, color: "#8892a0" }}>
+      <p style={{ margin: "10px 0 0", fontSize: 13, color: color.inkSoft }}>
         Pick several at once to read them in parallel and send them straight to the approval queue.
       </p>
 
-      {error && <p style={{ color: "#c0392b", marginTop: 16 }}>{error}</p>}
+      {error && <p style={{ ...banner("bad"), marginTop: 16 }}>{error}</p>}
 
       {/* 2+ files: parallel read, live progress, per-file result. */}
       {batchFiles && (
@@ -434,10 +454,10 @@ export default function Home() {
       {/* Read fine, but never made it to the queue. Say so plainly — and say what
           still works — instead of leaving an empty queue to look like data loss. */}
       {result?.queueError && (
-        <p style={queueWarnStyle}>
-          ⚠️ This document was read successfully but couldn&apos;t be added to the approval
-          queue, so it won&apos;t appear on the{" "}
-          <a href="/pending" style={{ color: "#7d4a00", fontWeight: 700 }}>
+        <p style={{ ...banner("warn"), marginTop: 20 }}>
+          This document was read successfully but couldn&apos;t be added to the approval queue, so
+          it won&apos;t appear on the{" "}
+          <a href="/pending" style={{ color: color.goldDeep, fontWeight: 700 }}>
             pending documents
           </a>{" "}
           page. You can still review and approve it below. <br />
@@ -463,22 +483,25 @@ export default function Home() {
         </a>
       )}
 
-      {/* Cold-open explainer — helps a first-time visitor understand it instantly. */}
+      {/* Cold-open explainer — helps a first-time visitor understand it instantly.
+          Numbered because it genuinely is a sequence: you upload, then review,
+          then approve — order carries real meaning here, not decoration. */}
       {!result && !loading && !error && !batchFiles && pendingCount === 0 && (
-        <section style={howCardStyle}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: "#8892a0", letterSpacing: 0.4 }}>
-            HOW IT WORKS
-          </div>
-          <ol style={{ margin: "12px 0 0", paddingLeft: 0, listStyle: "none" }}>
+        <section style={card({ marginTop: 28 })}>
+          <div style={eyebrow}>How it works</div>
+          <ol style={{ margin: "14px 0 0", paddingLeft: 0, listStyle: "none" }}>
             {[
-              ["1", "Upload", "Drop in an invoice or receipt — PDF or a photo."],
-              ["2", "Review", "Each field is scored: green means sure, amber means check. Fix anything wrong."],
-              ["3", "Approve & it learns", "One click. Every correction makes the next read sharper."],
+              ["01", "Upload", "Drop in an invoice or receipt — PDF or a photo."],
+              ["02", "Review", "Each field is scored: green means sure, amber means check. Fix anything wrong."],
+              ["03", "Approve & it learns", "One click. Every correction makes the next read sharper."],
             ].map(([n, t, d]) => (
-              <li key={n} style={{ display: "flex", gap: 12, marginBottom: 12 }}>
+              <li key={n} style={{ display: "flex", gap: 14, marginBottom: 14 }}>
                 <span style={stepNumStyle}>{n}</span>
-                <span style={{ fontSize: 14, color: "#445" }}>
-                  <strong style={{ color: "#1a2b4a" }}>{t}.</strong> {d}
+                <span style={{ fontSize: 14, color: color.inkSoft, paddingTop: 2 }}>
+                  <strong style={{ color: color.ink, fontFamily: font.display, fontWeight: 600 }}>
+                    {t}.
+                  </strong>{" "}
+                  {d}
                 </span>
               </li>
             ))}
@@ -487,23 +510,23 @@ export default function Home() {
       )}
 
       {result?.demo && (
-        <p style={demoStyle}>
-          🧪 <strong>Demo mode</strong> — this is a sample {isReceipt ? "receipt" : "invoice"}. Add
-          an API key to extract from your own uploads. (Name a file
-          &ldquo;receipt&rdquo; or &ldquo;messy&rdquo; to preview the receipt samples.)
+        <p style={{ ...banner("info"), marginTop: 20 }}>
+          <strong>Demo mode</strong> — this is a sample {isReceipt ? "receipt" : "invoice"}. Add an
+          API key to extract from your own uploads. (Name a file &ldquo;receipt&rdquo; or
+          &ldquo;messy&rdquo; to preview the receipt samples.)
         </p>
       )}
 
       {result?.refinedForSupplier && (
-        <p style={learnedStyle}>
-          🧠 Refined using what we&apos;ve learned from past corrections for{" "}
+        <p style={{ ...banner("ok"), marginTop: 20 }}>
+          Refined using what we&apos;ve learned from past corrections for{" "}
           <strong>{result.refinedForSupplier}</strong>.
         </p>
       )}
 
       {result?.calibratedFields && result.calibratedFields.length > 0 && (
-        <p style={learnedStyle}>
-          📈 Confidence raised on{" "}
+        <p style={{ ...banner("ok"), marginTop: 20 }}>
+          Confidence raised on{" "}
           <strong>
             {result.calibratedFields.map((f) => labels[f as ReviewableField] ?? f).join(", ")}
           </strong>{" "}
@@ -513,11 +536,11 @@ export default function Home() {
 
       {/* Duplicate warning — decide before reviewing. Never auto-resolved. */}
       {result?.duplicate && !proceedDuplicate && (
-        <section style={dupCardStyle}>
-          <div style={{ fontSize: 15, fontWeight: 700, color: "#7d4a00", marginBottom: 6 }}>
-            ⚠️ Possible duplicate
+        <section style={{ ...card({ marginTop: 24, padding: 22 }), background: color.goldTint, border: `1px solid ${color.gold}44` }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: color.goldDeep, marginBottom: 6 }}>
+            Possible duplicate
           </div>
-          <p style={{ margin: "0 0 14px", color: "#6b4b1a", fontSize: 14 }}>
+          <p style={{ margin: "0 0 16px", color: color.goldDeep, fontSize: 14, lineHeight: 1.5 }}>
             This looks like a duplicate of {isReceipt ? "a receipt" : "an invoice"} already processed
             on <strong>{new Date(result.duplicate.processedOn).toLocaleDateString()}</strong> —{" "}
             {isReceipt ? (
@@ -532,10 +555,10 @@ export default function Home() {
             )}
           </p>
           <div style={{ display: "flex", gap: 10 }}>
-            <button style={approveBtn} onClick={() => setProceedDuplicate(true)}>
+            <button style={button("success")} onClick={() => setProceedDuplicate(true)}>
               Proceed anyway
             </button>
-            <button style={discardBtn} onClick={discard}>
+            <button style={button("outline")} onClick={discard}>
               Discard
             </button>
           </div>
@@ -543,13 +566,13 @@ export default function Home() {
       )}
 
       {result && (!result.duplicate || proceedDuplicate) && (
-        <section style={cardStyle}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: "#8892a0", letterSpacing: 0.4, marginBottom: 16 }}>
-            REVIEW &amp; APPROVE
+        <section style={card({ marginTop: 28 })}>
+          <div style={{ ...eyebrow, marginBottom: 18, display: "flex", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+            Review &amp; approve
             {/* What the AI decided this document is — shown, with its confidence,
                 because the type changes which fields are required. */}
-            <span style={docTypeBadgeStyle}>
-              {isReceipt ? "🧾 Receipt" : "📄 Invoice"}
+            <span style={typeBadge(isReceipt ? "receipt" : "invoice")}>
+              {isReceipt ? "Receipt" : "Invoice"}
               {typeOverride ? " · set by you" : typeConfirmed ? " · confirmed" : ` · ${(typeConfidence * 100).toFixed(0)}%`}
             </span>
           </div>
@@ -559,7 +582,7 @@ export default function Home() {
               are matched. The human settles it here — the type isn't an editable
               field, so without this the block would be a deadlock. */}
           {typeConfidence < 0.8 && !typeConfirmed && (
-            <div style={typePickerStyle}>
+            <div style={{ ...banner("warn"), margin: "0 0 20px" }}>
               <div style={{ fontWeight: 700, marginBottom: 4 }}>
                 Is this an invoice or a receipt?
               </div>
@@ -572,13 +595,13 @@ export default function Home() {
                 {(["invoice", "receipt"] as DocumentType[]).map((t) => (
                   <button
                     key={t}
-                    style={t === detectedType ? approveBtn : discardBtn}
+                    style={t === detectedType ? button("success") : button("outline")}
                     onClick={() => {
                       setTypeOverride(t === detectedType ? null : t);
                       setTypeConfirmed(true);
                     }}
                   >
-                    {t === "receipt" ? "🧾 Receipt" : "📄 Invoice"}
+                    {t === "receipt" ? "Receipt" : "Invoice"}
                   </button>
                 ))}
               </div>
@@ -615,7 +638,7 @@ export default function Home() {
                   muted={absentByDesign}
                 />
                 {absentByDesign && (
-                  <p style={notStatedNoteStyle}>
+                  <p style={{ margin: "-8px 0 14px", color: color.inkFaint, fontSize: 12 }}>
                     {f === "invoiceNumber"
                       ? "No receipt number printed on this receipt — optional, leave blank."
                       : `Not itemised on this receipt — only a gross total is shown. Add it if you know it.`}
@@ -625,27 +648,31 @@ export default function Home() {
                     so it clears the gate AND records a confirmation (not a reset). */}
                 {low && !absentByDesign && (
                   <button
-                    style={confirmAsIsBtn}
+                    style={{ ...button("outline", "sm"), color: color.forestDeep, border: `1px solid ${color.forest}`, margin: "-6px 0 14px" }}
                     onClick={() => setAffirmed((prev) => ({ ...prev, [f]: true }))}
                   >
                     ✓ Confirm this is correct
                   </button>
                 )}
                 {affirmedAsIs && !low && (
-                  <p style={affirmedNoteStyle}>✓ Confirmed correct as-is</p>
+                  <p style={{ margin: "-6px 0 14px", color: color.forestDeep, fontSize: 12, fontWeight: 600 }}>
+                    ✓ Confirmed correct as-is
+                  </p>
                 )}
                 {mem && (
-                  <p style={memoryNoteStyle}>
-                    🧠 Seen {mem.count}× before from this {isReceipt ? "merchant" : "supplier"} · confidence{" "}
+                  <p style={{ margin: "-8px 0 14px", color: color.violet, fontSize: 12, fontWeight: 600 }}>
+                    Seen {mem.count}× before from this {isReceipt ? "merchant" : "supplier"} · confidence{" "}
                     {(mem.confidence * 100).toFixed(0)}%
                   </p>
                 )}
                 {totals &&
                   (totals.ok ? (
-                    <p style={totalsOkStyle}>✓ Totals check out</p>
+                    <p style={{ margin: "-6px 0 14px", color: color.forestDeep, fontSize: 13, fontWeight: 600 }}>
+                      ✓ Totals check out
+                    </p>
                   ) : (
-                    <p style={totalsBadStyle}>
-                      ❌ Totals don&apos;t add up — expected {totals.expected.toFixed(2)}, found{" "}
+                    <p style={{ ...banner("bad"), margin: "-6px 0 14px", padding: "8px 12px", fontSize: 13, fontWeight: 600 }}>
+                      Totals don&apos;t add up — expected {totals.expected.toFixed(2)}, found{" "}
                       {totals.found.toFixed(2)}
                     </p>
                   ))}
@@ -654,9 +681,9 @@ export default function Home() {
           })}
           {/* Confidence gate — sits alongside the arithmetic check above. */}
           {gate && gate.status !== "ready" && (
-            <div style={gate.status === "blocked" ? gateBlockedStyle : gateReviewStyle}>
+            <div style={{ ...banner(gate.status === "blocked" ? "bad" : "warn"), margin: "4px 0 20px" }}>
               <div style={{ fontWeight: 700 }}>
-                {gate.status === "blocked" ? "❌ Human Review Required" : "⚠ Review Required"}
+                {gate.status === "blocked" ? "Human review required" : "Review required"}
               </div>
               <ul style={{ margin: "6px 0 0", paddingLeft: 20 }}>
                 {gate.reasons.map((r) => (
@@ -669,11 +696,11 @@ export default function Home() {
           {/* Approve-time duplicate: the corrected values matched an existing
               invoice the raw extraction missed. Decide before it's saved/posted. */}
           {approveDuplicate ? (
-            <section style={dupCardStyle}>
-              <div style={{ fontSize: 15, fontWeight: 700, color: "#7d4a00", marginBottom: 6 }}>
-                ⚠️ Possible duplicate
+            <section style={{ ...card({ padding: 22 }), background: color.goldTint, border: `1px solid ${color.gold}44` }}>
+              <div style={{ fontSize: 15, fontWeight: 700, color: color.goldDeep, marginBottom: 6 }}>
+                Possible duplicate
               </div>
-              <p style={{ margin: "0 0 14px", color: "#6b4b1a", fontSize: 14 }}>
+              <p style={{ margin: "0 0 16px", color: color.goldDeep, fontSize: 14, lineHeight: 1.5 }}>
                 After your corrections, this matches {isReceipt ? "a receipt" : "an invoice"} already
                 processed on{" "}
                 <strong>{new Date(approveDuplicate.processedOn).toLocaleDateString()}</strong> —{" "}
@@ -689,10 +716,10 @@ export default function Home() {
                 )}
               </p>
               <div style={{ display: "flex", gap: 10 }}>
-                <button style={approveBtn} onClick={() => { setApproveDuplicate(null); onApprove(true); }}>
+                <button style={button("success")} onClick={() => { setApproveDuplicate(null); onApprove(true); }}>
                   Approve anyway
                 </button>
-                <button style={discardBtn} onClick={discard}>
+                <button style={button("outline")} onClick={discard}>
                   Discard
                 </button>
               </div>
@@ -701,23 +728,26 @@ export default function Home() {
             /* Blocked hides the button entirely — a critical field must be fixed
                first. "review" still lets the human override ("Approve anyway"). */
             gate?.status !== "blocked" && (
-              <button style={approveBtn} onClick={() => onApprove()}>
-                {gate?.status === "review" ? "Approve anyway" : "✓ Approve"}
+              <button style={button("success")} onClick={() => onApprove()}>
+                {gate?.status === "review" ? "Approve anyway" : "Approve"}
               </button>
             )
           )}
           {approved && (
-            <div style={{ marginTop: 4 }}>
-              <p style={{ color: "#1e8449", fontWeight: 600, marginBottom: 12 }}>{approved}</p>
+            <div style={{ marginTop: 16 }}>
+              <ApprovalStamp detail={approved} />
               {/* The form above stays mounted (nothing to re-review), so without
                   this the human's only way to do anything else is to scroll back
                   up to the file picker — there's no signal that they're done. */}
-              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                <button style={approveBtn} onClick={discard}>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 20 }}>
+                <button style={button("success")} onClick={discard}>
                   ＋ Upload another
                 </button>
                 {pendingCount > 0 && (
-                  <a href="/pending" style={{ ...discardBtn, textDecoration: "none", display: "inline-flex", alignItems: "center" }}>
+                  <a
+                    href="/pending"
+                    style={{ ...button("outline"), textDecoration: "none" }}
+                  >
                     View pending queue ({pendingCount})
                   </a>
                 )}
@@ -875,330 +905,100 @@ function Field({
 }) {
   const low = !muted && confidence < CONFIDENCE_THRESHOLD;
   return (
-    <div style={{ marginBottom: 14 }}>
-      <label style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13, color: "#556", marginBottom: 4 }}>
-        <span style={{ fontWeight: 600 }}>{label}</span>
-        <span style={muted ? chipMuted : low ? chipLow : chipOk}>
-          {muted ? "— not stated" : `${low ? "⚠ check" : "✓"} ${(confidence * 100).toFixed(0)}%`}
+    <div style={{ marginBottom: 16 }}>
+      <label
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          fontSize: 13,
+          color: color.inkSoft,
+          marginBottom: 6,
+        }}
+      >
+        <span style={{ fontWeight: 600, color: color.ink }}>{label}</span>
+        <span style={{ ...chipStyle(muted ? "muted" : low ? "bad" : "ok"), ...figures }}>
+          {muted ? "— not stated" : `${low ? "check" : "✓"} ${(confidence * 100).toFixed(0)}%`}
         </span>
       </label>
       <input
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        style={{
-          width: "100%",
-          padding: "10px 12px",
-          borderRadius: 8,
-          fontSize: 15,
-          boxSizing: "border-box",
-          border: `1px solid ${low ? "#e6b0aa" : "#d5dbdb"}`,
-          background: low ? "#fdf2f0" : muted ? "#fafbfc" : "#fff",
-          outline: "none",
-        }}
+        style={inputStyleFor(low ? "low" : "normal")}
       />
     </div>
   );
 }
 
-const markStyle: React.CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  justifyContent: "center",
-  width: 40,
-  height: 40,
-  borderRadius: 10,
-  background: "#1a2b4a",
-  color: "#fff",
-  fontWeight: 700,
-  fontSize: 15,
-  letterSpacing: 0.5,
-};
-const btnStyle: React.CSSProperties = {
-  display: "inline-block",
-  padding: "12px 20px",
-  background: "#1a2b4a",
-  color: "#fff",
-  borderRadius: 10,
-  cursor: "pointer",
-  fontWeight: 600,
-  fontSize: 15,
-};
-const howCardStyle: React.CSSProperties = {
-  marginTop: 24,
-  padding: 24,
-  background: "#fff",
-  borderRadius: 12,
-  boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
-  border: "1px solid #eef1f4",
-};
 const stepNumStyle: React.CSSProperties = {
   flexShrink: 0,
   display: "inline-flex",
   alignItems: "center",
   justifyContent: "center",
-  width: 24,
-  height: 24,
+  width: 30,
+  height: 30,
   borderRadius: "50%",
-  background: "#eef2ff",
-  color: "#1a2b4a",
+  background: color.forestTint,
+  color: color.forestDeep,
   fontWeight: 700,
-  fontSize: 13,
-};
-const cardStyle: React.CSSProperties = {
-  marginTop: 24,
-  padding: 24,
-  background: "#fff",
-  borderRadius: 12,
-  boxShadow: "0 1px 3px rgba(0,0,0,0.08)",
-  border: "1px solid #eef1f4",
-};
-const demoStyle: React.CSSProperties = {
-  marginTop: 20,
-  background: "#eef2ff",
-  border: "1px solid #c7d2fe",
-  color: "#3730a3",
-  padding: "10px 14px",
-  borderRadius: 8,
-  fontSize: 14,
-};
-const learnedStyle: React.CSSProperties = {
-  marginTop: 20,
-  background: "#e8f8f0",
-  border: "1px solid #a9dfbf",
-  color: "#1e6b45",
-  padding: "10px 14px",
-  borderRadius: 8,
-  fontSize: 14,
-};
-const confirmAsIsBtn: React.CSSProperties = {
-  margin: "-6px 0 12px",
-  padding: "5px 12px",
-  background: "#fff",
-  color: "#1e8449",
-  border: "1px solid #a9dfbf",
-  borderRadius: 8,
-  cursor: "pointer",
-  fontWeight: 600,
   fontSize: 12,
-};
-const affirmedNoteStyle: React.CSSProperties = {
-  margin: "-6px 0 12px",
-  color: "#1e8449",
-  fontSize: 12,
-  fontWeight: 600,
-};
-const memoryNoteStyle: React.CSSProperties = {
-  margin: "-8px 0 14px",
-  color: "#6b5bd0",
-  fontSize: 12,
-  fontWeight: 600,
-};
-const totalsOkStyle: React.CSSProperties = {
-  margin: "-6px 0 14px",
-  color: "#1e8449",
-  fontSize: 13,
-  fontWeight: 600,
-};
-const totalsBadStyle: React.CSSProperties = {
-  margin: "-6px 0 14px",
-  padding: "8px 12px",
-  background: "#fdecea",
-  border: "1px solid #e6b0aa",
-  borderRadius: 8,
-  color: "#c0392b",
-  fontSize: 13,
-  fontWeight: 600,
-};
-const gateBlockedStyle: React.CSSProperties = {
-  margin: "4px 0 16px",
-  padding: "12px 14px",
-  background: "#fdecea",
-  border: "1px solid #e6b0aa",
-  borderRadius: 8,
-  color: "#c0392b",
-  fontSize: 14,
-};
-const gateReviewStyle: React.CSSProperties = {
-  margin: "4px 0 16px",
-  padding: "12px 14px",
-  background: "#fef9e7",
-  border: "1px solid #f7dc6f",
-  borderRadius: 8,
-  color: "#7d6608",
-  fontSize: 14,
-};
-const dupCardStyle: React.CSSProperties = {
-  marginTop: 24,
-  padding: 20,
-  background: "#fff8ec",
-  border: "1px solid #f0c986",
-  borderRadius: 12,
-  boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
-};
-const discardBtn: React.CSSProperties = {
-  padding: "11px 22px",
-  background: "#fff",
-  color: "#8a5a00",
-  border: "1px solid #e0b877",
-  borderRadius: 10,
-  cursor: "pointer",
-  fontWeight: 600,
-  fontSize: 15,
+  fontFamily: font.mono,
 };
 const connBarStyle: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
   flexWrap: "wrap",
   gap: 10,
-  marginBottom: 24,
+  marginBottom: 26,
 };
 const connOkStyle: React.CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
+  ...chipStyle("ok"),
   gap: 8,
-  padding: "6px 12px",
-  background: "#e8f8f0",
-  color: "#1e8449",
-  border: "1px solid #a9dfbf",
-  borderRadius: 8,
-  fontWeight: 600,
+  padding: "7px 12px",
   fontSize: 13,
 };
 const connMutedStyle: React.CSSProperties = {
-  padding: "6px 12px",
-  background: "#f4f6f8",
-  color: "#8892a0",
-  border: "1px solid #e6eaee",
-  borderRadius: 8,
-  fontWeight: 600,
+  ...chipStyle("muted"),
+  padding: "7px 12px",
   fontSize: 13,
 };
 const disconnectLinkStyle: React.CSSProperties = {
-  padding: "2px 8px",
-  background: "#fff",
-  color: "#1e8449",
-  border: "1px solid #a9dfbf",
-  borderRadius: 6,
-  cursor: "pointer",
-  fontWeight: 600,
-  fontSize: 12,
+  ...button("ghost", "sm"),
+  padding: "2px 9px",
+  color: color.forestDeep,
+  border: `1px solid ${color.forest}55`,
+  fontSize: 11,
 };
 const disconnectConfirmStyle: React.CSSProperties = {
+  ...banner("bad"),
   display: "flex",
   alignItems: "center",
   gap: 8,
   flexWrap: "wrap",
-  padding: "10px 12px",
-  background: "#fdecea",
-  border: "1px solid #e6b0aa",
-  borderRadius: 8,
-  color: "#c0392b",
-  fontSize: 13,
-  fontWeight: 600,
-};
-const dangerSmallStyle: React.CSSProperties = {
-  padding: "6px 14px",
-  background: "#c0392b",
-  color: "#fff",
-  border: "none",
-  borderRadius: 8,
-  cursor: "pointer",
   fontWeight: 600,
   fontSize: 13,
 };
-const connLinkBtnStyle: React.CSSProperties = {
-  padding: "5px 12px",
-  background: "#fff",
-  color: "#1a2b4a",
-  border: "1px solid #d5dbdb",
-  borderRadius: 8,
-  cursor: "pointer",
-  fontWeight: 600,
-  fontSize: 12,
-};
+const dangerSmallStyle: React.CSSProperties = button("danger", "sm");
+const connLinkBtnStyle: React.CSSProperties = button("ghost", "sm");
 const radioGroupStyle: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
   flexWrap: "wrap",
   gap: 14,
-  padding: "6px 12px",
-  border: "1px solid #e6eaee",
-  borderRadius: 8,
+  padding: "8px 14px",
+  border: `1px solid ${color.paperLine}`,
+  borderRadius: radius.sm,
   margin: 0,
 };
-const radioLegendStyle: React.CSSProperties = {
-  padding: "0 4px",
-  fontSize: 12,
-  fontWeight: 600,
-  color: "#8892a0",
-};
+const radioLegendStyle: React.CSSProperties = { ...eyebrow, padding: "0 4px" };
 const radioOptionStyle: React.CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
   gap: 6,
   fontSize: 13,
   fontWeight: 600,
-  color: "#1a2b4a",
+  color: color.ink,
   cursor: "pointer",
-};
-const chipOk: React.CSSProperties = {
-  background: "#e8f8f0",
-  color: "#1e8449",
-  padding: "2px 8px",
-  borderRadius: 999,
-  fontSize: 12,
-  fontWeight: 600,
-};
-const chipLow: React.CSSProperties = {
-  background: "#fdecea",
-  color: "#c0392b",
-  padding: "2px 8px",
-  borderRadius: 999,
-  fontSize: 12,
-  fontWeight: 600,
-};
-const chipMuted: React.CSSProperties = {
-  background: "#f4f6f8",
-  color: "#8892a0",
-  padding: "2px 8px",
-  borderRadius: 999,
-  fontSize: 12,
-  fontWeight: 600,
-};
-const notStatedNoteStyle: React.CSSProperties = {
-  margin: "-8px 0 14px",
-  color: "#8892a0",
-  fontSize: 12,
-};
-const typePickerStyle: React.CSSProperties = {
-  margin: "0 0 18px",
-  padding: "14px 16px",
-  background: "#fff8ec",
-  border: "1px solid #f0c986",
-  borderRadius: 10,
-  color: "#7d4a00",
-  fontSize: 14,
-};
-const docTypeBadgeStyle: React.CSSProperties = {
-  display: "inline-block",
-  marginLeft: 10,
-  padding: "2px 10px",
-  borderRadius: 999,
-  background: "#eef2ff",
-  color: "#3730a3",
-  fontSize: 12,
-  fontWeight: 700,
-  letterSpacing: 0.3,
-};
-const queueWarnStyle: React.CSSProperties = {
-  marginTop: 20,
-  padding: "12px 16px",
-  background: "#fff8ec",
-  border: "1px solid #f0c986",
-  borderRadius: 10,
-  color: "#7d4a00",
-  fontSize: 14,
-  lineHeight: 1.5,
 };
 const queueLinkStyle: React.CSSProperties = {
   display: "flex",
@@ -1206,23 +1006,11 @@ const queueLinkStyle: React.CSSProperties = {
   justifyContent: "space-between",
   gap: 14,
   marginTop: 20,
-  padding: "14px 18px",
-  background: "#f5f9fd",
-  border: "1px solid #a9c4df",
-  borderRadius: 12,
-  color: "#1a2b4a",
+  padding: "16px 20px",
+  background: color.forestTint,
+  border: `1px solid ${color.forest}33`,
+  borderRadius: radius.lg,
+  color: color.forestDeep,
   fontSize: 15,
   textDecoration: "none",
-};
-const approveBtn: React.CSSProperties = {
-  marginTop: 8,
-  marginBottom: 12,
-  padding: "11px 22px",
-  background: "#1e8449",
-  color: "#fff",
-  border: "none",
-  borderRadius: 10,
-  cursor: "pointer",
-  fontWeight: 600,
-  fontSize: 15,
 };

@@ -11,6 +11,7 @@ import {
 } from "@/lib/validation";
 import { formatMoney } from "@/lib/currency";
 import EditableField from "./EditableField";
+import { banner, button, card, chip, color, eyebrow, figures, font, radius, typeBadge } from "@/lib/theme";
 // Type-only: erased at compile time, so the server-side bulk-approve module (and
 // its Xero/Supabase chain) never reaches the client bundle.
 import type { BulkApproveResult, BulkItemResult } from "@/lib/bulk-approve";
@@ -58,8 +59,8 @@ const CONFIDENCE_OK = 0.85;
 const CONFIDENCE_POOR = 0.6;
 
 function confidenceChipStyle(confidence: number): React.CSSProperties {
-  if (confidence >= CONFIDENCE_OK) return chipOk;
-  return confidence >= CONFIDENCE_POOR ? chipWarn : chipBad;
+  if (confidence >= CONFIDENCE_OK) return { ...chip("ok"), ...figures };
+  return confidence >= CONFIDENCE_POOR ? { ...chip("warn"), ...figures } : { ...chip("bad"), ...figures };
 }
 
 /**
@@ -408,24 +409,24 @@ export default function PendingDocuments({
       {/* --- Empty state ---------------------------------------------------- */}
       {docs.length === 0 ? (
         <div style={emptyStyle}>
-          <div style={{ fontSize: 15, fontWeight: 700, color: "#1a2b4a", marginBottom: 4 }}>
+          <div style={{ fontSize: 16, fontWeight: 600, color: color.ink, marginBottom: 4, fontFamily: font.display }}>
             No pending documents
           </div>
-          <p style={{ margin: 0, color: "#8892a0", fontSize: 14 }}>
+          <p style={{ margin: 0, color: color.inkSoft, fontSize: 14 }}>
             Everything read so far has been approved. Upload an invoice or receipt and it will
             appear here for approval.
           </p>
           {demo && (
             <button style={{ ...linkBtn, marginTop: 14 }} onClick={seedDemoBatch}>
-              🧪 Load a demo batch (5 documents)
+              Load a demo batch (5 documents)
             </button>
           )}
         </div>
       ) : (
         <>
           <div style={queueHeader}>
-            <span style={{ fontSize: 13, fontWeight: 700, color: "#8892a0", letterSpacing: 0.4 }}>
-              {docs.length} DOCUMENT{docs.length === 1 ? "" : "S"} WAITING
+            <span style={eyebrow}>
+              {docs.length} document{docs.length === 1 ? "" : "s"} waiting
             </span>
             <button
               style={linkBtn}
@@ -469,17 +470,17 @@ export default function PendingDocuments({
 
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-                      <span style={{ fontWeight: 700, color: "#1a2b4a" }}>
+                      <span style={{ fontWeight: 700, color: color.ink, fontFamily: font.display }}>
                         {d.merchantName || "(unknown)"}
                       </span>
-                      <span style={{ fontWeight: 700, color: "#1a2b4a", whiteSpace: "nowrap" }}>
+                      <span style={{ fontWeight: 700, color: color.ink, whiteSpace: "nowrap", ...figures }}>
                         {Number.isFinite(d.total) ? formatMoney(d.total, d.currency) : "—"}
                       </span>
                     </div>
 
                     <div style={metaRow}>
-                      <span style={d.documentType === "receipt" ? badgeReceipt : badgeInvoice}>
-                        {d.documentType === "receipt" ? "🧾 Receipt" : "📄 Invoice"}
+                      <span style={typeBadge(d.documentType === "receipt" ? "receipt" : "invoice")}>
+                        {d.documentType === "receipt" ? "Receipt" : "Invoice"}
                       </span>
                       <span style={confidenceChipStyle(d.overallConfidence)}>
                         {(d.overallConfidence * 100).toFixed(0)}% confidence
@@ -492,7 +493,7 @@ export default function PendingDocuments({
                     {/* Why it came back from a previous approval attempt. */}
                     {d.lastReason && (
                       <p style={d.lastOutcome === "error" ? rowErrorNote : rowBlockedNote}>
-                        {d.lastOutcome === "error" ? "❌" : "⚠️"} {d.lastReason}
+                        {d.lastReason}
                       </p>
                     )}
 
@@ -607,10 +608,8 @@ export default function PendingDocuments({
 
       {/* --- Results of the last approval run ------------------------------- */}
       {summary && results && (
-        <section style={{ marginTop: 24 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: "#8892a0", letterSpacing: 0.4 }}>
-            LAST RUN
-          </div>
+        <section style={{ marginTop: 28 }}>
+          <div style={eyebrow}>Last run</div>
           <div style={summaryStyle}>
             {summary.approved} approved, {summary.blocked} blocked, {summary.errors} error
             {summary.errors === 1 ? "" : "s"} | {summary.postedLabel} posted
@@ -679,7 +678,7 @@ function DetailPanel({
           Document type{" "}
           {typeOverride ? "· set by you" : typeConfirmed ? "· confirmed" : `${(typeConfidence * 100).toFixed(0)}%`}
         </span>
-        {!x.taxItemized && <span style={chipMuted}>No tax broken out</span>}
+        {!x.taxItemized && <span style={chip("muted")}>No tax broken out</span>}
       </div>
 
       {/* An uncertain classification blocks approval, because the type decides
@@ -701,7 +700,7 @@ function DetailPanel({
                 style={t === detectedType ? approveSmall : linkBtn}
                 onClick={() => onConfirmType(t, detectedType)}
               >
-                {t === "receipt" ? "🧾 Receipt" : "📄 Invoice"}
+                {t === "receipt" ? "Receipt" : "Invoice"}
               </button>
             ))}
           </div>
@@ -709,7 +708,7 @@ function DetailPanel({
       )}
 
       {gate && gate.status !== "ready" && (
-        <p style={rowBlockedNote}>⚠️ {gateReasonSummary(gate, type)}</p>
+        <p style={rowBlockedNote}>{gateReasonSummary(gate, type)}</p>
       )}
 
       {REVIEWABLE_FIELDS.map((f) => {
@@ -750,15 +749,13 @@ function DetailPanel({
 
       {x.lineItems.length > 0 && (
         <div style={{ marginTop: 12 }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: "#8892a0", marginBottom: 4 }}>
-            LINE ITEMS
-          </div>
+          <div style={{ ...eyebrow, marginBottom: 4 }}>Line items</div>
           {x.lineItems.map((li, i) => (
             <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, padding: "3px 0" }}>
-              <span style={{ color: "#445" }}>
+              <span style={{ color: color.inkSoft }}>
                 {li.description} {li.quantity > 1 ? `× ${li.quantity}` : ""}
               </span>
-              <span style={{ color: "#1a2b4a", fontWeight: 600 }}>
+              <span style={{ color: color.ink, fontWeight: 600, ...figures }}>
                 {formatMoney(li.amount, x.currency.value)}
               </span>
             </div>
@@ -780,7 +777,10 @@ function ResultRow({ result }: { result: BulkItemResult }) {
       : result.status === "blocked"
         ? resultBlocked
         : resultError;
-  const icon = result.status === "approved" ? "✅" : result.status === "blocked" ? "⚠️" : "❌";
+  // Colour AND icon, never colour alone — the distinction has to survive a
+  // colourblind reader and a black-and-white print. Plain marks rather than
+  // emoji, to match the rest of the app's quieter tone.
+  const icon = result.status === "approved" ? "✓" : result.status === "blocked" ? "!" : "×";
 
   return (
     <div style={style}>
@@ -788,7 +788,7 @@ function ResultRow({ result }: { result: BulkItemResult }) {
         <strong>
           {icon} {result.merchantName}
         </strong>
-        <span style={{ fontWeight: 700, whiteSpace: "nowrap" }}>
+        <span style={{ fontWeight: 700, whiteSpace: "nowrap", ...figures }}>
           {result.total === null ? "—" : formatMoney(result.total, result.currency)}
         </span>
       </div>
@@ -808,19 +808,13 @@ const queueHeader: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
   justifyContent: "space-between",
-  marginBottom: 12,
+  marginBottom: 14,
 };
-const row: React.CSSProperties = {
-  padding: "14px 16px",
-  marginBottom: 10,
-  border: "1px solid #e6eaee",
-  borderRadius: 10,
-  background: "#fff",
-};
+const row: React.CSSProperties = card({ padding: "14px 16px", marginBottom: 10, borderRadius: 12 });
 const rowSelected: React.CSSProperties = {
   ...row,
-  borderColor: "#a9c4df",
-  background: "#f5f9fd",
+  borderColor: `${color.forest}55`,
+  background: color.forestTint,
 };
 const metaRow: React.CSSProperties = {
   display: "flex",
@@ -829,206 +823,55 @@ const metaRow: React.CSSProperties = {
   flexWrap: "wrap",
   marginTop: 6,
 };
-const metaText: React.CSSProperties = { fontSize: 12, color: "#8892a0" };
-const badgeInvoice: React.CSSProperties = {
-  padding: "2px 8px",
-  borderRadius: 999,
-  background: "#eef2ff",
-  color: "#3730a3",
-  fontSize: 12,
-  fontWeight: 700,
-};
-const badgeReceipt: React.CSSProperties = {
-  ...badgeInvoice,
-  background: "#f3e8ff",
-  color: "#6b21a8",
-};
-const chipOk: React.CSSProperties = {
-  padding: "2px 8px",
-  borderRadius: 999,
-  background: "#e8f8f0",
-  color: "#1e8449",
-  fontSize: 12,
-  fontWeight: 600,
-};
-const chipWarn: React.CSSProperties = {
-  ...chipOk,
-  background: "#fef9e7",
-  color: "#7d6608",
-};
-const chipBad: React.CSSProperties = {
-  ...chipOk,
-  background: "#fdecea",
-  color: "#c0392b",
-};
-const chipMuted: React.CSSProperties = {
-  ...chipOk,
-  background: "#f4f6f8",
-  color: "#8892a0",
-};
+const metaText: React.CSSProperties = { fontSize: 12, color: color.inkFaint };
 const confirmAsIsBtn: React.CSSProperties = {
+  ...button("outline", "sm"),
   margin: "-4px 0 10px",
-  padding: "4px 10px",
-  background: "#fff",
-  color: "#1e8449",
-  border: "1px solid #a9dfbf",
-  borderRadius: 8,
-  cursor: "pointer",
-  fontWeight: 600,
-  fontSize: 12,
+  color: color.forestDeep,
+  border: `1px solid ${color.forest}`,
 };
-const rowBlockedNote: React.CSSProperties = {
-  margin: "8px 0 0",
-  fontSize: 12,
-  color: "#7d6608",
-};
-const rowErrorNote: React.CSSProperties = {
-  margin: "8px 0 0",
-  fontSize: 12,
-  color: "#c0392b",
-};
-const detailPanel: React.CSSProperties = {
-  marginTop: 12,
-  padding: "12px 14px",
-  background: "#fafbfc",
-  border: "1px solid #eef1f4",
-  borderRadius: 8,
-};
-const typePickerStyle: React.CSSProperties = {
-  margin: "0 0 12px",
-  padding: "10px 12px",
-  background: "#fef9e7",
-  border: "1px solid #f7dc6f",
-  borderRadius: 8,
-  color: "#7d6608",
-};
+const rowBlockedNote: React.CSSProperties = { margin: "8px 0 0", fontSize: 12, color: color.goldDeep };
+const rowErrorNote: React.CSSProperties = { margin: "8px 0 0", fontSize: 12, color: color.stampDeep };
+const detailPanel: React.CSSProperties = card({ marginTop: 12, padding: "14px 16px", background: color.paperAlt });
+const typePickerStyle: React.CSSProperties = { ...banner("warn"), margin: "0 0 12px" };
 const emptyStyle: React.CSSProperties = {
-  padding: "28px 24px",
+  padding: "32px 24px",
   textAlign: "center",
-  background: "#fff",
-  border: "1px dashed #d5dbdb",
-  borderRadius: 12,
+  background: color.paper,
+  border: `1px dashed ${color.paperLine}`,
+  borderRadius: radius.lg,
 };
 const summaryStyle: React.CSSProperties = {
   margin: "8px 0 12px",
-  padding: "10px 14px",
-  background: "#f4f6f8",
-  border: "1px solid #e6eaee",
-  borderRadius: 8,
+  padding: "11px 15px",
+  background: color.paperAlt,
+  border: `1px solid ${color.paperLine}`,
+  borderRadius: radius.sm,
   fontSize: 14,
   fontWeight: 700,
-  color: "#1a2b4a",
+  color: color.ink,
 };
-const resultBase: React.CSSProperties = {
-  padding: "10px 14px",
-  marginBottom: 8,
-  borderRadius: 8,
-  fontSize: 14,
-};
-const resultApproved: React.CSSProperties = {
-  ...resultBase,
-  background: "#e8f8f0",
-  border: "1px solid #a9dfbf",
-  color: "#1e6b45",
-};
-const resultBlocked: React.CSSProperties = {
-  ...resultBase,
-  background: "#fef9e7",
-  border: "1px solid #f7dc6f",
-  color: "#7d6608",
-};
-const resultError: React.CSSProperties = {
-  ...resultBase,
-  background: "#fdecea",
-  border: "1px solid #e6b0aa",
-  color: "#c0392b",
-};
-const approveBtn: React.CSSProperties = {
-  marginTop: 8,
-  padding: "11px 22px",
-  background: "#1e8449",
-  color: "#fff",
-  border: "none",
-  borderRadius: 10,
-  cursor: "pointer",
-  fontWeight: 600,
-  fontSize: 15,
-};
-const approveSmall: React.CSSProperties = {
-  padding: "6px 14px",
-  background: "#1e8449",
-  color: "#fff",
-  border: "none",
-  borderRadius: 8,
-  cursor: "pointer",
-  fontWeight: 600,
-  fontSize: 13,
-};
+const resultApproved: React.CSSProperties = banner("ok");
+const resultBlocked: React.CSSProperties = banner("warn");
+const resultError: React.CSSProperties = banner("bad");
+const approveBtn: React.CSSProperties = { ...button("success"), marginTop: 8 };
+const approveSmall: React.CSSProperties = button("success", "sm");
 const deleteBtn: React.CSSProperties = {
-  padding: "5px 12px",
-  background: "#fff",
-  color: "#c0392b",
-  border: "1px solid #e6b0aa",
-  borderRadius: 8,
-  cursor: "pointer",
-  fontWeight: 600,
-  fontSize: 12,
+  ...button("ghost", "sm"),
+  color: color.stampDeep,
+  border: `1px solid ${color.stamp}44`,
 };
-const dangerSmall: React.CSSProperties = {
-  padding: "6px 14px",
-  background: "#c0392b",
-  color: "#fff",
-  border: "none",
-  borderRadius: 8,
-  cursor: "pointer",
-  fontWeight: 600,
-  fontSize: 13,
-};
+const dangerSmall: React.CSSProperties = button("danger", "sm");
 const confirmBar: React.CSSProperties = {
+  ...banner("bad"),
   display: "flex",
   alignItems: "center",
   gap: 8,
   flexWrap: "wrap",
   marginTop: 10,
-  padding: "10px 12px",
-  background: "#fdecea",
-  border: "1px solid #e6b0aa",
-  borderRadius: 8,
-  color: "#c0392b",
-  fontSize: 13,
   fontWeight: 600,
 };
-const noticeStyle: React.CSSProperties = {
-  margin: "0 0 14px",
-  padding: "10px 14px",
-  background: "#e8f8f0",
-  border: "1px solid #a9dfbf",
-  borderRadius: 8,
-  color: "#1e6b45",
-  fontSize: 14,
-  fontWeight: 600,
-};
-const linkBtn: React.CSSProperties = {
-  padding: "5px 12px",
-  background: "#fff",
-  color: "#1a2b4a",
-  border: "1px solid #d5dbdb",
-  borderRadius: 8,
-  cursor: "pointer",
-  fontWeight: 600,
-  fontSize: 12,
-};
-const mutedNote: React.CSSProperties = {
-  margin: "10px 0 0",
-  fontSize: 13,
-  color: "#8892a0",
-};
-const errorNote: React.CSSProperties = {
-  margin: "0 0 14px",
-  padding: "10px 14px",
-  background: "#fdecea",
-  border: "1px solid #e6b0aa",
-  borderRadius: 8,
-  color: "#c0392b",
-  fontSize: 14,
-};
+const noticeStyle: React.CSSProperties = { ...banner("ok"), margin: "0 0 16px", fontWeight: 600 };
+const linkBtn: React.CSSProperties = button("ghost", "sm");
+const mutedNote: React.CSSProperties = { margin: "10px 0 0", fontSize: 13, color: color.inkSoft };
+const errorNote: React.CSSProperties = { ...banner("bad"), margin: "0 0 16px" };

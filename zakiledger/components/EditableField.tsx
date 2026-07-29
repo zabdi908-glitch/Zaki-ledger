@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { button, chip, color, figures, font } from "@/lib/theme";
 
 /**
  * One field: reads as text until clicked, then becomes an input with a checkmark.
@@ -52,7 +53,7 @@ export default function EditableField({
 
   if (editing) {
     return (
-      <div style={{ ...fieldRow, background: "#fffdf5", alignItems: "center" }}>
+      <div style={{ ...fieldRow, background: color.goldTint, alignItems: "center" }}>
         <span style={fieldLabelStyle}>{label}</span>
         <input
           value={draft}
@@ -76,22 +77,22 @@ export default function EditableField({
   }
 
   return (
-    <div style={{ ...fieldRow, background: low ? "#fef9e7" : "transparent" }}>
+    <div style={{ ...fieldRow, background: low ? color.goldTint : "transparent" }}>
       <span style={fieldLabelStyle}>{label}</span>
       <button style={fieldValueBtn} onClick={open} title="Click to edit">
-        {value.trim() === "" ? <span style={{ color: "#8892a0" }}>not stated</span> : value}
+        {value.trim() === "" ? <span style={{ color: color.inkFaint }}>not stated</span> : value}
       </button>
       {edited ? (
-        <span style={chipVerified} title={`AI read: ${original || "(nothing)"}`}>
+        <span style={chip("verified")} title={`AI read: ${original || "(nothing)"}`}>
           ✓ edited
         </span>
       ) : affirmed ? (
-        <span style={chipVerified}>✓ confirmed</span>
+        <span style={chip("verified")}>✓ confirmed</span>
       ) : absent ? (
-        <span style={chipMuted}>—</span>
+        <span style={chip("muted")}>—</span>
       ) : (
-        <span style={low ? chipLow : chipOk}>
-          {low ? "⚠ check" : "✓"} {(confidence * 100).toFixed(0)}%
+        <span style={{ ...chip(low ? "warn" : "ok"), ...figures }}>
+          {low ? "check" : "✓"} {(confidence * 100).toFixed(0)}%
         </span>
       )}
     </div>
@@ -103,15 +104,15 @@ const fieldRow: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
   gap: 8,
-  padding: "4px 6px",
+  padding: "5px 7px",
   borderRadius: 6,
   fontSize: 13,
-  minHeight: 32,
+  minHeight: 34,
 };
 const fieldLabelStyle: React.CSSProperties = {
   width: 130,
   flexShrink: 0,
-  color: "#8892a0",
+  color: color.inkSoft,
 };
 const fieldValueBtn: React.CSSProperties = {
   flex: 1,
@@ -121,10 +122,10 @@ const fieldValueBtn: React.CSSProperties = {
   background: "transparent",
   border: "1px dashed transparent",
   borderRadius: 6,
-  color: "#1a2b4a",
+  color: color.ink,
   fontWeight: 600,
   fontSize: 13,
-  fontFamily: "inherit",
+  fontFamily: font.body,
   cursor: "text",
 };
 const fieldInput: React.CSSProperties = {
@@ -132,42 +133,10 @@ const fieldInput: React.CSSProperties = {
   minWidth: 0,
   padding: "5px 8px",
   borderRadius: 6,
-  border: "1px solid #f0c986",
+  border: `1px solid ${color.gold}`,
   fontSize: 13,
-  fontFamily: "inherit",
+  fontFamily: font.body,
   outline: "none",
 };
-const commitBtn: React.CSSProperties = {
-  flexShrink: 0,
-  padding: "4px 10px",
-  background: "#1e8449",
-  color: "#fff",
-  border: "none",
-  borderRadius: 6,
-  cursor: "pointer",
-  fontWeight: 700,
-  fontSize: 13,
-};
-const cancelBtn: React.CSSProperties = {
-  flexShrink: 0,
-  padding: "4px 9px",
-  background: "#fff",
-  color: "#8892a0",
-  border: "1px solid #d5dbdb",
-  borderRadius: 6,
-  cursor: "pointer",
-  fontWeight: 700,
-  fontSize: 13,
-};
-const chipBase: React.CSSProperties = {
-  flexShrink: 0,
-  padding: "2px 8px",
-  borderRadius: 999,
-  fontSize: 11,
-  fontWeight: 700,
-  whiteSpace: "nowrap",
-};
-const chipOk: React.CSSProperties = { ...chipBase, background: "#e8f8f0", color: "#1e8449" };
-const chipLow: React.CSSProperties = { ...chipBase, background: "#fdecea", color: "#c0392b" };
-const chipMuted: React.CSSProperties = { ...chipBase, background: "#f4f6f8", color: "#8892a0" };
-const chipVerified: React.CSSProperties = { ...chipBase, background: "#1e8449", color: "#fff" };
+const commitBtn: React.CSSProperties = { ...button("success", "sm"), flexShrink: 0, padding: "4px 10px" };
+const cancelBtn: React.CSSProperties = { ...button("outline", "sm"), flexShrink: 0, padding: "4px 9px" };

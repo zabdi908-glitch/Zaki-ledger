@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import type { DocumentType, ReviewableField } from "@/lib/schema";
 import type { BulkItemResult } from "@/lib/bulk-approve";
 import BatchResultRow from "./BatchResultRow";
+import { banner, button, card as cardStyle, color, font } from "@/lib/theme";
 import {
   hasHumanInput,
   isActionable,
@@ -354,14 +355,14 @@ export default function BatchUpload({
   if (rows === null) {
     return (
       <section style={card}>
-        <div style={{ fontSize: 15, fontWeight: 700, color: "#1a2b4a", marginBottom: 4 }}>
+        <div style={{ fontSize: 16, fontWeight: 600, color: color.ink, marginBottom: 6, fontFamily: font.display }}>
           Ready to upload {files.length} file{files.length === 1 ? "" : "s"}
         </div>
         <ul style={fileList}>
           {files.map((f, i) => (
             <li key={`${f.name}-${i}`} style={fileListItem}>
               {f.name}
-              <span style={{ color: "#8892a0" }}> · {(f.size / 1024).toFixed(0)} KB</span>
+              <span style={{ color: color.inkFaint }}> · {(f.size / 1024).toFixed(0)} KB</span>
             </li>
           ))}
         </ul>
@@ -393,7 +394,7 @@ export default function BatchUpload({
       {/* --- Progress, until the batch is in ------------------------------- */}
       {!summary ? (
         <>
-          <div style={{ fontSize: 15, fontWeight: 700, color: "#1a2b4a", marginBottom: 8 }}>
+          <div style={{ fontSize: 16, fontWeight: 600, color: color.ink, marginBottom: 10, fontFamily: font.display }}>
             Processing {rows.length} file{rows.length === 1 ? "" : "s"}… ({completed} of{" "}
             {rows.length} complete)
           </div>
@@ -403,10 +404,10 @@ export default function BatchUpload({
         </>
       ) : (
         <>
-          <div style={{ fontSize: 15, fontWeight: 700, color: "#1a2b4a", marginBottom: 4 }}>
+          <div style={{ fontSize: 16, fontWeight: 600, color: color.ink, marginBottom: 4, fontFamily: font.display }}>
             {summary.total} file{summary.total === 1 ? "" : "s"}: {tallyLabel(counts)}
           </div>
-          <p style={{ margin: "0 0 12px", fontSize: 13, color: "#8892a0" }}>
+          <p style={{ margin: "0 0 12px", fontSize: 13, color: color.inkSoft }}>
             Read in {(summary.elapsedMs / 1000).toFixed(1)}s.
             {counts.flagged > 0 && (
               <>
@@ -559,34 +560,27 @@ function approvedText(data: {
 }
 
 // --- styles -----------------------------------------------------------------
-const card: React.CSSProperties = {
-  marginTop: 24,
-  padding: 24,
-  background: "#fff",
-  borderRadius: 12,
-  boxShadow: "0 1px 3px rgba(0,0,0,0.08)",
-  border: "1px solid #eef1f4",
-};
+const card: React.CSSProperties = cardStyle({ marginTop: 24 });
 const fileList: React.CSSProperties = {
   margin: "10px 0 0",
   padding: 0,
   listStyle: "none",
   fontSize: 13,
-  color: "#445",
+  color: color.inkSoft,
 };
 const fileListItem: React.CSSProperties = {
   padding: "4px 0",
-  borderBottom: "1px solid #f4f6f8",
+  borderBottom: `1px solid ${color.paperAlt}`,
 };
 const progressTrack: React.CSSProperties = {
   height: 8,
   borderRadius: 999,
-  background: "#eef1f4",
+  background: color.paperAlt,
   overflow: "hidden",
 };
 const progressFill: React.CSSProperties = {
   height: "100%",
-  background: "#1e8449",
+  background: color.forest,
   borderRadius: 999,
   transition: "width 200ms ease",
 };
@@ -596,83 +590,22 @@ const batchBar: React.CSSProperties = {
   justifyContent: "space-between",
   gap: 10,
   flexWrap: "wrap",
-  marginTop: 14,
-  paddingTop: 14,
-  borderTop: "1px solid #eef1f4",
+  marginTop: 16,
+  paddingTop: 16,
+  borderTop: `1px solid ${color.paperLine}`,
 };
-const primaryBtn: React.CSSProperties = {
-  padding: "11px 22px",
-  background: "#1e8449",
-  color: "#fff",
-  border: "none",
-  borderRadius: 10,
-  cursor: "pointer",
-  fontWeight: 600,
-  fontSize: 15,
-};
-const primaryLink: React.CSSProperties = {
-  display: "inline-block",
-  padding: "11px 22px",
-  background: "#1a2b4a",
-  color: "#fff",
-  borderRadius: 10,
-  fontWeight: 600,
-  fontSize: 15,
-  textDecoration: "none",
-};
-const secondaryBtn: React.CSSProperties = {
-  padding: "11px 22px",
-  background: "#fff",
-  color: "#1a2b4a",
-  border: "1px solid #d5dbdb",
-  borderRadius: 10,
-  cursor: "pointer",
-  fontWeight: 600,
-  fontSize: 15,
-};
-const linkBtn: React.CSSProperties = {
-  padding: "6px 14px",
-  background: "#fff",
-  color: "#1a2b4a",
-  border: "1px solid #d5dbdb",
-  borderRadius: 8,
-  cursor: "pointer",
-  fontWeight: 600,
-  fontSize: 13,
-};
-const errorNote: React.CSSProperties = {
-  margin: "12px 0 0",
-  padding: "10px 14px",
-  background: "#fdecea",
-  border: "1px solid #e6b0aa",
-  borderRadius: 8,
-  color: "#c0392b",
-  fontSize: 14,
-};
-const skippedNote: React.CSSProperties = {
-  margin: "12px 0 0",
-  padding: "10px 14px",
-  background: "#fef9e7",
-  border: "1px solid #f7dc6f",
-  borderRadius: 8,
-  color: "#7d6608",
-  fontSize: 13,
-};
+const primaryBtn: React.CSSProperties = button("success");
+const primaryLink: React.CSSProperties = { ...button("primary"), textDecoration: "none" };
+const secondaryBtn: React.CSSProperties = button("outline");
+const linkBtn: React.CSSProperties = button("ghost", "sm");
+const errorNote: React.CSSProperties = { ...banner("bad"), margin: "12px 0 0" };
+const skippedNote: React.CSSProperties = { ...banner("warn"), margin: "12px 0 0" };
 const confirmBar: React.CSSProperties = {
+  ...banner("warn"),
   display: "flex",
   alignItems: "center",
   gap: 10,
   flexWrap: "wrap",
-  padding: "12px 14px",
-  background: "#fff8ec",
-  border: "1px solid #f0c986",
-  borderRadius: 10,
-  color: "#7d4a00",
-  fontSize: 13,
   fontWeight: 600,
 };
-const mutedNote: React.CSSProperties = {
-  margin: "10px 0 0",
-  fontSize: 13,
-  color: "#8892a0",
-};
+const mutedNote: React.CSSProperties = { margin: "10px 0 0", fontSize: 13, color: color.inkSoft };

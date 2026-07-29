@@ -1,5 +1,7 @@
 import AccountBar from "@/components/AccountBar";
 import { getSessionUser } from "@/lib/auth";
+import { body, display, mono } from "@/lib/fonts";
+import "./globals.css";
 
 export const metadata = {
   title: "Zaki Ledger",
@@ -16,8 +18,8 @@ export default async function RootLayout({ children }: { children: React.ReactNo
   const user = await getSessionUser();
 
   return (
-    <html lang="en">
-      <body style={{ fontFamily: "system-ui, sans-serif", margin: 0, background: "#f6f7f9" }}>
+    <html lang="en" className={`${display.variable} ${body.variable} ${mono.variable}`}>
+      <body style={{ fontFamily: "var(--font-body)" }}>
         {user && <AccountBar email={user.email ?? ""} />}
         {children}
       </body>

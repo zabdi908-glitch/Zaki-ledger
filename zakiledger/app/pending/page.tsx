@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import PendingDocuments from "@/components/PendingDocuments";
+import { color, font } from "@/lib/theme";
 
 /**
  * The approval queue as its own screen. Kept separate from the upload/review page
@@ -24,12 +25,23 @@ export default function PendingPage() {
   }, []);
 
   return (
-    <main style={{ maxWidth: 780, margin: "0 auto", padding: "48px 20px 64px" }}>
-      <a href="/" style={{ color: "#1a2b4a", fontSize: 14 }}>
+    <main style={{ maxWidth: 800, margin: "0 auto", padding: "48px 22px 72px" }}>
+      <a href="/" style={{ color: color.inkSoft, fontSize: 14, fontWeight: 600 }}>
         ← Back
       </a>
-      <h1 style={{ marginBottom: 4, marginTop: 12, color: "#1a2b4a" }}>Pending documents</h1>
-      <p style={{ color: "#667", marginTop: 0, marginBottom: 28 }}>
+      <h1
+        style={{
+          marginBottom: 6,
+          marginTop: 14,
+          color: color.ink,
+          fontFamily: font.display,
+          fontWeight: 600,
+          fontSize: 30,
+        }}
+      >
+        Pending documents
+      </h1>
+      <p style={{ color: color.inkSoft, marginTop: 0, marginBottom: 32, lineHeight: 1.6 }}>
         Everything read but not yet approved. Approve one at a time, or tick several and approve
         them as a batch — each document is judged on its own, so one problem document never blocks
         the rest.

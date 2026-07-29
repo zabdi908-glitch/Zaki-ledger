@@ -5,6 +5,7 @@ import { REVIEWABLE_FIELDS, type DocumentType, type ReviewableField } from "@/li
 import { fieldLabels } from "@/lib/validation";
 import { formatMoney } from "@/lib/currency";
 import EditableField from "./EditableField";
+import { banner, button, color, eyebrow, figures, font } from "@/lib/theme";
 import {
   effectiveConfidences,
   finalValue,
@@ -80,7 +81,7 @@ export default function BatchResultRow({
               {icon(status)} {row.filename}
             </strong>
             {row.confidence !== undefined && status !== "failed" && (
-              <span style={{ fontWeight: 700, whiteSpace: "nowrap", fontSize: 13 }}>
+              <span style={{ fontWeight: 700, whiteSpace: "nowrap", fontSize: 13, ...figures }}>
                 {(row.confidence * 100).toFixed(0)}%
               </span>
             )}
@@ -164,7 +165,7 @@ function TypePicker({
             style={t === detectedType ? approveSmall : linkBtn}
             onClick={() => onConfirmType(row.index, t, detectedType)}
           >
-            {t === "receipt" ? "🧾 Receipt" : "📄 Invoice"}
+            {t === "receipt" ? "Receipt" : "Invoice"}
           </button>
         ))}
       </div>
@@ -210,17 +211,15 @@ function FieldTable({
       ))}
 
       {x.lineItems.length > 0 && (
-        <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #eef1f4" }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: "#8892a0", letterSpacing: 0.4 }}>
-            LINE ITEMS
-          </div>
+        <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${color.paperLine}` }}>
+          <div style={{ ...eyebrow, fontSize: 11 }}>Line items</div>
           {x.lineItems.map((li, i) => (
             <div key={i} style={lineItemRow}>
               <span>
                 {li.description}
                 {li.quantity > 1 ? ` × ${li.quantity}` : ""}
               </span>
-              <span style={{ fontWeight: 600, whiteSpace: "nowrap" }}>
+              <span style={{ fontWeight: 600, whiteSpace: "nowrap", ...figures }}>
                 {formatMoney(li.amount, finalValue(row, "currency"))}
               </span>
             </div>
@@ -232,19 +231,19 @@ function FieldTable({
 }
 
 function icon(status: RowStatus): string {
+  // Colour AND mark, never colour alone (see rowStyle below) — the distinction
+  // has to survive a colourblind reader and a black-and-white print.
   switch (status) {
     case "approved":
-      return "✅";
     case "ready":
-      return "✅";
+      return "✓";
     case "flagged":
-      return "⚠️";
-    case "failed":
-      return "❌";
     case "rejected":
-      return "⚠️";
+      return "!";
+    case "failed":
+      return "×";
     default:
-      return "⏳";
+      return "…";
   }
 }
 
@@ -269,67 +268,36 @@ function summaryLine(row: ResultRow, status: RowStatus): string {
 // --- styles -----------------------------------------------------------------
 function rowStyle(status: RowStatus): React.CSSProperties {
   const base: React.CSSProperties = {
-    padding: "12px 14px",
+    padding: "13px 15px",
     marginBottom: 8,
-    borderRadius: 8,
+    borderRadius: 10,
     fontSize: 14,
-    border: "1px solid #e6eaee",
-    background: "#fff",
-    color: "#445",
+    border: `1px solid ${color.paperLine}`,
+    background: color.paper,
+    color: color.inkSoft,
   };
-  if (status === "approved" || status === "ready") {
-    return { ...base, background: "#e8f8f0", border: "1px solid #a9dfbf", color: "#1e6b45" };
-  }
-  if (status === "flagged" || status === "rejected") {
-    return { ...base, background: "#fef9e7", border: "1px solid #f7dc6f", color: "#7d6608" };
-  }
-  if (status === "failed") {
-    return { ...base, background: "#fdecea", border: "1px solid #e6b0aa", color: "#c0392b" };
-  }
+  if (status === "approved" || status === "ready") return { ...base, ...banner("ok") };
+  if (status === "flagged" || status === "rejected") return { ...base, ...banner("warn") };
+  if (status === "failed") return { ...base, ...banner("bad") };
   return base;
 }
 
 const fieldPanel: React.CSSProperties = {
   marginTop: 10,
-  padding: "8px 10px",
-  background: "#fff",
-  border: "1px solid #eef1f4",
+  padding: "9px 11px",
+  background: color.paper,
+  border: `1px solid ${color.paperLine}`,
   borderRadius: 8,
-  color: "#445",
+  color: color.inkSoft,
 };
-const typePickerStyle: React.CSSProperties = {
-  marginTop: 10,
-  padding: "10px 12px",
-  background: "#fff8ec",
-  border: "1px solid #f0c986",
-  borderRadius: 8,
-  color: "#7d4a00",
-};
+const typePickerStyle: React.CSSProperties = { ...banner("warn"), marginTop: 10 };
 const lineItemRow: React.CSSProperties = {
   display: "flex",
   justifyContent: "space-between",
   gap: 10,
   fontSize: 12,
-  color: "#556",
+  color: color.inkSoft,
   padding: "3px 6px",
 };
-const approveSmall: React.CSSProperties = {
-  padding: "6px 14px",
-  background: "#1e8449",
-  color: "#fff",
-  border: "none",
-  borderRadius: 8,
-  cursor: "pointer",
-  fontWeight: 600,
-  fontSize: 13,
-};
-const linkBtn: React.CSSProperties = {
-  padding: "5px 12px",
-  background: "#fff",
-  color: "#1a2b4a",
-  border: "1px solid #d5dbdb",
-  borderRadius: 8,
-  cursor: "pointer",
-  fontWeight: 600,
-  fontSize: 12,
-};
+const approveSmall: React.CSSProperties = button("success", "sm");
+const linkBtn: React.CSSProperties = button("ghost", "sm");
