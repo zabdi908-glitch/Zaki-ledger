@@ -39,17 +39,21 @@ function relativeTime(iso: string): string {
 }
 
 export async function getDashboardData(userId: string): Promise<DashboardData> {
+  // Every source is independently fault-tolerant: this is the screen a user
+  // lands on right after logging in, so one flaky query (a schema that
+  // isn't provisioned yet, a transient auth hiccup) must degrade that one
+  // stat/section to empty rather than 500 the whole page — the same
+  // "secondary read never blocks the primary flow" rule the rest of the
+  // app already follows (see e.g. refreshPending in the old app/page.tsx).
   const [pending, avgConfidence, monthly, corrections, invoices, matches, qbo, xero] = await Promise.all([
-    listPendingDocuments(userId),
-    getAverageConfidence(userId),
-    getMonthlyInvoiceCounts(userId, 6),
-    recentCorrections(userId, 10),
-    listRecentApprovedInvoices(userId, 5),
+    listPendingDocuments(userId).catch(() => []),
+    getAverageConfidence(userId).catch(() => null),
+    getMonthlyInvoiceCounts(userId, 6).catch(() => []),
+    recentCorrections(userId, 10).catch(() => []),
+    listRecentApprovedInvoices(userId, 5).catch(() => []),
     // Reconciliation is a newer feature than the invoices/corrections tables
     // above — its schema may not be provisioned in every environment yet
-    // (see the Phase 3 migration in db/schema.sql). The rest of the
-    // Dashboard shouldn't 500 for a user just because that migration hasn't
-    // run: this source degrades to "no reconciliation activity" instead.
+    // (see the Phase 3 migration in db/schema.sql).
     listRecentApprovedMatches(userId, 5).catch(() => []),
     quickBooksConnectionStatus(userId).catch(() => ({ connected: false })),
     xeroConnectionStatus(userId).catch(() => ({ connected: false })),
