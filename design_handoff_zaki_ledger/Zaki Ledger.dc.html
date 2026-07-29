@@ -1,0 +1,837 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+<style>
+  body { margin:0; }
+  ::selection { background: oklch(85% 0.06 195); }
+  a { color: oklch(45% 0.14 260); }
+  a:hover { color: oklch(38% 0.14 260); }
+</style>
+</helmet>
+<div style="display:flex;height:100vh;background:oklch(98% 0.004 240);font-family:'Inter',sans-serif;color:oklch(20% 0.02 240);overflow:hidden">
+
+  <div style="width:{{ sidebarWidth }};flex-shrink:0;background:oklch(24% 0.05 260);color:white;display:flex;flex-direction:column;padding:24px 16px;overflow-y:auto;transition:width 0.15s ease">
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 4px 32px">
+      <sc-if value="{{ notSidebarCollapsed }}" hint-placeholder-val="{{ true }}">
+        <div style="font-size:21px;font-weight:700;letter-spacing:-0.02em">Zaki<span style="color:oklch(70% 0.12 195)">.</span></div>
+      </sc-if>
+      <div onClick="{{ toggleSidebar }}" title="Toggle sidebar (Cmd/Ctrl+B)" style="width:28px;height:28px;border-radius:6px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:oklch(78% 0.02 260);flex-shrink:0">☰</div>
+    </div>
+<div style="display:flex;flex-direction:column;gap:14px">
+      <sc-for list="{{ navGroups }}" as="grp" hint-placeholder-count="6">
+        <div>
+          <sc-if value="{{ grp.hasLabel }}" hint-placeholder-val="{{ false }}">
+            <sc-if value="{{ notSidebarCollapsed }}" hint-placeholder-val="{{ true }}">
+              <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:oklch(50% 0.02 260);padding:6px 12px 4px">{{ grp.label }}</div>
+            </sc-if>
+          </sc-if>
+          <div style="display:flex;flex-direction:column;gap:2px">
+            <sc-for list="{{ grp.items }}" as="nitem" hint-placeholder-count="2">
+              <div onClick="{{ nitem.onClick }}" title="{{ nitem.label }}" style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 12px;border-radius:8px;cursor:pointer;font-size:14.5px;font-weight:500;background:{{ nitem.bg }};color:{{ nitem.color }}">
+                <sc-if value="{{ notSidebarCollapsed }}" hint-placeholder-val="{{ true }}">
+                  <div style="display:flex;align-items:center;gap:10px">
+                    <span style="font-size:15px;line-height:1;flex-shrink:0">{{ nitem.icon }}</span>
+                    <span>{{ nitem.label }}</span>
+                  </div>
+                </sc-if>
+                <sc-if value="{{ sidebarCollapsed }}" hint-placeholder-val="{{ false }}">
+                  <div style="width:28px;height:28px;display:flex;align-items:center;justify-content:center;font-size:15px;margin:0 auto">{{ nitem.icon }}</div>
+                </sc-if>
+                <sc-if value="{{ nitem.soon }}" hint-placeholder-val="{{ false }}">
+                  <sc-if value="{{ notSidebarCollapsed }}" hint-placeholder-val="{{ true }}">
+                    <span style="font-size:10px;font-weight:700;letter-spacing:0.03em;color:oklch(60% 0.02 260);border:1px solid oklch(42% 0.03 260);border-radius:4px;padding:2px 5px">SOON</span>
+                  </sc-if>
+                </sc-if>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+      </sc-for>
+    </div>
+    <sc-if value="{{ notSidebarCollapsed }}" hint-placeholder-val="{{ true }}">
+      <div style="margin-top:auto;padding:12px;font-size:12px;color:oklch(70% 0.02 260);border-top:1px solid oklch(38% 0.05 260)">
+        <div style="font-weight:600;color:white;margin-bottom:2px">Francisco M.</div>
+        <div>Growing Practice · Tier 2</div>
+      </div>
+    </sc-if>
+  </div>
+
+  <div style="flex:1;overflow-y:auto;padding:40px 48px">
+    <div style="max-width:1200px;margin:0 auto">
+
+      <sc-if value="{{ isDashboard }}" hint-placeholder-val="{{ true }}">
+        <div>
+          <h1 style="font-size:32px;font-weight:700;margin:0 0 4px;letter-spacing:-0.01em">Dashboard</h1>
+          <p style="font-size:15px;color:oklch(48% 0.02 240);margin:0 0 32px">Overview for July 2026</p>
+
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:32px">
+            <div style="background:white;border:1px solid oklch(90% 0.008 240);border-radius:10px;padding:20px">
+              <div style="font-size:13px;color:oklch(48% 0.02 240);margin-bottom:8px">Items extracted</div>
+              <div style="font-size:28px;font-weight:700;font-family:'IBM Plex Mono',monospace">245</div>
+              <div style="font-size:12.5px;color:oklch(50% 0.14 155);margin-top:4px">↑ 12% vs June</div>
+            </div>
+            <div style="background:white;border:1px solid oklch(90% 0.008 240);border-radius:10px;padding:20px">
+              <div style="font-size:13px;color:oklch(48% 0.02 240);margin-bottom:8px">Pending review</div>
+              <div style="font-size:28px;font-weight:700;font-family:'IBM Plex Mono',monospace">{{ pendingCount }}</div>
+              <div style="font-size:12.5px;color:oklch(52% 0.15 80);margin-top:4px">Needs your attention</div>
+            </div>
+            <div style="background:white;border:1px solid oklch(90% 0.008 240);border-radius:10px;padding:20px">
+              <div style="font-size:13px;color:oklch(48% 0.02 240);margin-bottom:8px">Avg. confidence</div>
+              <div style="font-size:28px;font-weight:700;font-family:'IBM Plex Mono',monospace">{{ avgConfidenceFmt }}</div>
+              <div style="font-size:12.5px;color:oklch(48% 0.02 240);margin-top:4px">Across all items</div>
+            </div>
+            <div style="background:white;border:1px solid oklch(90% 0.008 240);border-radius:10px;padding:20px">
+              <div style="font-size:13px;color:oklch(48% 0.02 240);margin-bottom:8px">QuickBooks</div>
+              <div style="font-size:19px;font-weight:700;color:oklch(50% 0.14 155);margin-top:4px">Connected ✓</div>
+              <div style="font-size:12.5px;color:oklch(48% 0.02 240);margin-top:4px">Last synced 2h ago</div>
+            </div>
+          </div>
+
+          <div style="display:grid;grid-template-columns:1.4fr 1fr;gap:16px">
+            <div style="background:white;border:1px solid oklch(90% 0.008 240);border-radius:10px;padding:24px">
+              <h3 style="font-size:16px;font-weight:600;margin:0 0 20px">Monthly extraction volume</h3>
+              <div style="display:flex;align-items:flex-end;gap:16px;height:140px">
+                <sc-for list="{{ chartBars }}" as="bar" hint-placeholder-count="6">
+                  <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:8px;height:100%;justify-content:flex-end">
+                    <div style="width:100%;border-radius:4px 4px 0 0;background:{{ bar.color }};height:{{ bar.height }}"></div>
+                    <div style="font-size:11.5px;color:oklch(48% 0.02 240)">{{ bar.label }}</div>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+            <div style="background:white;border:1px solid oklch(90% 0.008 240);border-radius:10px;padding:24px">
+              <h3 style="font-size:16px;font-weight:600;margin:0 0 16px">Quick actions</h3>
+              <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:24px">
+                <button onClick="{{ goUpload }}" style="padding:11px 16px;border-radius:8px;border:none;background:oklch(30% 0.08 260);color:white;font-size:14px;font-weight:600;cursor:pointer;text-align:left">Upload invoices or receipts →</button>
+                <button onClick="{{ goBatch }}" style="padding:11px 16px;border-radius:8px;border:1px solid oklch(90% 0.008 240);background:white;color:oklch(20% 0.02 240);font-size:14px;font-weight:600;cursor:pointer;text-align:left">Review {{ pendingCount }} pending items →</button>
+              </div>
+              <h3 style="font-size:14px;font-weight:600;margin:0 0 12px;color:oklch(48% 0.02 240)">Recent activity</h3>
+              <div style="display:flex;flex-direction:column;gap:12px">
+                <sc-for list="{{ recentActivity }}" as="act" hint-placeholder-count="4">
+                  <div style="display:flex;justify-content:space-between;font-size:13px">
+                    <span style="color:oklch(20% 0.02 240)">{{ act.text }}</span>
+                    <span style="color:oklch(60% 0.01 240)">{{ act.time }}</span>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isUpload }}" hint-placeholder-val="{{ false }}">
+        <div>
+          <h1 style="font-size:32px;font-weight:700;margin:0 0 4px;letter-spacing:-0.01em">Upload &amp; Extract</h1>
+          <p style="font-size:15px;color:oklch(48% 0.02 240);margin:0 0 32px">Drop invoices, receipts, or bank statements to extract data automatically</p>
+
+          <sc-if value="{{ isIdle }}" hint-placeholder-val="{{ true }}">
+            <div>
+              <div onClick="{{ startUpload }}" style="border:2px dashed oklch(85% 0.01 240);border-radius:14px;padding:64px 24px;text-align:center;cursor:pointer;background:white">
+                <div style="font-size:17px;font-weight:600;margin-bottom:6px">Drag &amp; drop files here</div>
+                <div style="font-size:14px;color:oklch(48% 0.02 240);margin-bottom:20px">or click to browse — PDF, CSV, OFX up to 25MB each</div>
+                <button style="padding:11px 22px;border-radius:8px;border:none;background:oklch(30% 0.08 260);color:white;font-size:14px;font-weight:600;cursor:pointer">Choose files</button>
+              </div>
+              <div style="display:flex;gap:12px;margin-top:20px">
+                <div style="display:flex;align-items:center;gap:8px;font-size:13px;color:oklch(48% 0.02 240)"><div style="width:28px;height:28px;border-radius:6px;background:oklch(94% 0.06 25);color:oklch(52% 0.18 25);display:flex;align-items:center;justify-content:center;font-size:10.5px;font-weight:700;font-family:'IBM Plex Mono',monospace">PDF</div>Invoices &amp; receipts</div>
+                <div style="display:flex;align-items:center;gap:8px;font-size:13px;color:oklch(48% 0.02 240)"><div style="width:28px;height:28px;border-radius:6px;background:oklch(94% 0.05 155);color:oklch(50% 0.14 155);display:flex;align-items:center;justify-content:center;font-size:10.5px;font-weight:700;font-family:'IBM Plex Mono',monospace">CSV</div>Bank statements</div>
+                <div style="display:flex;align-items:center;gap:8px;font-size:13px;color:oklch(48% 0.02 240)"><div style="width:28px;height:28px;border-radius:6px;background:oklch(94% 0.07 80);color:oklch(52% 0.15 80);display:flex;align-items:center;justify-content:center;font-size:10.5px;font-weight:700;font-family:'IBM Plex Mono',monospace">OFX</div>Bank exports</div>
+              </div>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ isProcessing }}" hint-placeholder-val="{{ false }}">
+            <div style="background:white;border:1px solid oklch(90% 0.008 240);border-radius:14px;padding:48px;text-align:center">
+              <div style="font-size:16px;font-weight:600;margin-bottom:20px">Extracting data from 12 files…</div>
+              <div style="height:8px;border-radius:4px;background:oklch(94% 0.006 240);overflow:hidden;max-width:420px;margin:0 auto">
+                <div style="height:100%;border-radius:4px;background:oklch(62% 0.11 195);width:{{ uploadProgressPct }}"></div>
+              </div>
+              <div style="font-size:13px;color:oklch(48% 0.02 240);margin-top:12px;font-family:'IBM Plex Mono',monospace">{{ uploadProgressPct }} complete</div>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ isDone }}" hint-placeholder-val="{{ false }}">
+            <div>
+              <div style="background:white;border:1px solid oklch(90% 0.008 240);border-radius:14px;padding:32px;margin-bottom:20px">
+                <div style="font-size:17px;font-weight:600;margin-bottom:4px">12 items extracted</div>
+                <div style="font-size:14px;color:oklch(48% 0.02 240);margin-bottom:24px">Review flagged items before posting to QuickBooks</div>
+                <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
+                  <div style="background:oklch(96% 0.03 155);border-radius:10px;padding:16px">
+                    <div style="font-size:22px;font-weight:700;color:oklch(45% 0.14 155)">{{ highCount }}</div>
+                    <div style="font-size:13px;color:oklch(40% 0.1 155)">Auto-approved (95%+)</div>
+                  </div>
+                  <div style="background:oklch(96% 0.04 80);border-radius:10px;padding:16px">
+                    <div style="font-size:22px;font-weight:700;color:oklch(48% 0.15 80)">{{ mediumCount }}</div>
+                    <div style="font-size:13px;color:oklch(42% 0.11 80)">Needs review (70–95%)</div>
+                  </div>
+                  <div style="background:oklch(96% 0.04 25);border-radius:10px;padding:16px">
+                    <div style="font-size:22px;font-weight:700;color:oklch(48% 0.18 25)">{{ lowCount }}</div>
+                    <div style="font-size:13px;color:oklch(42% 0.13 25)">Flagged (below 70%)</div>
+                  </div>
+                </div>
+              </div>
+              <div style="display:flex;gap:12px">
+                <button onClick="{{ goReview }}" style="padding:12px 20px;border-radius:8px;border:none;background:oklch(30% 0.08 260);color:white;font-size:14px;font-weight:600;cursor:pointer">Review flagged items ({{ pendingCount }})</button>
+                <button onClick="{{ goDashboard }}" style="padding:12px 20px;border-radius:8px;border:1px solid oklch(90% 0.008 240);background:white;color:oklch(20% 0.02 240);font-size:14px;font-weight:600;cursor:pointer">Back to dashboard</button>
+              </div>
+            </div>
+          </sc-if>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isReview }}" hint-placeholder-val="{{ false }}">
+        <div>
+          <h1 style="font-size:32px;font-weight:700;margin:0 0 4px;letter-spacing:-0.01em">Review &amp; Edit</h1>
+          <p style="font-size:15px;color:oklch(48% 0.02 240);margin:0 0 32px">{{ pendingCount }} items need your attention before posting</p>
+
+          <div style="display:flex;flex-direction:column;gap:14px">
+            <sc-for list="{{ reviewItems }}" as="item" hint-placeholder-count="3">
+              <div style="background:white;border:1px solid oklch(90% 0.008 240);border-radius:12px;padding:20px 24px">
+                <div style="display:flex;justify-content:space-between;align-items:flex-start">
+                  <div style="flex:1">
+                    <sc-if value="{{ item.isEditing }}" hint-placeholder-val="{{ false }}">
+                      <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
+                        <input value="{{ editingValue }}" onChange="{{ onEditChange }}" style="font-size:17px;font-weight:600;padding:6px 10px;border-radius:6px;border:1px solid oklch(62% 0.11 195);outline:none" />
+                        <button onClick="{{ item.onSave }}" style="padding:6px 12px;border-radius:6px;border:none;background:oklch(62% 0.11 195);color:white;font-size:13px;font-weight:600;cursor:pointer">Save</button>
+                        <button onClick="{{ cancelEdit }}" style="padding:6px 12px;border-radius:6px;border:1px solid oklch(90% 0.008 240);background:white;font-size:13px;cursor:pointer">Cancel</button>
+                      </div>
+                    </sc-if>
+                    <sc-if value="{{ item.isNotEditing }}" hint-placeholder-val="{{ true }}">
+                      <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
+                        <span style="font-size:17px;font-weight:600">{{ item.merchant }}</span>
+                        <span onClick="{{ item.onStartEdit }}" style="cursor:pointer;color:oklch(55% 0.02 240);font-size:13px">✎ edit</span>
+                      </div>
+                    </sc-if>
+                    <div style="display:flex;gap:20px;font-size:13.5px;color:oklch(48% 0.02 240);font-family:'IBM Plex Mono',monospace">
+                      <span>{{ item.invoiceNumber }}</span>
+                      <span>{{ item.date }}</span>
+                      <span style="font-weight:600;color:oklch(20% 0.02 240)">{{ item.amountFmt }}</span>
+                      <span style="color:oklch(60% 0.01 240)">{{ item.category }}</span>
+                    </div>
+                  </div>
+                  <div style="text-align:right;flex-shrink:0;margin-left:24px">
+                    <div style="display:inline-flex;align-items:center;gap:6px;padding:5px 12px;border-radius:999px;background:{{ item.tierBg }};color:{{ item.tierColor }};font-size:13px;font-weight:600">
+                      <span>{{ item.tierIcon }}</span>
+                      <span>{{ item.tierLabel }}</span>
+                      <span style="font-family:'IBM Plex Mono',monospace">{{ item.confidence }}%</span>
+                    </div>
+                  </div>
+                </div>
+                <sc-if value="{{ item.hasReason }}" hint-placeholder-val="{{ false }}">
+                  <div style="margin-top:12px;padding:10px 14px;background:oklch(98% 0.004 240);border-radius:8px;font-size:13px;color:oklch(45% 0.02 240)">Why flagged: {{ item.reason }}</div>
+                </sc-if>
+                <div style="display:flex;gap:8px;margin-top:16px">
+                  <button onClick="{{ item.onApprove }}" style="padding:8px 16px;border-radius:7px;border:none;background:oklch(45% 0.14 155);color:white;font-size:13.5px;font-weight:600;cursor:pointer">Approve</button>
+                  <button onClick="{{ item.onStartEdit }}" style="padding:8px 16px;border-radius:7px;border:1px solid oklch(90% 0.008 240);background:white;font-size:13.5px;font-weight:600;cursor:pointer">Edit</button>
+                  <button onClick="{{ item.onReject }}" style="padding:8px 16px;border-radius:7px;border:1px solid oklch(90% 0.008 240);background:white;color:oklch(48% 0.18 25);font-size:13.5px;font-weight:600;cursor:pointer">Reject</button>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isBatch }}" hint-placeholder-val="{{ false }}">
+        <div>
+          <h1 style="font-size:32px;font-weight:700;margin:0 0 4px;letter-spacing:-0.01em">Batch Review</h1>
+          <p style="font-size:15px;color:oklch(48% 0.02 240);margin:0 0 24px">{{ reviewedCount }} of {{ initialPendingCount }} flagged items reviewed</p>
+
+          <div style="height:6px;border-radius:3px;background:oklch(94% 0.006 240);overflow:hidden;margin-bottom:24px">
+            <div style="height:100%;border-radius:3px;background:oklch(62% 0.11 195);width:{{ reviewedPct }}"></div>
+          </div>
+
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+            <div style="display:flex;gap:10px">
+              <select value="{{ batchFilterTier }}" onChange="{{ onFilterChange }}" style="padding:8px 12px;border-radius:7px;border:1px solid oklch(90% 0.008 240);font-size:13.5px;background:white">
+                <option value="all">All confidence</option>
+                <option value="medium">Medium (70–95%)</option>
+                <option value="low">Low (&lt;70%)</option>
+              </select>
+              <button onClick="{{ toggleSort }}" style="padding:8px 14px;border-radius:7px;border:1px solid oklch(90% 0.008 240);background:white;font-size:13.5px;cursor:pointer">Sort: {{ sortLabel }}</button>
+            </div>
+            <div style="display:flex;gap:8px">
+              <button onClick="{{ bulkApprove }}" disabled="{{ noneSelected }}" style="padding:9px 16px;border-radius:7px;border:none;background:oklch(45% 0.14 155);color:white;font-size:13.5px;font-weight:600;cursor:pointer;opacity:{{ bulkOpacity }}">Approve selected ({{ selectedCount }})</button>
+              <button onClick="{{ bulkReject }}" disabled="{{ noneSelected }}" style="padding:9px 16px;border-radius:7px;border:1px solid oklch(90% 0.008 240);background:white;color:oklch(48% 0.18 25);font-size:13.5px;font-weight:600;cursor:pointer;opacity:{{ bulkOpacity }}">Reject selected</button>
+            </div>
+          </div>
+
+          <div style="background:white;border:1px solid oklch(90% 0.008 240);border-radius:12px;overflow:hidden">
+            <div style="display:grid;grid-template-columns:32px 1.4fr 1fr 1fr 1fr 1.3fr 1.6fr;gap:12px;padding:12px 20px;background:oklch(98% 0.004 240);border-bottom:1px solid oklch(90% 0.008 240);font-size:12px;font-weight:600;color:oklch(48% 0.02 240);text-transform:uppercase;letter-spacing:0.03em">
+              <input type="checkbox" checked="{{ allSelected }}" onChange="{{ toggleSelectAll }}" />
+              <div>Merchant</div><div>Invoice #</div><div>Date</div><div>Amount</div><div>Confidence</div><div>Actions</div>
+            </div>
+            <sc-for list="{{ batchRows }}" as="row" hint-placeholder-count="4">
+              <div style="display:grid;grid-template-columns:32px 1.4fr 1fr 1fr 1fr 1.3fr 1.6fr;gap:12px;padding:14px 20px;border-bottom:1px solid oklch(94% 0.006 240);align-items:center;font-size:13.5px">
+                <input type="checkbox" checked="{{ row.selected }}" onChange="{{ row.onToggle }}" />
+                <div style="font-weight:600">{{ row.merchant }}</div>
+                <div style="font-family:'IBM Plex Mono',monospace;color:oklch(48% 0.02 240)">{{ row.invoiceNumber }}</div>
+                <div style="font-family:'IBM Plex Mono',monospace;color:oklch(48% 0.02 240)">{{ row.date }}</div>
+                <div style="font-family:'IBM Plex Mono',monospace;font-weight:600">{{ row.amountFmt }}</div>
+                <div>
+                  <span style="display:inline-flex;align-items:center;gap:5px;padding:4px 10px;border-radius:999px;background:{{ row.tierBg }};color:{{ row.tierColor }};font-size:12.5px;font-weight:600">
+                    <span>{{ row.tierIcon }}</span><span style="font-family:'IBM Plex Mono',monospace">{{ row.confidence }}%</span>
+                  </span>
+                </div>
+                <div style="display:flex;gap:6px">
+                  <button onClick="{{ row.onApprove }}" style="padding:5px 12px;border-radius:6px;border:none;background:oklch(45% 0.14 155);color:white;font-size:12.5px;font-weight:600;cursor:pointer">Approve</button>
+                  <button onClick="{{ row.onReject }}" style="padding:5px 12px;border-radius:6px;border:1px solid oklch(90% 0.008 240);background:white;color:oklch(48% 0.18 25);font-size:12.5px;cursor:pointer">Reject</button>
+                </div>
+              </div>
+            </sc-for>
+            <sc-if value="{{ batchEmpty }}" hint-placeholder-val="{{ false }}">
+              <div style="padding:48px;text-align:center;color:oklch(55% 0.02 240);font-size:14px">All flagged items reviewed — nice work.</div>
+            </sc-if>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isReconcile }}" hint-placeholder-val="{{ false }}">
+        <div>
+          <h1 style="font-size:32px;font-weight:700;margin:0 0 4px;letter-spacing:-0.01em">Bank Reconciliation</h1>
+          <p style="font-size:15px;color:oklch(48% 0.02 240);margin:0 0 32px">Match bank transactions against your QuickBooks ledger</p>
+
+          <sc-if value="{{ reconcileIsIdle }}" hint-placeholder-val="{{ true }}">
+            <div onClick="{{ startReconcile }}" style="border:2px dashed oklch(85% 0.01 240);border-radius:14px;padding:64px 24px;text-align:center;cursor:pointer;background:white">
+              <div style="font-size:17px;font-weight:600;margin-bottom:6px">Drop your bank statement here</div>
+              <div style="font-size:14px;color:oklch(48% 0.02 240);margin-bottom:20px">CSV, OFX, or PDF — we'll match it against your QuickBooks entries</div>
+              <button style="padding:11px 22px;border-radius:8px;border:none;background:oklch(30% 0.08 260);color:white;font-size:14px;font-weight:600;cursor:pointer">Choose statement</button>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ reconcileIsProcessing }}" hint-placeholder-val="{{ false }}">
+            <div style="background:white;border:1px solid oklch(90% 0.008 240);border-radius:14px;padding:48px;text-align:center">
+              <div style="font-size:16px;font-weight:600;margin-bottom:20px">Matching 8 transactions against QuickBooks…</div>
+              <div style="height:8px;border-radius:4px;background:oklch(94% 0.006 240);overflow:hidden;max-width:420px;margin:0 auto">
+                <div style="height:100%;border-radius:4px;background:oklch(62% 0.11 195);width:{{ reconcileProgressPct }}"></div>
+              </div>
+              <div style="font-size:13px;color:oklch(48% 0.02 240);margin-top:12px;font-family:'IBM Plex Mono',monospace">{{ reconcileProgressPct }} complete</div>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ reconcileIsMatched }}" hint-placeholder-val="{{ false }}">
+            <div style="background:white;border:1px solid oklch(90% 0.008 240);border-radius:14px;padding:32px">
+              <div style="font-size:17px;font-weight:600;margin-bottom:20px">{{ matchedCount }} matched ✓ · {{ pendingMatchCount }} need review ⚠</div>
+              <button onClick="{{ openMatchReview }}" style="padding:12px 20px;border-radius:8px;border:none;background:oklch(30% 0.08 260);color:white;font-size:14px;font-weight:600;cursor:pointer">Review matches</button>
+            </div>
+          </sc-if>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isReconcileReview }}" hint-placeholder-val="{{ false }}">
+        <div>
+          <h1 style="font-size:32px;font-weight:700;margin:0 0 4px;letter-spacing:-0.01em">Review Matches</h1>
+          <p style="font-size:14px;color:oklch(48% 0.02 240);margin:0 0 16px">{{ matchesReviewed }} of {{ reconcileInitialPending }} flagged matches reviewed</p>
+          <div style="height:6px;border-radius:3px;background:oklch(94% 0.006 240);overflow:hidden;margin-bottom:20px">
+            <div style="height:100%;border-radius:3px;background:oklch(62% 0.11 195);width:{{ matchesReviewedPct }}"></div>
+          </div>
+          <div style="display:flex;justify-content:flex-end;margin-bottom:16px">
+            <button onClick="{{ bulkApproveMatches }}" disabled="{{ noneMatchSelected }}" style="padding:9px 16px;border-radius:7px;border:none;background:oklch(45% 0.14 155);color:white;font-size:13.5px;font-weight:600;cursor:pointer;opacity:{{ bulkMatchOpacity }}">Approve selected ({{ selectedMatchCount }})</button>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:14px">
+            <sc-for list="{{ matchRows }}" as="m" hint-placeholder-count="3">
+              <div style="background:white;border:1px solid oklch(90% 0.008 240);border-radius:12px;padding:20px 24px">
+                <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px">
+                  <div style="display:flex;align-items:center;gap:8px">
+                    <input type="checkbox" checked="{{ m.selected }}" onChange="{{ m.onToggle }}" />
+                    <span style="font-size:12.5px;font-weight:600;color:oklch(48% 0.02 240);text-transform:uppercase;letter-spacing:0.03em">Needs review</span>
+                  </div>
+                  <div style="display:inline-flex;align-items:center;gap:6px;padding:5px 12px;border-radius:999px;background:{{ m.tierBg }};color:{{ m.tierColor }};font-size:13px;font-weight:600">
+                    <span>{{ m.tierIcon }}</span><span style="font-family:'IBM Plex Mono',monospace">{{ m.confidence }}%</span>
+                  </div>
+                </div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px">
+                  <div style="border-right:1px solid oklch(94% 0.006 240);padding-right:24px">
+                    <div style="font-size:11.5px;color:oklch(60% 0.01 240);text-transform:uppercase;letter-spacing:0.03em;margin-bottom:6px">Bank transaction</div>
+                    <div style="font-size:15px;font-weight:600;margin-bottom:4px">{{ m.bankDesc }}</div>
+                    <div style="font-size:13px;color:oklch(48% 0.02 240);font-family:'IBM Plex Mono',monospace">{{ m.bankDate }} · {{ m.bankAmountFmt }}</div>
+                  </div>
+                  <div>
+                    <div style="font-size:11.5px;color:oklch(60% 0.01 240);text-transform:uppercase;letter-spacing:0.03em;margin-bottom:6px">QuickBooks entry</div>
+                    <div style="font-size:15px;font-weight:600;margin-bottom:4px">{{ m.qbDesc }}</div>
+                    <div style="font-size:13px;color:oklch(48% 0.02 240);font-family:'IBM Plex Mono',monospace">{{ m.qbDate }} · {{ m.qbAmountFmt }}</div>
+                  </div>
+                </div>
+                <div style="margin-top:12px;padding:10px 14px;background:oklch(98% 0.004 240);border-radius:8px;font-size:13px;color:oklch(45% 0.02 240)">{{ m.detail }}</div>
+                <div style="display:flex;gap:8px;margin-top:14px">
+                  <button onClick="{{ m.onApprove }}" style="padding:8px 16px;border-radius:7px;border:none;background:oklch(45% 0.14 155);color:white;font-size:13.5px;font-weight:600;cursor:pointer">Approve match</button>
+                  <button onClick="{{ m.onReject }}" style="padding:8px 16px;border-radius:7px;border:1px solid oklch(90% 0.008 240);background:white;color:oklch(48% 0.18 25);font-size:13.5px;font-weight:600;cursor:pointer">Reject</button>
+                </div>
+              </div>
+            </sc-for>
+            <sc-if value="{{ matchesEmpty }}" hint-placeholder-val="{{ false }}">
+              <div style="background:white;border:1px solid oklch(90% 0.008 240);border-radius:12px;padding:48px;text-align:center;color:oklch(55% 0.02 240);font-size:14px">All matches reviewed — ready to generate the reconciliation report.</div>
+            </sc-if>
+          </div>
+          <sc-if value="{{ matchesEmpty }}" hint-placeholder-val="{{ false }}">
+            <button style="margin-top:20px;padding:12px 20px;border-radius:8px;border:none;background:oklch(30% 0.08 260);color:white;font-size:14px;font-weight:600;cursor:pointer">Generate reconciliation report</button>
+          </sc-if>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isReconcileBatch }}" hint-placeholder-val="{{ false }}">
+        <div>
+          <h1 style="font-size:32px;font-weight:700;margin:0 0 4px;letter-spacing:-0.01em">Reconciliation Batch Review</h1>
+          <p style="font-size:15px;color:oklch(48% 0.02 240);margin:0 0 24px">{{ reconcileBatchReviewed }} of {{ reconcileInitialPending }} flagged matches reviewed</p>
+
+          <div style="height:6px;border-radius:3px;background:oklch(94% 0.006 240);overflow:hidden;margin-bottom:24px">
+            <div style="height:100%;border-radius:3px;background:oklch(62% 0.11 195);width:{{ reconcileBatchReviewedPct }}"></div>
+          </div>
+
+          <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:12px">
+            <select value="{{ reconcileBatchFilter }}" onChange="{{ onReconcileBatchFilterChange }}" style="padding:8px 12px;border-radius:7px;border:1px solid oklch(90% 0.008 240);font-size:13.5px;background:white">
+              <option value="all">All confidence</option>
+              <option value="medium">Medium (70–95%)</option>
+              <option value="low">Low (&lt;70%)</option>
+            </select>
+            <button onClick="{{ sortByConfidence }}" style="padding:8px 14px;border-radius:7px;border:1px solid oklch(90% 0.008 240);background:white;font-size:13px;cursor:pointer">{{ confidenceSortLabel }}</button>
+            <button onClick="{{ sortByAmount }}" style="padding:8px 14px;border-radius:7px;border:1px solid oklch(90% 0.008 240);background:white;font-size:13px;cursor:pointer">{{ amountSortLabel }}</button>
+            <button onClick="{{ sortByDate }}" style="padding:8px 14px;border-radius:7px;border:1px solid oklch(90% 0.008 240);background:white;font-size:13px;cursor:pointer">{{ dateSortLabel }}</button>
+          </div>
+          <div style="display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px;margin-bottom:16px">
+            <button onClick="{{ editSelectedReconcileBatch }}" style="padding:9px 16px;border-radius:7px;border:1px solid oklch(90% 0.008 240);background:white;font-size:13.5px;font-weight:600;cursor:pointer">Edit selected ({{ reconcileBatchSelectedCount }})</button>
+            <button onClick="{{ rejectAllReconcileBatch }}" style="padding:9px 16px;border-radius:7px;border:1px solid oklch(90% 0.008 240);background:white;color:oklch(48% 0.18 25);font-size:13.5px;font-weight:600;cursor:pointer">Reject all</button>
+            <button onClick="{{ approveAllReconcileBatch }}" style="padding:9px 16px;border-radius:7px;border:none;background:oklch(45% 0.14 155);color:white;font-size:13.5px;font-weight:600;cursor:pointer">Approve all</button>
+          </div>
+
+          <div style="background:white;border:1px solid oklch(90% 0.008 240);border-radius:12px;overflow:hidden">
+            <div style="display:grid;grid-template-columns:32px 1.3fr 1fr 1fr 0.9fr 1.3fr;gap:12px;padding:12px 20px;background:oklch(98% 0.004 240);border-bottom:1px solid oklch(90% 0.008 240);font-size:12px;font-weight:600;color:oklch(48% 0.02 240);text-transform:uppercase;letter-spacing:0.03em">
+              <div></div><div>Bank / QuickBooks</div><div>Amount diff</div><div>Date gap</div><div>Confidence</div><div></div>
+            </div>
+            <sc-for list="{{ reconcileBatchRows }}" as="row" hint-placeholder-count="4">
+              <div style="display:grid;grid-template-columns:32px 1.3fr 1fr 1fr 0.9fr 1.3fr;gap:12px;padding:14px 20px;border-bottom:1px solid oklch(94% 0.006 240);align-items:center;font-size:13.5px">
+                <input type="checkbox" checked="{{ row.selected }}" onChange="{{ row.onToggle }}" />
+                <div>
+                  <div style="font-weight:600">{{ row.bankDesc }}</div>
+                  <div style="color:oklch(55% 0.02 240);font-size:12.5px">{{ row.qbDesc }}</div>
+                </div>
+                <div style="font-family:'IBM Plex Mono',monospace">{{ row.amountDiffFmt }}</div>
+                <div style="font-family:'IBM Plex Mono',monospace">{{ row.dateGapDays }}d</div>
+                <div>
+                  <span style="display:inline-flex;align-items:center;gap:5px;padding:4px 10px;border-radius:999px;background:{{ row.tierBg }};color:{{ row.tierColor }};font-size:12.5px;font-weight:600">
+                    <span>{{ row.tierIcon }}</span><span style="font-family:'IBM Plex Mono',monospace">{{ row.confidence }}%</span>
+                  </span>
+                </div>
+                <div style="display:flex;gap:6px">
+                  <button onClick="{{ row.onToggle }}" style="padding:5px 12px;border-radius:6px;border:1px solid oklch(90% 0.008 240);background:white;font-size:12.5px;cursor:pointer">Select</button>
+                </div>
+              </div>
+            </sc-for>
+            <sc-if value="{{ reconcileBatchEmpty }}" hint-placeholder-val="{{ false }}">
+              <div style="padding:48px;text-align:center;color:oklch(55% 0.02 240);font-size:14px">All flagged matches reviewed — nice work.</div>
+            </sc-if>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isComingSoon }}" hint-placeholder-val="{{ false }}">
+        <div style="max-width:520px;margin:64px auto 0;text-align:center">
+          <div style="width:48px;height:48px;border-radius:12px;background:oklch(94% 0.006 240);display:flex;align-items:center;justify-content:center;margin:0 auto 20px;font-size:20px;color:oklch(55% 0.02 240)">⏳</div>
+          <div style="font-size:12px;font-weight:700;letter-spacing:0.05em;color:oklch(55% 0.11 195);text-transform:uppercase;margin-bottom:10px">{{ comingSoonPhase }} · Coming soon</div>
+          <h1 style="font-size:26px;font-weight:700;margin:0 0 12px">{{ comingSoonTitle }}</h1>
+          <p style="font-size:15px;color:oklch(48% 0.02 240);line-height:1.5;margin:0">{{ comingSoonDesc }}</p>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isSettings }}" hint-placeholder-val="{{ false }}">
+        <div>
+          <h1 style="font-size:32px;font-weight:700;margin:0 0 4px;letter-spacing:-0.01em">Settings</h1>
+          <p style="font-size:15px;color:oklch(48% 0.02 240);margin:0 0 32px">Account, integrations, and audit history</p>
+
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px">
+            <div style="background:white;border:1px solid oklch(90% 0.008 240);border-radius:12px;padding:24px">
+              <h3 style="font-size:16px;font-weight:600;margin:0 0 16px">Account</h3>
+              <div style="display:flex;flex-direction:column;gap:12px;font-size:14px">
+                <div style="display:flex;justify-content:space-between"><span style="color:oklch(48% 0.02 240)">Name</span><span style="font-weight:600">Francisco M.</span></div>
+                <div style="display:flex;justify-content:space-between"><span style="color:oklch(48% 0.02 240)">Email</span><span style="font-weight:600">francisco@zakiledger.com</span></div>
+                <div style="display:flex;justify-content:space-between"><span style="color:oklch(48% 0.02 240)">Plan</span><span style="font-weight:600">Growing Practice · Tier 2</span></div>
+              </div>
+            </div>
+            <div style="background:white;border:1px solid oklch(90% 0.008 240);border-radius:12px;padding:24px">
+              <h3 style="font-size:16px;font-weight:600;margin:0 0 16px">QuickBooks integration</h3>
+              <div style="display:flex;justify-content:space-between;align-items:center">
+                <div>
+                  <div style="font-weight:700;color:{{ qbConnectedColor }};margin-bottom:4px">{{ qbConnectedLabel }}</div>
+                  <div style="font-size:13px;color:oklch(48% 0.02 240)">Last synced 2h ago</div>
+                </div>
+                <button onClick="{{ toggleQbConnection }}" style="padding:9px 16px;border-radius:7px;border:1px solid oklch(90% 0.008 240);background:white;font-size:13.5px;font-weight:600;cursor:pointer">{{ qbButtonLabel }}</button>
+              </div>
+            </div>
+          </div>
+
+          <div style="background:white;border:1px solid oklch(90% 0.008 240);border-radius:12px;padding:24px;margin-bottom:24px">
+            <h3 style="font-size:16px;font-weight:600;margin:0 0 16px">Audit log</h3>
+            <div style="display:flex;flex-direction:column">
+              <sc-for list="{{ auditLog }}" as="log" hint-placeholder-count="4">
+                <div style="display:grid;grid-template-columns:1.2fr 1.3fr 1fr 2fr;gap:16px;padding:12px 0;border-bottom:1px solid oklch(94% 0.006 240);font-size:13.5px">
+                  <div style="font-family:'IBM Plex Mono',monospace;color:oklch(48% 0.02 240)">{{ log.date }}</div>
+                  <div style="font-weight:600">{{ log.action }}</div>
+                  <div style="color:oklch(48% 0.02 240)">{{ log.user }}</div>
+                  <div style="color:oklch(45% 0.02 240)">{{ log.change }}</div>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+
+          <button style="padding:11px 20px;border-radius:8px;border:1px solid oklch(90% 0.008 240);background:white;color:oklch(48% 0.18 25);font-size:14px;font-weight:600;cursor:pointer">Sign out</button>
+        </div>
+      </sc-if>
+
+    </div>
+  </div>
+
+  <sc-if value="{{ hasToast }}" hint-placeholder-val="{{ false }}">
+    <div style="position:fixed;bottom:28px;right:28px;background:oklch(24% 0.05 260);color:white;padding:14px 20px;border-radius:10px;font-size:14px;font-weight:600;box-shadow:0 8px 24px oklch(20% 0.02 240 / 0.2)">{{ toast }}</div>
+  </sc-if>
+
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  state = {
+    view: 'dashboard',
+    uploadStage: 'idle',
+    uploadProgress: 0,
+    editingItemId: null,
+    editingValue: '',
+    selectedIds: [],
+    batchFilterTier: 'all',
+    batchSortDesc: true,
+    toast: null,
+    initialPendingCount: 4,
+    reconcileStage: 'idle',
+    reconcileProgress: 0,
+    reconcileReviewOpen: false,
+    selectedMatchIds: [],
+    reconcileInitialPending: 4,
+    qbConnected: true,
+    sidebarCollapsed: false,
+    reconcileBatchFilter: 'all',
+    reconcileBatchSortBy: 'confidence',
+    reconcileBatchSortDesc: true,
+    reconcileBatchSelectedIds: [],
+    matches: [
+      { id: 1, bankDesc: 'AMAZON MKTPLACE', bankDate: '2026-07-21', bankAmount: 233.45, qbDesc: 'Amazon Business', qbDate: '2026-07-21', qbAmount: 233.45, confidence: 99, detail: 'Amount ✓ · Date ✓ · Merchant ✓', status: 'matched', dateGapDays: 0 },
+      { id: 2, bankDesc: 'SQ *BLUE BOTTLE', bankDate: '2026-07-20', bankAmount: 18.50, qbDesc: 'Blue Bottle Coffee', qbDate: '2026-07-20', qbAmount: 18.50, confidence: 97, detail: 'Amount ✓ · Date ✓ · Merchant ✓', status: 'matched', dateGapDays: 0 },
+      { id: 3, bankDesc: 'PAYPAL *VINTED', bankDate: '2026-07-22', bankAmount: 46.00, qbDesc: 'Vinted', qbDate: '2026-07-22', qbAmount: 46.00, confidence: 82, detail: 'Amount ✓ · Date ✓ · Merchant ≈ 82%', status: 'pending', dateGapDays: 0 },
+      { id: 4, bankDesc: 'WEWORK SF 001', bankDate: '2026-07-13', bankAmount: 650.00, qbDesc: 'WeWork', qbDate: '2026-07-15', qbAmount: 650.00, confidence: 65, detail: 'Amount ✓ · Date ≈ 2 days · Merchant ≈ 65%', status: 'pending', dateGapDays: 2 },
+      { id: 5, bankDesc: 'SHELL OIL 5521', bankDate: '2026-07-26', bankAmount: 61.20, qbDesc: 'Shell', qbDate: '2026-07-26', qbAmount: 61.20, confidence: 99, detail: 'Amount ✓ · Date ✓ · Merchant ✓', status: 'matched', dateGapDays: 0 },
+      { id: 6, bankDesc: 'DELTA AIR 00921', bankDate: '2026-07-20', bankAmount: 412.00, qbDesc: 'Delta Airlines', qbDate: '2026-07-20', qbAmount: 412.00, confidence: 78, detail: 'Amount ✓ · Date ✓ · Merchant ≈ 78%', status: 'pending', dateGapDays: 0 },
+      { id: 7, bankDesc: 'ADOBE INC', bankDate: '2026-07-19', bankAmount: 52.99, qbDesc: 'Adobe', qbDate: '2026-07-19', qbAmount: 52.99, confidence: 99, detail: 'Amount ✓ · Date ✓ · Merchant ✓', status: 'matched', dateGapDays: 0 },
+      { id: 8, bankDesc: 'COSTCO WHSE #442', bankDate: '2026-07-17', bankAmount: 310.76, qbDesc: 'Costco Wholesale', qbDate: '2026-07-17', qbAmount: 310.88, confidence: 60, detail: 'Amount ≈ $0.12 · Date ✓ · Merchant ≈ 60%', status: 'pending', dateGapDays: 0 }
+    ],
+    auditLog: [
+      { date: '2026-07-26 14:02', action: 'Approved match', user: 'Francisco M.', change: 'Shell — $61.20 → reconciled' },
+      { date: '2026-07-25 09:41', action: 'Edited merchant', user: 'Francisco M.', change: 'Vinted: confidence 60% → 99%' },
+      { date: '2026-07-24 17:15', action: 'Bulk approved', user: 'Francisco M.', change: '8 items posted to QuickBooks' },
+      { date: '2026-07-22 11:03', action: 'Disconnected & reconnected', user: 'Francisco M.', change: 'QuickBooks integration' }
+    ],
+    items: [
+      { id: 1, merchant: 'Home Depot', amount: 184.32, date: '2026-07-24', invoiceNumber: 'INV-88213', confidence: 98, category: 'Materials', status: 'approved', reason: null },
+      { id: 2, merchant: 'Uber', amount: 23.50, date: '2026-07-25', invoiceNumber: 'TRIP-4471', confidence: 99, category: 'Travel', status: 'approved', reason: null },
+      { id: 3, merchant: 'Vinted', amount: 46.00, date: '2026-07-22', invoiceNumber: 'N/A', confidence: 62, category: 'Merchandise', status: 'pending', reason: 'Non-standard invoice format — merchant name unconfirmed' },
+      { id: 4, merchant: 'Staples', amount: 89.10, date: '2026-07-23', invoiceNumber: 'INV-33021', confidence: 96, category: 'Office Supplies', status: 'approved', reason: null },
+      { id: 5, merchant: 'Delta Airlines', amount: 412.00, date: '2026-07-20', invoiceNumber: 'ETKT-990214', confidence: 91, category: 'Travel', status: 'pending', reason: 'E-ticket number partially obscured in scan' },
+      { id: 6, merchant: 'Comcast Business', amount: 129.99, date: '2026-07-18', invoiceNumber: 'ACCT-5521', confidence: 99, category: 'Utilities', status: 'approved', reason: null },
+      { id: 7, merchant: 'Adobe', amount: 52.99, date: '2026-07-19', invoiceNumber: 'INV-7743A', confidence: 97, category: 'Software', status: 'approved', reason: null },
+      { id: 8, merchant: 'WeWork', amount: 650.00, date: '2026-07-15', invoiceNumber: 'INV-2291', confidence: 68, category: 'Rent', status: 'pending', reason: "Amount doesn't match prior month pattern" },
+      { id: 9, merchant: 'Shell', amount: 61.20, date: '2026-07-26', invoiceNumber: 'N/A', confidence: 94, category: 'Fuel', status: 'approved', reason: null },
+      { id: 10, merchant: 'Amazon Business', amount: 233.45, date: '2026-07-21', invoiceNumber: 'ORD-119923', confidence: 99, category: 'Supplies', status: 'approved', reason: null },
+      { id: 11, merchant: 'Costco Wholesale', amount: 310.88, date: '2026-07-17', invoiceNumber: 'MEMB-4471', confidence: 73, category: 'Supplies', status: 'pending', reason: 'Membership vs. purchase line item ambiguous' },
+      { id: 12, merchant: 'Zoom', amount: 14.99, date: '2026-07-16', invoiceNumber: 'INV-55201', confidence: 99, category: 'Software', status: 'approved', reason: null }
+    ]
+  };
+
+  tierFor(conf) {
+    if (conf >= 95) return { tier: 'high', label: 'High confidence', color: 'oklch(45% 0.14 155)', bg: 'oklch(94% 0.05 155)', icon: '✓' };
+    if (conf >= 70) return { tier: 'medium', label: 'Medium confidence', color: 'oklch(48% 0.15 80)', bg: 'oklch(94% 0.06 80)', icon: '!' };
+    return { tier: 'low', label: 'Low confidence', color: 'oklch(48% 0.18 25)', bg: 'oklch(94% 0.06 25)', icon: '✕' };
+  }
+
+  fmt(n) { return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+
+  setView = (v) => this.setState({ view: v });
+
+  startUpload = () => {
+    if (this.state.uploadStage === 'processing') return;
+    this.setState({ uploadStage: 'processing', uploadProgress: 0 });
+    this._timer = setInterval(() => {
+      this.setState((s) => {
+        const p = Math.min(100, s.uploadProgress + 9);
+        if (p >= 100) { clearInterval(this._timer); return { uploadProgress: 100, uploadStage: 'done' }; }
+        return { uploadProgress: p };
+      });
+    }, 140);
+  };
+
+  componentDidMount() {
+    this._keyHandler = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'b') { e.preventDefault(); this.toggleSidebar(); }
+    };
+    window.addEventListener('keydown', this._keyHandler);
+  }
+
+  componentWillUnmount() {
+    if (this._timer) clearInterval(this._timer);
+    if (this._toastTimer) clearTimeout(this._toastTimer);
+    if (this._reconTimer) clearInterval(this._reconTimer);
+    if (this._keyHandler) window.removeEventListener('keydown', this._keyHandler);
+  }
+
+  toggleSidebar = () => this.setState((s) => ({ sidebarCollapsed: !s.sidebarCollapsed }));
+
+  startEdit = (id, val) => this.setState({ editingItemId: id, editingValue: val });
+  onEditChange = (e) => this.setState({ editingValue: e.target.value });
+  cancelEdit = () => this.setState({ editingItemId: null, editingValue: '' });
+  saveEdit = (id) => this.setState((s) => ({
+    items: s.items.map((it) => it.id === id ? { ...it, merchant: s.editingValue, confidence: 99, status: 'approved', reason: null } : it),
+    editingItemId: null, editingValue: ''
+  }));
+
+  approveItem = (id) => this.setState((s) => ({ items: s.items.map((it) => it.id === id ? { ...it, status: 'approved' } : it) }));
+  rejectItem = (id) => this.setState((s) => ({ items: s.items.map((it) => it.id === id ? { ...it, status: 'rejected' } : it) }));
+
+  toggleSelect = (id) => this.setState((s) => ({ selectedIds: s.selectedIds.includes(id) ? s.selectedIds.filter((x) => x !== id) : [...s.selectedIds, id] }));
+
+  showToast(msg) {
+    this.setState({ toast: msg });
+    if (this._toastTimer) clearTimeout(this._toastTimer);
+    this._toastTimer = setTimeout(() => this.setState({ toast: null }), 2500);
+  }
+
+  bulkApprove = () => {
+    const n = this.state.selectedIds.length;
+    if (!n) return;
+    this.setState((s) => ({ items: s.items.map((it) => s.selectedIds.includes(it.id) ? { ...it, status: 'approved' } : it), selectedIds: [] }));
+    this.showToast(n + (n === 1 ? ' item approved' : ' items approved'));
+  };
+  bulkReject = () => {
+    const n = this.state.selectedIds.length;
+    if (!n) return;
+    this.setState((s) => ({ items: s.items.map((it) => s.selectedIds.includes(it.id) ? { ...it, status: 'rejected' } : it), selectedIds: [] }));
+    this.showToast(n + (n === 1 ? ' item rejected' : ' items rejected'));
+  };
+
+  setBatchFilter = (t) => this.setState({ batchFilterTier: t });
+  onFilterChange = (e) => this.setBatchFilter(e.target.value);
+  toggleSort = () => this.setState((s) => ({ batchSortDesc: !s.batchSortDesc }));
+
+  startReconcile = () => {
+    if (this.state.reconcileStage === 'processing') return;
+    this.setState({ reconcileStage: 'processing', reconcileProgress: 0 });
+    this._reconTimer = setInterval(() => {
+      this.setState((s) => {
+        const p = Math.min(100, s.reconcileProgress + 10);
+        if (p >= 100) { clearInterval(this._reconTimer); return { reconcileProgress: 100, reconcileStage: 'matched' }; }
+        return { reconcileProgress: p };
+      });
+    }, 130);
+  };
+  openMatchReview = () => this.setState({ reconcileReviewOpen: true });
+  approveMatch = (id) => this.setState((s) => ({ matches: s.matches.map((m) => m.id === id ? { ...m, status: 'matched' } : m) }));
+  rejectMatch = (id) => this.setState((s) => ({ matches: s.matches.map((m) => m.id === id ? { ...m, status: 'rejected' } : m) }));
+  toggleMatchSelect = (id) => this.setState((s) => ({ selectedMatchIds: s.selectedMatchIds.includes(id) ? s.selectedMatchIds.filter((x) => x !== id) : [...s.selectedMatchIds, id] }));
+  bulkApproveMatches = () => {
+    const n = this.state.selectedMatchIds.length;
+    if (!n) return;
+    this.setState((s) => ({ matches: s.matches.map((m) => s.selectedMatchIds.includes(m.id) ? { ...m, status: 'matched' } : m), selectedMatchIds: [] }));
+    this.showToast(n + (n === 1 ? ' match approved' : ' matches approved'));
+  };
+  goReconcileReview = () => this.setState({ view: 'reconcile-review', reconcileStage: 'matched', reconcileReviewOpen: true });
+  setReconcileBatchFilter = (t) => this.setState({ reconcileBatchFilter: t });
+  onReconcileBatchFilterChange = (e) => this.setReconcileBatchFilter(e.target.value);
+  setReconcileBatchSort = (by) => this.setState((s) => ({ reconcileBatchSortBy: by, reconcileBatchSortDesc: s.reconcileBatchSortBy === by ? !s.reconcileBatchSortDesc : true }));
+  toggleReconcileBatchSelect = (id) => this.setState((s) => ({ reconcileBatchSelectedIds: s.reconcileBatchSelectedIds.includes(id) ? s.reconcileBatchSelectedIds.filter((x) => x !== id) : [...s.reconcileBatchSelectedIds, id] }));
+  approveAllReconcileBatch = (ids) => {
+    if (!ids.length) return;
+    this.setState((s) => ({ matches: s.matches.map((m) => ids.includes(m.id) ? { ...m, status: 'matched' } : m), reconcileBatchSelectedIds: [] }));
+    this.showToast(ids.length + ' matches approved');
+  };
+  rejectAllReconcileBatch = (ids) => {
+    if (!ids.length) return;
+    this.setState((s) => ({ matches: s.matches.map((m) => ids.includes(m.id) ? { ...m, status: 'rejected' } : m), reconcileBatchSelectedIds: [] }));
+    this.showToast(ids.length + ' matches rejected');
+  };
+  editSelectedReconcileBatch = () => this.showToast('Open a match individually to edit its fields');
+
+  toggleQbConnection = () => {
+    this.setState((s) => ({ qbConnected: !s.qbConnected }));
+    this.showToast(this.state.qbConnected ? 'QuickBooks disconnected' : 'QuickBooks connected');
+  };
+
+  renderVals() {
+    const s = this.state;
+    const items = s.items;
+    const pending = items.filter((it) => it.status === 'pending');
+    const pendingCount = pending.length;
+    const avgConfidence = Math.round(items.reduce((a, it) => a + it.confidence, 0) / items.length);
+
+    const navGroupDefs = [
+      { group: null, items: [{ id: 'dashboard', label: 'Dashboard', icon: '🏠' }] },
+      { group: 'Extraction', items: [
+        { id: 'upload', label: 'Upload & Extract', icon: '📤' },
+        { id: 'review', label: 'Review & Edit', icon: '✏️' },
+        { id: 'batch', label: 'Batch Review', icon: '✅' }
+      ] },
+      { group: 'Reconciliation', items: [
+        { id: 'reconcile', label: 'Upload Statement', icon: '🏦' },
+        { id: 'reconcile-review', label: 'Review Matches', icon: '🔍' },
+        { id: 'reconcile-batch', label: 'Batch Review', icon: '✔️' }
+      ] },
+      { group: 'Organization', items: [
+        { id: 'auto-categorize', label: 'Auto-Categorize', icon: '📁', soon: true },
+        { id: 'document-portal', label: 'Document Portal', icon: '📋', soon: true }
+      ] },
+      { group: 'Insights', items: [{ id: 'reports', label: 'Reports & Analytics', icon: '📊', soon: true }] },
+      { group: 'Account', items: [{ id: 'settings', label: 'Settings', icon: '⚙️' }] }
+    ];
+    const navGroups = navGroupDefs.map((g) => ({
+      label: g.group, hasLabel: !!g.group,
+      items: g.items.map((n) => ({
+        label: n.label,
+        onClick: () => this.setView(n.id),
+        bg: s.view === n.id ? 'oklch(32% 0.07 260)' : 'transparent',
+        color: n.soon ? 'oklch(52% 0.02 260)' : (s.view === n.id ? 'white' : 'oklch(78% 0.02 260)'),
+        dot: n.soon ? 'oklch(42% 0.02 260)' : (s.view === n.id ? 'oklch(70% 0.12 195)' : 'oklch(50% 0.03 260)'),
+        soon: !!n.soon, icon: n.icon
+      }))
+    }));
+    const comingSoonMeta = {
+      'auto-categorize': { title: 'Auto-Categorize', phase: 'Phase 5', desc: 'Automatically categorize expenses with GL coding as they\u2019re extracted \u2014 no manual mapping required.' },
+      'document-portal': { title: 'Document Portal', phase: 'Phase 4', desc: 'Give clients a secure link to upload invoices and statements directly, without email back-and-forth.' },
+      'reports': { title: 'Reports & Analytics', phase: 'Phase 6', desc: 'Detailed extraction accuracy and reconciliation reports, exportable for your records.' }
+    };
+    const comingSoon = comingSoonMeta[s.view];
+
+    const chartData = [
+      { label: 'Feb', v: 60 }, { label: 'Mar', v: 72 }, { label: 'Apr', v: 68 },
+      { label: 'May', v: 85 }, { label: 'Jun', v: 78 }, { label: 'Jul', v: 100 }
+    ];
+    const chartBars = chartData.map((b) => ({ label: b.label, height: b.v + '%', color: b.label === 'Jul' ? 'oklch(62% 0.11 195)' : 'oklch(88% 0.015 240)' }));
+
+    const recentActivity = [
+      { text: 'Uploaded 12 invoices', time: '2h ago' },
+      { text: 'Approved 8 flagged items', time: 'Yesterday' },
+      { text: 'Bank statement reconciled', time: '3 days ago' },
+      { text: 'Uploaded 45 receipts', time: '1 week ago' }
+    ];
+
+    const reviewItems = pending.map((it) => {
+      const t = this.tierFor(it.confidence);
+      const editing = s.editingItemId === it.id;
+      return {
+        ...it, amountFmt: this.fmt(it.amount), tierLabel: t.label, tierColor: t.color, tierBg: t.bg, tierIcon: t.icon,
+        hasReason: !!it.reason, isEditing: editing, isNotEditing: !editing,
+        onStartEdit: () => this.startEdit(it.id, it.merchant),
+        onSave: () => this.saveEdit(it.id),
+        onApprove: () => this.approveItem(it.id),
+        onReject: () => this.rejectItem(it.id)
+      };
+    });
+
+    let batchList = pending.filter((it) => s.batchFilterTier === 'all' || this.tierFor(it.confidence).tier === s.batchFilterTier);
+    batchList = batchList.slice().sort((a, b) => s.batchSortDesc ? b.confidence - a.confidence : a.confidence - b.confidence);
+    const batchRows = batchList.map((it) => {
+      const t = this.tierFor(it.confidence);
+      return {
+        ...it, amountFmt: this.fmt(it.amount), tierColor: t.color, tierBg: t.bg, tierIcon: t.icon,
+        selected: s.selectedIds.includes(it.id),
+        onToggle: () => this.toggleSelect(it.id),
+        onApprove: () => this.approveItem(it.id),
+        onReject: () => this.rejectItem(it.id)
+      };
+    });
+
+    const reviewedCount = s.initialPendingCount - pendingCount;
+
+    const matches = s.matches;
+    const matchedCount = matches.filter((m) => m.status === 'matched').length;
+    const pendingMatches = matches.filter((m) => m.status === 'pending');
+    const matchRows = pendingMatches.map((m) => {
+      const t = this.tierFor(m.confidence);
+      return {
+        ...m, bankAmountFmt: this.fmt(m.bankAmount), qbAmountFmt: this.fmt(m.qbAmount),
+        tierColor: t.color, tierBg: t.bg, tierIcon: t.icon,
+        selected: s.selectedMatchIds.includes(m.id),
+        onToggle: () => this.toggleMatchSelect(m.id),
+        onApprove: () => this.approveMatch(m.id),
+        onReject: () => this.rejectMatch(m.id)
+      };
+    });
+    const matchesReviewed = s.reconcileInitialPending - pendingMatches.length;
+
+    let rbList = pendingMatches.filter((m) => s.reconcileBatchFilter === 'all' || this.tierFor(m.confidence).tier === s.reconcileBatchFilter)
+      .map((m) => ({ ...m, amountDiff: Math.round(Math.abs(m.bankAmount - m.qbAmount) * 100) / 100 }));
+    const rbKey = { confidence: 'confidence', amountDiff: 'amountDiff', dateGap: 'dateGapDays' }[s.reconcileBatchSortBy];
+    rbList = rbList.slice().sort((a, b) => s.reconcileBatchSortDesc ? b[rbKey] - a[rbKey] : a[rbKey] - b[rbKey]);
+    const reconcileBatchRows = rbList.map((m) => {
+      const t = this.tierFor(m.confidence);
+      return {
+        ...m, bankAmountFmt: this.fmt(m.bankAmount), qbAmountFmt: this.fmt(m.qbAmount), amountDiffFmt: this.fmt(m.amountDiff),
+        tierColor: t.color, tierBg: t.bg, tierIcon: t.icon,
+        selected: s.reconcileBatchSelectedIds.includes(m.id),
+        onToggle: () => this.toggleReconcileBatchSelect(m.id)
+      };
+    });
+    const rbAllIds = rbList.map((m) => m.id);
+    const sortArrow = (key) => s.reconcileBatchSortBy === key ? (s.reconcileBatchSortDesc ? ' ↓' : ' ↑') : '';
+
+    return {
+      isDashboard: s.view === 'dashboard', isUpload: s.view === 'upload', isReview: s.view === 'review', isBatch: s.view === 'batch',
+      isReconcile: s.view === 'reconcile', isReconcileReview: s.view === 'reconcile-review', isReconcileBatch: s.view === 'reconcile-batch', isSettings: s.view === 'settings',
+      isComingSoon: !!comingSoon, comingSoonTitle: comingSoon ? comingSoon.title : '', comingSoonPhase: comingSoon ? comingSoon.phase : '', comingSoonDesc: comingSoon ? comingSoon.desc : '',
+      navGroups, sidebarCollapsed: s.sidebarCollapsed, sidebarWidth: s.sidebarCollapsed ? '72px' : '240px',
+      notSidebarCollapsed: !s.sidebarCollapsed, toggleSidebar: this.toggleSidebar,
+      reconcileIsIdle: s.reconcileStage === 'idle', reconcileIsProcessing: s.reconcileStage === 'processing', reconcileIsMatched: s.reconcileStage === 'matched',
+      startReconcile: this.startReconcile, reconcileProgressPct: s.reconcileProgress + '%',
+      matchedCount, pendingMatchCount: pendingMatches.length,
+      openMatchReview: this.goReconcileReview, matchRows, matchesEmpty: matchRows.length === 0,
+      matchesReviewed, reconcileInitialPending: s.reconcileInitialPending,
+      matchesReviewedPct: Math.round((matchesReviewed / s.reconcileInitialPending) * 100) + '%',
+      selectedMatchCount: s.selectedMatchIds.length, noneMatchSelected: s.selectedMatchIds.length === 0,
+      bulkMatchOpacity: s.selectedMatchIds.length === 0 ? '0.5' : '1', bulkApproveMatches: this.bulkApproveMatches,
+      reconcileBatchRows, reconcileBatchEmpty: reconcileBatchRows.length === 0,
+      reconcileBatchFilter: s.reconcileBatchFilter, onReconcileBatchFilterChange: this.onReconcileBatchFilterChange,
+      sortByConfidence: () => this.setReconcileBatchSort('confidence'), sortByAmount: () => this.setReconcileBatchSort('amountDiff'), sortByDate: () => this.setReconcileBatchSort('dateGap'),
+      confidenceSortLabel: 'Confidence' + sortArrow('confidence'), amountSortLabel: 'Amount diff' + sortArrow('amountDiff'), dateSortLabel: 'Date gap' + sortArrow('dateGap'),
+      reconcileBatchSelectedCount: s.reconcileBatchSelectedIds.length,
+      approveAllReconcileBatch: () => this.approveAllReconcileBatch(rbAllIds),
+      rejectAllReconcileBatch: () => this.rejectAllReconcileBatch(rbAllIds),
+      editSelectedReconcileBatch: this.editSelectedReconcileBatch,
+      reconcileBatchReviewed: matchesReviewed, reconcileBatchReviewedPct: Math.round((matchesReviewed / s.reconcileInitialPending) * 100) + '%',
+      qbConnected: s.qbConnected, qbConnectedLabel: s.qbConnected ? 'Connected ✓' : 'Disconnected', qbConnectedColor: s.qbConnected ? 'oklch(45% 0.14 155)' : 'oklch(48% 0.18 25)',
+      toggleQbConnection: this.toggleQbConnection, qbButtonLabel: s.qbConnected ? 'Disconnect' : 'Reconnect',
+      auditLog: s.auditLog,
+      chartBars, recentActivity,
+      pendingCount, avgConfidenceFmt: avgConfidence + '%',
+      goUpload: () => this.setView('upload'), goDashboard: () => this.setView('dashboard'), goReview: () => this.setView('review'), goBatch: () => this.setView('batch'),
+      isIdle: s.uploadStage === 'idle', isProcessing: s.uploadStage === 'processing', isDone: s.uploadStage === 'done',
+      startUpload: this.startUpload, uploadProgressPct: s.uploadProgress + '%',
+      highCount: items.filter((it) => it.confidence >= 95).length,
+      mediumCount: items.filter((it) => it.confidence >= 70 && it.confidence < 95).length,
+      lowCount: items.filter((it) => it.confidence < 70).length,
+      reviewItems, editingValue: s.editingValue, onEditChange: this.onEditChange, cancelEdit: this.cancelEdit,
+      batchRows, batchEmpty: batchRows.length === 0,
+      batchFilterTier: s.batchFilterTier, onFilterChange: this.onFilterChange,
+      sortLabel: s.batchSortDesc ? 'Lowest confidence first' : 'Highest confidence first', toggleSort: this.toggleSort,
+      selectedCount: s.selectedIds.length, noneSelected: s.selectedIds.length === 0, bulkOpacity: s.selectedIds.length === 0 ? '0.5' : '1',
+      bulkApprove: this.bulkApprove, bulkReject: this.bulkReject,
+      allSelected: batchRows.length > 0 && s.selectedIds.length === batchRows.length,
+      toggleSelectAll: () => this.setState({ selectedIds: batchRows.length === s.selectedIds.length ? [] : batchRows.map((r) => r.id) }),
+      reviewedCount, initialPendingCount: s.initialPendingCount, reviewedPct: Math.round((reviewedCount / s.initialPendingCount) * 100) + '%',
+      hasToast: !!s.toast, toast: s.toast
+    };
+  }
+}
+
+</script>
+</body>
+</html>

@@ -411,6 +411,96 @@ export async function saveApprovedInvoice(userId: string, inv: ApprovedInvoice):
   return (data as { id: string }).id;
 }
 
+export interface MonthlyCount {
+  /** "2026-07" */
+  month: string;
+  /** "Jul" */
+  label: string;
+  count: number;
+}
+
+/**
+ * Approved-invoice counts for the last `months` calendar months (oldest
+ * first) — backs the Dashboard's extraction-volume chart with real counts
+ * instead of the mockup's fixed 60/72/68/85/78/100 bar heights.
+ */
+export async function getMonthlyInvoiceCounts(userId: string, months = 6): Promise<MonthlyCount[]> {
+  const now = new Date();
+  const buckets: MonthlyCount[] = [];
+  for (let i = months - 1; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    buckets.push({
+      month: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`,
+      label: d.toLocaleString("en-US", { month: "short" }),
+      count: 0,
+    });
+  }
+  const indexOf = new Map(buckets.map((b, i) => [b.month, i]));
+
+  const db = getSupabase();
+  if (!db) {
+    for (const inv of memInvoices) {
+      if (inv.userId !== userId) continue;
+      const idx = indexOf.get(inv.createdAt.slice(0, 7));
+      if (idx !== undefined) buckets[idx].count += 1;
+    }
+    return buckets;
+  }
+
+  const { data, error } = await db
+    .from("invoices")
+    .select("created_at")
+    .eq("user_id", userId)
+    .gte("created_at", `${buckets[0].month}-01`);
+  if (error) throw new Error(`Failed to load monthly counts: ${error.message}`);
+  for (const row of data ?? []) {
+    const idx = indexOf.get(String(row.created_at).slice(0, 7));
+    if (idx !== undefined) buckets[idx].count += 1;
+  }
+  return buckets;
+}
+
+/**
+ * Average `overallConfidence` across every approved invoice — the Dashboard's
+ * "Avg. confidence" stat. Null (shown as "—") rather than 0 when there's
+ * nothing to average, or in in-memory mode, which doesn't track confidence on
+ * the lightweight `StoredInvoiceSummary` row.
+ */
+export async function getAverageConfidence(userId: string): Promise<number | null> {
+  const db = getSupabase();
+  if (!db) return null;
+
+  const { data, error } = await db.from("invoices").select("overall_confidence").eq("user_id", userId);
+  if (error) throw new Error(`Failed to load confidence: ${error.message}`);
+  const values = (data ?? []).map((r) => Number(r.overall_confidence)).filter((n) => Number.isFinite(n));
+  if (values.length === 0) return null;
+  return values.reduce((a, b) => a + b, 0) / values.length;
+}
+
+/** Most recently approved invoices — one of the sources for the Dashboard's "Recent activity" feed. */
+export async function listRecentApprovedInvoices(
+  userId: string,
+  limit = 5,
+): Promise<{ supplierName: string; createdAt: string }[]> {
+  const db = getSupabase();
+  if (!db) {
+    return memInvoices
+      .filter((i) => i.userId === userId)
+      .slice(-limit)
+      .reverse()
+      .map((i) => ({ supplierName: i.supplierName, createdAt: i.createdAt }));
+  }
+
+  const { data, error } = await db
+    .from("invoices")
+    .select("supplier_name, created_at")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false })
+    .limit(limit);
+  if (error) throw new Error(`Failed to load recent invoices: ${error.message}`);
+  return (data ?? []).map((r) => ({ supplierName: String(r.supplier_name), createdAt: String(r.created_at) }));
+}
+
 /**
  * Find an existing invoice with the same supplier + invoice number (approved or
  * pending), for duplicate detection. Returns the most recent match, or null.

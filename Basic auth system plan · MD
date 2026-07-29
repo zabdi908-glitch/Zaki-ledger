@@ -1,0 +1,489 @@
+# BASIC AUTH SYSTEM PLAN
+
+**Status:** Design phase (ready to brief Claude Code)  
+**Complexity:** Medium (3-4 hours)  
+**Requirement:** Enable multi-user support, per-user OAuth tokens, connection status display, disconnect flow
+
+---
+
+## WHAT WE'RE ADDING
+
+Currently: **Single-user mode** (all data shared, no login)  
+After: **Multi-user mode** (each user has own account, own Xero/QB connection)
+
+```
+Before:
+User visits → No login → Sees invoices/receipts (shared with everyone)
+
+After:
+User visits → Login screen → Email + Password
+            → Authenticated → See only their documents
+            → Connect Xero/QB per user
+            → Can disconnect & switch platforms
+            → Logout
+```
+
+---
+
+## WHY THIS MATTERS
+
+1. **OAuth per user:** Francisco's Xero tokens won't leak to other users
+2. **Data privacy:** Each user sees only their documents
+3. **Multi-tenant ready:** Can sell to 10, 100, 1000 bookkeepers
+4. **Status display works:** "✅ Connected (Account: Francisco's Business)" only for Francisco
+5. **Disconnect flow works:** Francisco can switch to QB without affecting other users
+
+---
+
+## MINIMAL AUTH SYSTEM (TECH CHOICES)
+
+### **Option 1: Supabase Auth (RECOMMENDED)**
+- ✅ Already have Supabase DB
+- ✅ Supabase Auth is built-in (managed service)
+- ✅ Handles password hashing, sessions, tokens
+- ✅ Integration simple (just enable in dashboard)
+- ✅ No extra dependencies
+- ⏱️ Time: 2-3 hours
+
+### **Option 2: Custom Email/Password + JWT**
+- ✅ Full control
+- ❌ More code to maintain (password hashing, token refresh, etc.)
+- ⏱️ Time: 4-5 hours
+
+**Recommendation:** Use **Supabase Auth (Option 1)** — faster, safer, already in our stack.
+
+---
+
+## SUPABASE AUTH ARCHITECTURE
+
+### **Flow**
+
+```
+User Signup/Login:
+──────────────────
+1. User enters email + password
+2. Send to POST /api/auth/signup or /api/auth/login
+3. Call Supabase Auth API
+4. Supabase hashes password, returns session token
+5. Store session in httpOnly cookie (secure)
+6. Redirect to dashboard
+
+Dashboard Load:
+───────────────
+1. Check session cookie
+2. Get current user from Supabase
+3. Query pending_documents WHERE user_id = current_user.id
+4. Query xero/QB connection status for this user
+5. Show user's data only
+
+Logout:
+───────
+1. Clear session cookie
+2. Redirect to login
+```
+
+### **Database Changes**
+
+Add `user_id` to existing tables (already have column, just needs better handling):
+
+```sql
+-- Supabase creates auth.users table automatically
+-- Our app references it via Supabase client
+
+-- Make sure pending_documents has user_id
+ALTER TABLE pending_documents ADD COLUMN user_id UUID REFERENCES auth.users(id);
+
+-- Add unique constraint: one Xero connection per user
+CREATE UNIQUE INDEX idx_xero_oauth_per_user ON xero_oauth(user_id);
+CREATE UNIQUE INDEX idx_qb_oauth_per_user ON qb_oauth(user_id);
+
+-- (These tables already exist, just need the index)
+```
+
+### **API Changes**
+
+All endpoints need to check `current_user`:
+
+```javascript
+// Before:
+GET /api/pending
+→ Returns all pending documents
+
+// After:
+GET /api/pending
+→ Check session cookie → get user_id
+→ Returns only documents WHERE user_id = current_user.id
+```
+
+---
+
+## FEATURE BREAKDOWN
+
+### **CORE FEATURES**
+
+**1. Signup Page**
+```
+Email: [____________]
+Password: [____________]
+Confirm Password: [____________]
+[Sign Up]
+
+Or [Already have account? Login]
+```
+
+**2. Login Page**
+```
+Email: [____________]
+Password: [____________]
+[Login]
+
+Or [Create account]
+```
+
+**3. Dashboard (Protected)**
+```
+✅ Welcome, francisco@example.com
+[Xero Connected: My Business Ltd] [Disconnect]
+or
+❌ Not Connected [Connect Xero]
+
+[Upload Documents]
+[Pending Queue]
+...rest of app
+```
+
+**4. Logout**
+```
+[Profile icon] → [Logout]
+```
+
+### **NICE-TO-HAVE (defer)**
+- Forgot password flow
+- Email verification
+- Password reset
+- Profile page (update password)
+- Account deletion
+
+---
+
+## SUPABASE AUTH SETUP (ADMIN ONLY)
+
+1. Go to Supabase dashboard
+2. Click "Authentication" → "Settings"
+3. Enable "Email & Password" provider
+4. Set redirect URL: `https://zaki-ledger.onrender.com/auth/callback`
+5. Copy Supabase URL + Anon Key (Claude Code needs these)
+
+---
+
+## IMPLEMENTATION DETAILS (FOR CLAUDE CODE)
+
+### **Frontend (React)**
+
+**New Pages:**
+- `/auth/signup` — Email/password signup form
+- `/auth/login` — Email/password login form
+- `/auth/callback` — OAuth redirect handler (Supabase)
+
+**Protected Routes:**
+- `/dashboard` — Wrap all existing pages
+- Check: `if (!session) redirect('/auth/login')`
+
+**Header:**
+- Add logout button (top right)
+- Show current user email
+
+**Connection Status:**
+- On dashboard load: `const status = await getConnectionStatus()`
+- Show: "✅ Xero Connected (Account: My Business Ltd)"
+- Show: Disconnect button (with inline confirm)
+
+### **Backend (Node.js/TypeScript)**
+
+**New Endpoints:**
+```javascript
+POST /api/auth/signup
+→ Email, password → Supabase auth → return session
+
+POST /api/auth/login
+→ Email, password → Supabase auth → return session
+
+POST /api/auth/logout
+→ Clear session → return
+
+GET /api/auth/me
+→ Return current user (from session)
+
+POST /api/auth/refresh
+→ Refresh expired session token
+```
+
+**Middleware (Apply to all endpoints):**
+```javascript
+async function authenticateUser(req, res, next) {
+  const token = req.cookies.session;
+  if (!token) return res.status(401).json({ error: 'Unauthorized' });
+  
+  const user = await supabase.auth.getUser(token);
+  if (!user) return res.status(401).json({ error: 'Invalid token' });
+  
+  req.user = user;
+  next();
+}
+
+// Use on all protected routes:
+app.get('/api/pending', authenticateUser, handlePending);
+app.post('/api/approve/bulk', authenticateUser, handleApprove);
+// etc.
+```
+
+**Update Existing Endpoints:**
+```javascript
+// Before:
+const docs = await db.getPendingDocuments();
+
+// After:
+const docs = await db.getPendingDocuments(req.user.id);
+
+// Add WHERE clause:
+SELECT * FROM pending_documents WHERE user_id = $1
+```
+
+### **Supabase Client Setup**
+
+```javascript
+// lib/supabase.ts
+import { createClient } from '@supabase/supabase-js';
+
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_ANON_KEY
+);
+
+export default supabase;
+```
+
+---
+
+## SESSION MANAGEMENT
+
+### **How Sessions Work**
+
+```
+Signup/Login:
+1. Supabase returns access_token + refresh_token
+2. Store access_token in httpOnly cookie (name: 'session')
+3. Store refresh_token in secure localStorage (auto-refresh before expire)
+
+On Every Request:
+1. Check if session cookie exists
+2. If exists, middleware extracts user ID
+3. If expired, use refresh_token to get new access_token
+4. Proceed with request
+
+Logout:
+1. Clear session cookie
+2. Clear refresh_token from localStorage
+```
+
+### **Security Notes**
+
+- ✅ httpOnly cookie (not accessible by JavaScript, prevents XSS)
+- ✅ Secure flag (only sent over HTTPS)
+- ✅ SameSite=Strict (prevents CSRF)
+- ✅ Token expires after 1 hour (Supabase default)
+- ✅ Refresh token extends session without re-login
+
+---
+
+## EXISTING CODE IMPACT
+
+### **Tables to Update**
+
+| Table | Change | Why |
+|---|---|---|
+| `pending_documents` | Add user_id FK | Isolate per-user docs |
+| `xero_oauth` | Add unique index on user_id | One Xero account per user |
+| `qb_oauth` | Add unique index on user_id | One QB account per user |
+
+### **Endpoints to Update**
+
+| Endpoint | Change | Why |
+|---|---|---|
+| `GET /api/pending` | Filter by user_id | Only show own docs |
+| `POST /api/approve/bulk` | Filter by user_id | Only approve own docs |
+| `GET /api/auth/xero/status` | Return per-user status | Show own connection |
+| `GET /api/auth/quickbooks/status` | Return per-user status | Show own connection |
+| `POST /api/xero/disconnect` | Clear per-user token | Don't affect others |
+| `POST /api/upload` | Set user_id | Track owner |
+
+All other endpoints need `authenticateUser` middleware.
+
+---
+
+## UI CHANGES
+
+### **Login Page (New)**
+```
+┌─────────────────────────────┐
+│  Zaki Ledger               │
+│  Invoice & Receipt Processor │
+│                             │
+│  Email: [____________]      │
+│  Password: [______]         │
+│  [Login]                    │
+│                             │
+│  Don't have account?        │
+│  [Sign Up]                  │
+└─────────────────────────────┘
+```
+
+### **Signup Page (New)**
+```
+┌─────────────────────────────┐
+│  Zaki Ledger               │
+│  Create Account             │
+│                             │
+│  Email: [____________]      │
+│  Password: [______]         │
+│  Confirm: [______]          │
+│  [Sign Up]                  │
+│                             │
+│  Already have account?      │
+│  [Login]                    │
+└─────────────────────────────┘
+```
+
+### **Dashboard Header (Updated)**
+```
+[Logo] Zaki Ledger | [Xero Connected ✅] | francisco@example.com [Logout ▼]
+```
+
+### **Connection Card (Visible Now)**
+```
+┌──────────────────────────────────┐
+│ ✅ Xero Connected                 │
+│ Account: My Business Ltd          │
+│ Email: accounts@mybusiness.com    │
+│                                   │
+│ [Disconnect & Switch Platform]   │
+└──────────────────────────────────┘
+
+OR
+
+┌──────────────────────────────────┐
+│ ❌ Not Connected                  │
+│                                   │
+│ Pick your accounting platform:    │
+│ ○ Xero                            │
+│ ○ QuickBooks                      │
+│ [Connect]                         │
+└──────────────────────────────────┘
+```
+
+---
+
+## TIMELINE ESTIMATE
+
+- **Supabase Auth setup** (enable in dashboard): 0.5 hours
+- **Frontend: Login/Signup pages**: 1 hour
+- **Frontend: Protected routes**: 0.5 hours
+- **Backend: Auth endpoints**: 0.5 hours
+- **Backend: Middleware + per-user filtering**: 1 hour
+- **Database: Migrate existing data (add user_id)**: 0.5 hours
+- **Testing**: 1 hour (signup, login, logout, OAuth per user)
+
+**Total: ~4-5 hours** (can be done in 1 Claude Code session)
+
+---
+
+## GO/NO-GO CHECKLIST
+
+### ✅ GO if:
+- [ ] Signup creates account + session
+- [ ] Login works with correct credentials
+- [ ] Wrong credentials rejected
+- [ ] Logout clears session
+- [ ] Dashboard only shows current user's documents
+- [ ] Connection status shows per-user (Francisco sees only his Xero)
+- [ ] Disconnect works (clears tokens)
+- [ ] Refresh page → still logged in
+- [ ] Different browser → shows login (different user)
+- [ ] All endpoints protected (require auth)
+- [ ] Tests passing (add auth tests)
+
+### ❌ NO-GO if:
+- [ ] Data from one user visible to another
+- [ ] Session persists after logout
+- [ ] Endpoints accessible without login
+- [ ] OAuth tokens leak between users
+
+---
+
+## WHAT THIS ENABLES
+
+Once auth is done:
+
+✅ **Multi-user support:** 10+ bookkeepers can use same Zaki Ledger instance  
+✅ **Data isolation:** Francisco's invoices not visible to others  
+✅ **Per-user OAuth:** Francisco's Xero connection doesn't affect others  
+✅ **Connection status:** "✅ Xero Connected (My Business Ltd)" displays correctly  
+✅ **Disconnect flow:** Francisco can switch to QB without affecting others  
+✅ **Logout:** Secure session cleanup  
+✅ **Production ready:** Safe to launch with multiple users  
+
+---
+
+## BRIEF FOR CLAUDE CODE
+
+```
+We need a basic multi-user auth system using Supabase Auth.
+
+Why: Currently single-user (all data shared). Need per-user accounts, 
+per-user Xero/QB connections, and secure logout.
+
+What to build:
+
+1. Frontend:
+   - New login page (email + password)
+   - New signup page
+   - Protect all routes (redirect to login if not authenticated)
+   - Add logout button + profile display
+   - Show connection status per-user (now visible on dashboard)
+
+2. Backend:
+   - POST /api/auth/signup → Supabase signup
+   - POST /api/auth/login → Supabase login
+   - POST /api/auth/logout → Clear session
+   - Middleware: authenticateUser (apply to all endpoints)
+   - Update queries: Filter by user_id (pending_documents, OAuth tokens)
+
+3. Database:
+   - Add user_id to pending_documents (migrate existing)
+   - Add unique index on xero_oauth(user_id) and qb_oauth(user_id)
+
+4. Testing:
+   - Signup works → can login
+   - Login with wrong password fails
+   - Logout clears session
+   - Dashboard only shows own documents
+   - Connection status per-user
+   - Different users don't see each other's data
+
+See BASIC_AUTH_SYSTEM_PLAN.md for full architecture & code guidance.
+
+Time: ~4-5 hours
+```
+
+---
+
+## TIMELINE TO PRODUCTION
+
+1. **Auth system:** ~4-5 hours (Claude Code) — THIS SESSION
+2. **Test with Francisco:** 1-2 hours — NEXT CHATS
+3. **Phase 3 (Bank Reconciliation):** ~16-20 hours — AFTER AUTH COMPLETE
+
+**Total to Phase 3 ready: ~24-28 hours (~2-3 more weeks)**
+
+---
+

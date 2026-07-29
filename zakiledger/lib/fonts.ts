@@ -1,4 +1,4 @@
-import { Fraunces, IBM_Plex_Mono, Public_Sans } from "next/font/google";
+import { Fraunces, IBM_Plex_Mono, Inter, Public_Sans } from "next/font/google";
 
 /**
  * Three faces, three jobs — mirrors how a real ledger uses type: a display
@@ -28,5 +28,18 @@ export const mono = IBM_Plex_Mono({
   subsets: ["latin"],
   weight: ["400", "500", "600"],
   variable: "--font-mono",
+  display: "swap",
+});
+
+/**
+ * The app-shell visual system (sidebar + dashboard/upload/review/batch/
+ * reconciliation/settings screens) uses Inter instead of Public Sans — a
+ * separate, client-approved design system from the "paper-white" one above,
+ * which stays in place for /login and /signup. See lib/shell-theme.ts.
+ */
+export const shellBody = Inter({
+  subsets: ["latin"],
+  weight: ["400", "500", "600", "700"],
+  variable: "--font-shell",
   display: "swap",
 });

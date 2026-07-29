@@ -235,6 +235,30 @@ export async function saveBankStatement(
   return meta;
 }
 
+/**
+ * The most recently uploaded statement's id, or null if the user hasn't
+ * uploaded one — lets the sidebar's static "Review Matches"/"Batch Review"
+ * links (no query param, unlike navigating there right after an upload) land
+ * on the right statement instead of a dead end.
+ */
+export async function getLatestStatementId(userId: string): Promise<string | null> {
+  const db = getSupabase();
+  if (!db) {
+    const mine = mem.statements.filter((s) => s.userId === userId);
+    return mine.length > 0 ? mine[mine.length - 1].id : null;
+  }
+
+  const { data, error } = await db
+    .from("bank_statements")
+    .select("id")
+    .eq("user_id", userId)
+    .order("upload_date", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw new Error(`Failed to load latest statement: ${error.message}`);
+  return (data?.id as string) ?? null;
+}
+
 /** The statement's metadata, or null if it doesn't exist or belongs to another user. */
 export async function getBankStatement(userId: string, statementId: string): Promise<BankStatementMeta | null> {
   const db = getSupabase();
@@ -549,6 +573,66 @@ export async function createManualMatch(
     .single();
   if (error) throw new Error(`Failed to save manual match: ${error.message}`);
   return mapMatchRow(data as Record<string, unknown>);
+}
+
+/**
+ * Reject a proposed (not-yet-approved) match — the human decided the
+ * candidate is wrong, so the bank transaction goes back to unmatched rather
+ * than being force-approved. Only unapproved matches can be rejected: once
+ * `approveMatches` has stamped one, it's part of the immutable audit trail
+ * (same compliance rule as the brief's "can't delete reconciliations") and
+ * this refuses to touch it.
+ */
+export async function rejectMatch(userId: string, statementId: string, matchId: string): Promise<void> {
+  const db = getSupabase();
+  if (!db) {
+    const idx = mem.matches.findIndex((m) => m.id === matchId && m.statementId === statementId && m.userId === userId);
+    if (idx < 0) throw new Error("Match not found.");
+    if (mem.matches[idx].approvedAt) throw new Error("Cannot reject an already-approved match.");
+    mem.matches.splice(idx, 1);
+    return;
+  }
+
+  const { data: existing, error: fetchError } = await db
+    .from("reconciliation_matches")
+    .select("approved_at")
+    .eq("id", matchId)
+    .eq("statement_id", statementId)
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (fetchError) throw new Error(`Failed to load match: ${fetchError.message}`);
+  if (!existing) throw new Error("Match not found.");
+  if (existing.approved_at) throw new Error("Cannot reject an already-approved match.");
+
+  const { error } = await db
+    .from("reconciliation_matches")
+    .delete()
+    .eq("id", matchId)
+    .eq("statement_id", statementId)
+    .eq("user_id", userId);
+  if (error) throw new Error(`Failed to reject match: ${error.message}`);
+}
+
+/** Most recently approved matches — one of the sources for the Dashboard's "Recent activity" feed. */
+export async function listRecentApprovedMatches(userId: string, limit = 5): Promise<{ approvedAt: string }[]> {
+  const db = getSupabase();
+  if (!db) {
+    return mem.matches
+      .filter((m) => m.userId === userId && m.approvedAt !== null)
+      .sort((a, b) => (a.approvedAt! < b.approvedAt! ? 1 : -1))
+      .slice(0, limit)
+      .map((m) => ({ approvedAt: m.approvedAt! }));
+  }
+
+  const { data, error } = await db
+    .from("reconciliation_matches")
+    .select("approved_at")
+    .eq("user_id", userId)
+    .not("approved_at", "is", null)
+    .order("approved_at", { ascending: false })
+    .limit(limit);
+  if (error) throw new Error(`Failed to load recent matches: ${error.message}`);
+  return (data ?? []).map((r) => ({ approvedAt: r.approved_at as string }));
 }
 
 // --- Approval + reporting --------------------------------------------------

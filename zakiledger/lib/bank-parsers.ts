@@ -1,6 +1,6 @@
 import Papa from "papaparse";
 import { XMLParser } from "fast-xml-parser";
-import type { ParsedBankTransaction, ParsedStatement } from "./reconciliation-schema";
+import type { ParsedBankTransaction, ParsedStatement, QbTransactionInput } from "./reconciliation-schema";
 
 /**
  * Bank statement parsing — CSV and OFX, no network/DB. Pure text-in,
@@ -156,6 +156,23 @@ function parseMoney(raw: string | undefined): number | null {
   if (!cleaned || cleaned === "-") return null;
   const n = Number(cleaned);
   return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * Adapt parsed transactions onto the QB/Xero import shape. A QuickBooks/Xero
+ * transaction export is the same date+amount+description shape a bank
+ * statement CSV already is, so this reuses `parseCsvStatement`'s output
+ * rather than needing a second parser — see
+ * POST /api/reconciliation/qb-transactions/upload, today's stand-in for a
+ * live QB/Xero sync (lib/reconciliation-store.ts saveQbTransactions).
+ */
+export function parsedTransactionsToQbInputs(transactions: ParsedBankTransaction[]): QbTransactionInput[] {
+  return transactions.map((t) => ({
+    postedDate: t.transactionDate,
+    amount: t.amount,
+    description: t.description ?? t.merchant,
+    currency: t.currency,
+  }));
 }
 
 // ---------------------------------------------------------------------------

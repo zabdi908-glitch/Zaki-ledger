@@ -2,9 +2,10 @@ import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
 /**
- * Page-level auth gate. Protects every page (`/`, `/pending`, `/corrections`,
- * and anything added later) by redirecting to `/login` when there's no
- * session, and refreshes the session cookie on every request — required by
+ * Page-level auth gate. Protects every page (everything under app/(app) —
+ * Dashboard, Upload/Review/Batch, Reconciliation, Settings — plus anything
+ * added later) by redirecting to `/login` when there's no session, and
+ * refreshes the session cookie on every request — required by
  * @supabase/ssr, since access tokens are short-lived and nothing else in a
  * page-only request would trigger a refresh.
  *

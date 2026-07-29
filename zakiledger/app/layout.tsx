@@ -1,6 +1,4 @@
-import AccountBar from "@/components/AccountBar";
-import { getSessionUser } from "@/lib/auth";
-import { body, display, mono } from "@/lib/fonts";
+import { body, display, mono, shellBody } from "@/lib/fonts";
 import "./globals.css";
 
 export const metadata = {
@@ -9,20 +7,16 @@ export const metadata = {
 };
 
 /**
- * Async so it can read the session server-side and show who's logged in.
- * Only renders the account bar when there IS a session — /login and /signup
- * are reached exactly because there isn't one, and showing a logout button
- * there would be nonsensical.
+ * Every authenticated screen now lives under the app/(app) route group,
+ * which renders its own sidebar shell (with its own user email + sign-out,
+ * see components/AppShell.tsx and app/settings). /login and /signup are the
+ * only routes left outside that group, and they have no session chrome to
+ * show — so the root layout is just font wiring, nothing session-aware.
  */
-export default async function RootLayout({ children }: { children: React.ReactNode }) {
-  const user = await getSessionUser();
-
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${display.variable} ${body.variable} ${mono.variable}`}>
-      <body style={{ fontFamily: "var(--font-body)" }}>
-        {user && <AccountBar email={user.email ?? ""} />}
-        {children}
-      </body>
+    <html lang="en" className={`${display.variable} ${body.variable} ${mono.variable} ${shellBody.variable}`}>
+      <body style={{ fontFamily: "var(--font-body)" }}>{children}</body>
     </html>
   );
 }
