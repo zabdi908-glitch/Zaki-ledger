@@ -42,6 +42,9 @@ export const shellColor = {
   mediumBg: "oklch(94% 0.06 80)",
   low: "oklch(48% 0.18 25)",
   lowBg: "oklch(94% 0.06 25)",
+
+  dupe: "oklch(48% 0.14 305)",
+  dupeBg: "oklch(94% 0.045 305)",
 } as const;
 
 export const shellFont = {
@@ -169,3 +172,26 @@ export function progressFill(pct: number): CSSProperties {
 /** Page title + subtitle, identical across every full-width screen. */
 export const pageTitle: CSSProperties = { fontSize: 32, fontWeight: 700, margin: "0 0 4px", letterSpacing: "-0.01em" };
 export const pageSubtitle: CSSProperties = { fontSize: 15, color: shellColor.inkSoft, margin: "0 0 32px" };
+
+/** Stroke-dasharray geometry for an SVG confidence ring. Returns the values a
+ * <circle> needs; callers build the actual SVG markup (see
+ * components/review/ConfidenceRing.tsx). */
+export function ringGeometry(pct: number, size: number, stroke: number): { radius: number; circumference: number; dash: number } {
+  const radius = (size - stroke) / 2;
+  const circumference = 2 * Math.PI * radius;
+  const dash = (Math.max(0, Math.min(100, pct)) / 100) * circumference;
+  return { radius, circumference, dash };
+}
+
+/** The colored left-edge bar on a review-board section header. */
+export function groupAccentBar(color: string): CSSProperties {
+  return { width: 4, alignSelf: "stretch", borderRadius: 3, flexShrink: 0, background: color };
+}
+
+/** Track + fill pair for a per-field confidence bar in a review side panel. */
+export function fieldConfidenceBar(pct: number, color: string): { track: CSSProperties; fill: CSSProperties } {
+  return {
+    track: { height: 5, borderRadius: 3, background: shellColor.trackBg, overflow: "hidden" },
+    fill: { height: "100%", borderRadius: 3, width: `${Math.max(0, Math.min(100, pct))}%`, background: color },
+  };
+}
