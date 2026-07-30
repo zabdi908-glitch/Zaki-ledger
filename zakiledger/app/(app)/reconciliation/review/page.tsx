@@ -5,9 +5,9 @@ import { useCallback, useEffect, useState } from "react";
 import { useShellToast } from "@/components/AppShell";
 import { formatMoney } from "@/lib/currency";
 import type { BankTransaction, QbTransaction, ReconciliationMatch } from "@/lib/reconciliation-schema";
+import { buildReviewRows, factorBreakdown } from "@/lib/reconciliation-insights";
+import ReviewBoard, { type ReviewRow, type ReviewSectionConfig } from "@/components/review/ReviewBoard";
 import {
-  disabledOverride,
-  microLabel,
   pageSubtitle,
   pageTitle,
   pill,
@@ -17,7 +17,6 @@ import {
   shellCard,
   shellColor,
   shellFigures,
-  tierFor,
 } from "@/lib/shell-theme";
 
 type ReviewData = {
@@ -36,13 +35,41 @@ type ReportData = {
   isReconciled: boolean;
 };
 
+const SECTIONS: ReviewSectionConfig[] = [
+  {
+    key: "ready",
+    title: "Ready to Approve",
+    accentColor: shellColor.high,
+    description: "95%+ confidence — amount, date, and merchant all match. Safe to approve as a batch.",
+    showBulkApproveAll: true,
+  },
+  {
+    key: "review",
+    title: "Needs Review",
+    accentColor: shellColor.medium,
+    description: "Below 95% confidence, or missing an accounting match. Worth a quick look before approving.",
+  },
+  {
+    key: "duplicate",
+    title: "Possible Duplicates",
+    accentColor: shellColor.dupe,
+    description: "Two entries that look like the same transaction. Decide whether to keep both or reject one.",
+  },
+  {
+    key: "issue",
+    title: "Potential Issues",
+    accentColor: shellColor.low,
+    description: "No match found, a currency mismatch, or an amount large enough to flag for manual review.",
+  },
+];
+
 /**
- * Bank reconciliation, screen 2 of 3 — "Review Matches". Unlike the mockup
- * (which treats >=95% confidence matches as already "matched" with no card
- * needed), every real match — green included — requires an explicit approve
- * to enter the immutable audit trail (see rejectMatch's docstring in
- * lib/reconciliation-store.ts). So every still-open bank transaction gets a
- * card here; a green one just clears in one click via bulk-select.
+ * Bank reconciliation, screen 2 of 3 — "Review Matches". Grouped-sections +
+ * side-panel design (design_handoff_zaki_ledger/Transaction Review
+ * Mockup.html) built on ReviewBoard; every open bank transaction still
+ * requires an explicit approve to enter the immutable audit trail (see
+ * rejectMatch's docstring in lib/reconciliation-store.ts) — the "ready"
+ * section's bulk button is what makes that fast for the green ones.
  */
 export default function ReconciliationReviewPage() {
   const queryStatementId = useSearchParams().get("statementId");
@@ -56,9 +83,6 @@ export default function ReconciliationReviewPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [initialOpenCount, setInitialOpenCount] = useState<number | null>(null);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
-  const [approving, setApproving] = useState(false);
   const [report, setReport] = useState<ReportData | null>(null);
   const [generatingReport, setGeneratingReport] = useState(false);
 
@@ -104,75 +128,38 @@ export default function ReconciliationReviewPage() {
     return unapproved + data.unmatchedBank.length;
   }
 
-  async function pickMatch(bankTransactionId: string, qbTransactionId: string) {
-    if (!statementId) return;
-    setBusyIds((prev) => new Set([...prev, bankTransactionId]));
-    try {
-      const res = await fetch(`/api/reconciliation/${statementId}/match`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ bankTransactionId, qbTransactionId }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error ?? "Couldn't create the match.");
-        return;
-      }
-      await load();
-    } finally {
-      setBusyIds((prev) => {
-        const next = new Set(prev);
-        next.delete(bankTransactionId);
-        return next;
-      });
-    }
-  }
-
   async function rejectOne(matchId: string) {
     if (!statementId) return;
-    setBusyIds((prev) => new Set([...prev, matchId]));
-    try {
-      const res = await fetch(`/api/reconciliation/${statementId}/reject`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ matchId }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error ?? "Couldn't reject the match.");
-        return;
-      }
-      await load();
-    } finally {
-      setBusyIds((prev) => {
-        const next = new Set(prev);
-        next.delete(matchId);
-        return next;
-      });
+    const res = await fetch(`/api/reconciliation/${statementId}/reject`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ matchId }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      setError(data.error ?? "Couldn't reject the match.");
+      return;
     }
+    await load();
   }
 
-  async function approveSelected() {
-    if (!statementId || selected.size === 0) return;
-    setApproving(true);
-    try {
-      const res = await fetch(`/api/reconciliation/${statementId}/approve`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ matchesToApprove: [...selected] }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error ?? "Approve failed.");
-        return;
-      }
-      const n = selected.size;
-      setSelected(new Set());
-      await load();
-      showToast(`${n} ${n === 1 ? "match" : "matches"} approved`);
-    } finally {
-      setApproving(false);
+  async function boardApprove(bankIds: string[], rowsById: Map<string, { matchId: string | null }>) {
+    const matchIds = bankIds
+      .map((id) => rowsById.get(id)?.matchId)
+      .filter((id): id is string => id !== null && id !== undefined);
+    if (matchIds.length === 0) return;
+    const res = await fetch(`/api/reconciliation/${statementId}/approve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ matchesToApprove: matchIds }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      setError(data.error ?? "Approve failed.");
+      return;
     }
+    await load();
+    showToast(`${matchIds.length} ${matchIds.length === 1 ? "match" : "matches"} approved`);
   }
 
   async function generateReport() {
@@ -219,9 +206,14 @@ export default function ReconciliationReviewPage() {
   const openBanks = review.bankTransactions.filter((b) => openBankIds.has(b.id));
   const reviewed = (initialOpenCount ?? openBanks.length) - openBanks.length;
   const reviewedPct = initialOpenCount ? Math.round((reviewed / initialOpenCount) * 100) : 0;
-
-  const eligibleMatchIds = review.matches.filter((m) => m.approvedAt === null && m.qbTransactionId !== null).map((m) => m.id);
   const reportCurrency = review.bankTransactions[0]?.currency ?? null;
+
+  const built = buildReviewRows({
+    bankTransactions: openBanks,
+    qbTransactions: review.qbTransactions,
+    matches: review.matches.filter((m) => m.approvedAt === null),
+  });
+  const rowsById = new Map(built.map((b) => [b.id, b]));
 
   return (
     <div>
@@ -233,151 +225,43 @@ export default function ReconciliationReviewPage() {
         <div style={progressFill(reviewedPct)} />
       </div>
 
-      {eligibleMatchIds.length > 0 && (
-        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 16 }}>
-          <button
-            style={selected.size === 0 || approving ? { ...shellButton("success"), ...disabledOverride() } : shellButton("success")}
-            onClick={approveSelected}
-            disabled={selected.size === 0 || approving}
-          >
-            {approving ? "Approving…" : `Approve selected (${selected.size})`}
-          </button>
+      {openBanks.length > 0 && (
+        <ReviewBoard
+          rows={built.map((b) => b.row)}
+          sections={SECTIONS}
+          approvedIds={new Set()}
+          onApprove={(ids) => boardApprove(ids, rowsById)}
+          onFlag={(id) => showToast(`${rowsById.get(id)?.row.title ?? "Transaction"} flagged for a second look`)}
+          heroTitle="High-confidence matches"
+          heroDescription="Every one scored 95%+ on amount, date, and merchant against your accounting records."
+          renderPanel={(row) => {
+            const entry = rowsById.get(row.id);
+            const match = entry?.matchId ? review.matches.find((m) => m.id === entry.matchId) ?? null : null;
+            const qb = match?.qbTransactionId ? review.qbTransactions.find((q) => q.id === match.qbTransactionId) ?? null : null;
+            const bank = openBanks.find((b) => b.id === row.id);
+            if (!bank) return null;
+            return (
+              <ReconciliationPanelBody
+                bank={bank}
+                qb={qb}
+                match={match}
+                row={row}
+                onApprove={() => boardApprove([row.id], rowsById)}
+                onReject={() => match && rejectOne(match.id)}
+              />
+            );
+          }}
+        />
+      )}
+
+      {openBanks.length === 0 && (
+        <div style={shellCard({ padding: 48, textAlign: "center", color: shellColor.inkFainter, fontSize: 14 })}>
+          All matches reviewed — ready to generate the reconciliation report.
         </div>
       )}
 
-      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-        {openBanks.map((bank) => {
-          const match = review.matches.find((m) => m.bankTransactionId === bank.id && m.approvedAt === null) ?? null;
-          const qb = match?.qbTransactionId ? review.qbTransactions.find((q) => q.id === match.qbTransactionId) ?? null : null;
-          const busy = busyIds.has(bank.id) || (match ? busyIds.has(match.id) : false);
-          const t = match ? tierFor((match.confidence ?? 0) * 100) : null;
-
-          return (
-            <div key={bank.id} style={shellCard({ padding: "20px 24px" })}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  {match && (
-                    <input
-                      type="checkbox"
-                      checked={selected.has(match.id)}
-                      onChange={(e) =>
-                        setSelected((prev) => {
-                          const next = new Set(prev);
-                          if (e.target.checked) next.add(match.id);
-                          else next.delete(match.id);
-                          return next;
-                        })
-                      }
-                      aria-label={`Select ${bank.description ?? bank.merchant ?? "transaction"}`}
-                    />
-                  )}
-                  <span style={{ fontSize: 12.5, fontWeight: 600, color: shellColor.inkSoft, textTransform: "uppercase", letterSpacing: "0.03em" }}>
-                    Needs review
-                  </span>
-                </div>
-                {t && <span style={pill(t.color, t.bg)}>{t.icon} {((match!.confidence ?? 0) * 100).toFixed(0)}%</span>}
-              </div>
-
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }}>
-                <div style={{ borderRight: `1px solid ${shellColor.trackBg}`, paddingRight: 24 }}>
-                  <div style={{ ...microLabel, marginBottom: 6 }}>Bank transaction</div>
-                  <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>
-                    {bank.merchant || bank.description || "(no description)"}
-                  </div>
-                  <div style={{ fontSize: 13, color: shellColor.inkSoft, ...shellFigures }}>
-                    {bank.transactionDate} · {formatMoney(bank.amount, bank.currency)}
-                  </div>
-                </div>
-                <div>
-                  <div style={{ ...microLabel, marginBottom: 6 }}>QuickBooks entry</div>
-                  {qb ? (
-                    <>
-                      <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>{qb.description ?? "(no description)"}</div>
-                      <div style={{ fontSize: 13, color: shellColor.inkSoft, ...shellFigures }}>
-                        {qb.postedDate} · {formatMoney(qb.amount, qb.currency)}
-                      </div>
-                    </>
-                  ) : review.qbTransactions.length === 0 ? (
-                    <div style={{ fontSize: 13, color: shellColor.inkFaint }}>No accounting transactions on file yet</div>
-                  ) : (
-                    <select
-                      disabled={busy}
-                      defaultValue=""
-                      onChange={(e) => e.target.value && pickMatch(bank.id, e.target.value)}
-                      aria-label={`Match for ${bank.description ?? bank.merchant ?? "this transaction"}`}
-                      style={{
-                        width: "100%",
-                        padding: "6px 8px",
-                        borderRadius: 8,
-                        border: `1px solid ${shellColor.cardBorder}`,
-                        fontSize: 13,
-                        fontFamily: shellFigures.fontFamily,
-                        background: shellColor.paper,
-                        color: shellColor.ink,
-                      }}
-                    >
-                      <option value="">— choose a match —</option>
-                      {review.qbTransactions.map((q) => (
-                        <option key={q.id} value={q.id}>
-                          {q.postedDate} · {q.description ?? "(no description)"} · {formatMoney(q.amount, q.currency)}
-                        </option>
-                      ))}
-                    </select>
-                  )}
-                </div>
-              </div>
-
-              {match?.matchReason && (
-                <div style={{ marginTop: 12, padding: "10px 14px", background: shellColor.page, borderRadius: 8, fontSize: 13, color: shellColor.inkSoft }}>
-                  {match.matchReason}
-                </div>
-              )}
-
-              {match && (
-                <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
-                  <button
-                    style={busy ? { ...shellButton("success"), ...disabledOverride() } : shellButton("success")}
-                    disabled={busy}
-                    onClick={() =>
-                      fetch(`/api/reconciliation/${statementId}/approve`, {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ matchesToApprove: [match.id] }),
-                      }).then(async (res) => {
-                        const data = await res.json();
-                        if (!res.ok) return setError(data.error ?? "Approve failed.");
-                        await load();
-                      })
-                    }
-                  >
-                    Approve match
-                  </button>
-                  <button
-                    style={busy ? { ...shellButton("dangerOutline"), ...disabledOverride() } : shellButton("dangerOutline")}
-                    disabled={busy}
-                    onClick={() => rejectOne(match.id)}
-                  >
-                    Reject
-                  </button>
-                </div>
-              )}
-            </div>
-          );
-        })}
-
-        {openBanks.length === 0 && (
-          <div style={shellCard({ padding: 48, textAlign: "center", color: shellColor.inkFainter, fontSize: 14 })}>
-            All matches reviewed — ready to generate the reconciliation report.
-          </div>
-        )}
-      </div>
-
       {openBanks.length === 0 && (
-        <button
-          style={{ ...shellButton("primary", "lg"), marginTop: 20 }}
-          onClick={generateReport}
-          disabled={generatingReport}
-        >
+        <button style={{ ...shellButton("primary", "lg"), marginTop: 20 }} onClick={generateReport} disabled={generatingReport}>
           {generatingReport ? "Generating…" : "Generate reconciliation report"}
         </button>
       )}
@@ -407,6 +291,104 @@ function ReportStat({ label, value }: { label: string; value: string }) {
     <div>
       <div style={{ fontSize: 12, color: shellColor.inkFaint, marginBottom: 2 }}>{label}</div>
       <div style={{ fontSize: 18, fontWeight: 600, color: shellColor.ink, ...shellFigures }}>{value}</div>
+    </div>
+  );
+}
+
+function ReconciliationPanelBody({
+  bank,
+  qb,
+  match,
+  row,
+  onApprove,
+  onReject,
+}: {
+  bank: BankTransaction;
+  qb: QbTransaction | null;
+  match: ReconciliationMatch | null;
+  row: ReviewRow;
+  onApprove: () => void;
+  onReject: () => void;
+}) {
+  const factors = match ? factorBreakdown(match) : [];
+  return (
+    <>
+      <div style={{ marginBottom: 24 }}>
+        <div style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.04em", color: shellColor.inkFaint, marginBottom: 10 }}>
+          Transaction details
+        </div>
+        <KV label="Date" value={row.date} />
+        <KV label="Description" value={bank.merchant || bank.description || "(no description)"} />
+        <KV label="Amount" value={row.amountLabel} />
+        <KV label="Direction" value={row.amountSubLabel} />
+        <KV label="Suggested category" value={row.categoryLabel} />
+      </div>
+
+      <div style={{ marginBottom: 24 }}>
+        <div style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.04em", color: shellColor.inkFaint, marginBottom: 10 }}>
+          Suggested match
+        </div>
+        {qb ? (
+          <>
+            <KV label="Entry" value={qb.description ?? "(no description)"} />
+            <KV label="Date" value={qb.postedDate} />
+            <KV label="Amount" value={formatMoney(qb.amount, qb.currency)} />
+          </>
+        ) : (
+          <div style={{ fontSize: 13.5, color: shellColor.inkSoft, background: shellColor.page, borderRadius: 10, padding: "14px 16px" }}>
+            No matching accounting entry found yet.
+          </div>
+        )}
+      </div>
+
+      {match && (
+        <div style={{ marginBottom: 24 }}>
+          <div style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.04em", color: shellColor.inkFaint, marginBottom: 10 }}>
+            Confidence score
+          </div>
+          {factors.map((f) => (
+            <div key={f.label} style={{ marginBottom: 12 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, marginBottom: 4 }}>
+                <span>{f.label}</span>
+                <span style={{ ...shellFigures }}>
+                  {f.score}/{f.max} pts
+                </span>
+              </div>
+              <div style={{ height: 6, borderRadius: 3, background: shellColor.trackBg, overflow: "hidden" }}>
+                <div style={{ height: "100%", borderRadius: 3, width: `${(f.score / f.max) * 100}%`, background: row.confidenceColor }} />
+              </div>
+            </div>
+          ))}
+          <div style={{ fontSize: 12, color: shellColor.inkFaint, marginTop: 10 }}>
+            Zaki scores every match on these three signals, out of 100 points — the same engine that ranks every transaction on this page.
+          </div>
+        </div>
+      )}
+
+      <div style={{ marginBottom: 24 }}>
+        <div style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.04em", color: shellColor.inkFaint, marginBottom: 10 }}>
+          AI reasoning
+        </div>
+        <div style={{ fontSize: 13.5, lineHeight: 1.55, background: shellColor.page, borderRadius: 10, padding: "14px 16px" }}>{row.reason}</div>
+      </div>
+
+      <div style={{ display: "flex", gap: 8, marginTop: 28 }}>
+        <button style={{ ...shellButton("dangerOutline", "lg"), flex: 1 }} onClick={onReject} disabled={!match}>
+          Reject
+        </button>
+        <button style={{ ...shellButton("success", "lg"), flex: 1 }} onClick={onApprove} disabled={!match}>
+          Approve
+        </button>
+      </div>
+    </>
+  );
+}
+
+function KV({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13.5, padding: "6px 0", borderBottom: `1px dashed ${shellColor.cardBorder}` }}>
+      <span style={{ color: shellColor.inkSoft }}>{label}</span>
+      <span style={{ fontWeight: 600 }}>{value}</span>
     </div>
   );
 }
