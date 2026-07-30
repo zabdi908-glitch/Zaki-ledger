@@ -1,0 +1,948 @@
+<!doctype html>
+<title>Review & Edit — Zaki Ledger</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root {
+    --page: oklch(98% 0.004 240);
+    --paper: #ffffff;
+    --card-border: oklch(90% 0.008 240);
+    --track-bg: oklch(94% 0.006 240);
+
+    --ink: oklch(20% 0.02 240);
+    --ink-soft: oklch(48% 0.02 240);
+    --ink-faint: oklch(60% 0.01 240);
+    --ink-fainter: oklch(55% 0.02 240);
+
+    --teal: oklch(62% 0.11 195);
+    --teal-bright: oklch(70% 0.12 195);
+
+    --sidebar-bg: oklch(24% 0.05 260);
+    --sidebar-active: oklch(32% 0.07 260);
+    --sidebar-btn: oklch(30% 0.08 260);
+    --sidebar-text: oklch(78% 0.02 260);
+    --sidebar-text-dim: oklch(52% 0.02 260);
+    --sidebar-group-label: oklch(50% 0.02 260);
+    --sidebar-border: oklch(38% 0.05 260);
+    --sidebar-footer-text: oklch(70% 0.02 260);
+
+    --high: oklch(45% 0.14 155);
+    --high-bg: oklch(94% 0.05 155);
+    --medium: oklch(48% 0.15 80);
+    --medium-bg: oklch(94% 0.06 80);
+    --low: oklch(48% 0.18 25);
+    --low-bg: oklch(94% 0.06 25);
+    --dupe: oklch(48% 0.14 305);
+    --dupe-bg: oklch(94% 0.045 305);
+
+    --radius-sm: 7px; --radius-md: 12px; --radius-lg: 14px; --radius-pill: 999px;
+    --font-body: "Inter", -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+    --panel-w: 460px;
+  }
+  :root[data-theme="dark"] {
+    --page: oklch(18% 0.012 250); --paper: oklch(22% 0.014 250); --card-border: oklch(30% 0.016 250);
+    --track-bg: oklch(28% 0.014 250); --ink: oklch(94% 0.006 240); --ink-soft: oklch(78% 0.012 240);
+    --ink-faint: oklch(62% 0.012 240); --ink-fainter: oklch(58% 0.012 240);
+    --high-bg: oklch(28% 0.06 155); --medium-bg: oklch(28% 0.07 80); --low-bg: oklch(28% 0.08 25); --dupe-bg: oklch(28% 0.06 305);
+    --high: oklch(78% 0.13 155); --medium: oklch(80% 0.13 80); --low: oklch(80% 0.15 25); --dupe: oklch(80% 0.11 305);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --page: oklch(18% 0.012 250); --paper: oklch(22% 0.014 250); --card-border: oklch(30% 0.016 250);
+      --track-bg: oklch(28% 0.014 250); --ink: oklch(94% 0.006 240); --ink-soft: oklch(78% 0.012 240);
+      --ink-faint: oklch(62% 0.012 240); --ink-fainter: oklch(58% 0.012 240);
+      --high-bg: oklch(28% 0.06 155); --medium-bg: oklch(28% 0.07 80); --low-bg: oklch(28% 0.08 25); --dupe-bg: oklch(28% 0.06 305);
+      --high: oklch(78% 0.13 155); --medium: oklch(80% 0.13 80); --low: oklch(80% 0.15 25); --dupe: oklch(80% 0.11 305);
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; font-family: var(--font-body); color: var(--ink); background: var(--page); -webkit-font-smoothing: antialiased; }
+  button { font-family: inherit; }
+  ::selection { background: var(--teal); color: white; }
+
+  .shell { display: flex; height: 100vh; overflow: hidden; }
+  .sidebar { width: 240px; flex-shrink: 0; background: var(--sidebar-bg); color: white; display: flex; flex-direction: column; padding: 24px 16px; overflow-y: auto; }
+  .brand { font-size: 21px; font-weight: 700; letter-spacing: -0.02em; padding: 8px 4px 28px; }
+  .brand span { color: var(--teal-bright); }
+  .nav-group-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--sidebar-group-label); padding: 12px 12px 4px; }
+  .nav-item { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 8px; font-size: 14.5px; font-weight: 500; color: var(--sidebar-text); text-decoration: none; cursor: pointer; }
+  .nav-item.active { background: var(--sidebar-active); color: white; }
+  .nav-item .soon { margin-left: auto; font-size: 10px; font-weight: 700; letter-spacing: 0.03em; color: var(--sidebar-text-dim); border: 1px solid var(--sidebar-border); border-radius: 4px; padding: 2px 5px; }
+  .sidebar-footer { margin-top: auto; padding: 12px; font-size: 12px; color: var(--sidebar-footer-text); border-top: 1px solid var(--sidebar-border); }
+  .sidebar-footer b { display: block; color: white; margin-bottom: 2px; font-weight: 600; }
+
+  .content-area { flex: 1; display: flex; min-width: 0; overflow: hidden; }
+  .main { flex: 1; min-width: 0; overflow-y: auto; padding: 36px 44px 80px; }
+  .main-inner { max-width: 1000px; margin: 0 auto; }
+
+  .page-title { font-size: 30px; font-weight: 700; margin: 0 0 4px; letter-spacing: -0.01em; }
+  .page-sub { font-size: 14.5px; color: var(--ink-soft); margin: 0 0 18px; }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 14px; margin-bottom: 24px; }
+  .legend-item { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--ink-soft); }
+  .legend-dot { width: 8px; height: 8px; border-radius: 50%; }
+
+  .progress-track { height: 6px; border-radius: 3px; background: var(--track-bg); overflow: hidden; margin-bottom: 26px; }
+  .progress-fill { height: 100%; border-radius: 3px; background: var(--teal); transition: width .3s ease; }
+
+  .hero { background: linear-gradient(135deg, var(--high-bg), var(--paper) 65%); border: 1px solid var(--card-border); border-radius: var(--radius-lg);
+    padding: 26px 28px; display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-bottom: 28px; }
+  .hero-count { font-size: 40px; font-weight: 700; font-family: var(--font-mono); line-height: 1; color: var(--ink); }
+  .hero-label { font-size: 14.5px; color: var(--ink-soft); margin-top: 6px; max-width: 48ch; }
+  .hero-sub { font-size: 12.5px; color: var(--ink-faint); margin-top: 4px; }
+
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; font-weight: 600; cursor: pointer; border: none; line-height: 1.2; white-space: nowrap; font-family: var(--font-body); }
+  .btn-lg { padding: 13px 22px; border-radius: 9px; font-size: 14.5px; }
+  .btn-md { padding: 9px 15px; border-radius: 7px; font-size: 13.5px; }
+  .btn-sm { padding: 5px 11px; border-radius: 6px; font-size: 12.5px; }
+  .btn-xs { padding: 3px 9px; border-radius: 6px; font-size: 11.5px; }
+  .btn-success { background: var(--high); color: white; }
+  .btn-primary { background: var(--sidebar-btn); color: white; }
+  .btn-outline { background: var(--paper); color: var(--ink); border: 1px solid var(--card-border); }
+  .btn-danger-outline { background: var(--paper); color: var(--low); border: 1px solid var(--card-border); }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .btn:focus-visible, .row:focus-visible, .icon-btn:focus-visible, input:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
+
+  .bulkbar { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; justify-content: space-between; background: var(--sidebar-bg); color: white;
+    border-radius: var(--radius-md); padding: 12px 18px; margin-bottom: 22px; font-size: 13.5px; transform: translateY(-12px); opacity: 0; pointer-events: none; transition: all .15s ease; }
+  .bulkbar.show { transform: translateY(0); opacity: 1; pointer-events: auto; }
+  .bulkbar b { font-family: var(--font-mono); }
+
+  .group { margin-bottom: 30px; border: 1px solid var(--card-border); border-radius: var(--radius-lg); background: var(--paper); overflow: hidden; }
+  .group-head { display: flex; align-items: center; gap: 14px; padding: 18px 22px; cursor: pointer; }
+  .group-accent { width: 4px; align-self: stretch; border-radius: 3px; flex-shrink: 0; }
+  .group-title-wrap { flex: 1; min-width: 0; }
+  .group-title { font-size: 15.5px; font-weight: 700; display: flex; align-items: center; gap: 9px; }
+  .group-count { font-family: var(--font-mono); }
+  .group-desc { font-size: 13px; color: var(--ink-soft); margin-top: 3px; }
+  .group-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+  .chevron { transition: transform .15s ease; color: var(--ink-faint); font-size: 12px; }
+  .group.collapsed .chevron { transform: rotate(-90deg); }
+  .group-body { border-top: 1px solid var(--card-border); }
+  .group.collapsed .group-body { display: none; }
+
+  .col-head { display: grid; grid-template-columns: 30px 84px minmax(200px,1.4fr) 118px 156px 148px 92px; gap: 12px; padding: 10px 22px;
+    font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-faint); background: var(--page); }
+  .col-head span:nth-child(4) { text-align: right; }
+
+  .row { border-top: 1px solid var(--card-border); padding: 13px 22px 12px; cursor: pointer; transition: background .1s ease; }
+  .row:first-child { border-top: none; }
+  .row:hover, .row.focused { background: var(--page); }
+  .row.approved { opacity: .38; }
+  .row-line1 { display: grid; grid-template-columns: 30px 84px minmax(200px,1.4fr) 118px 156px 148px 92px; gap: 12px; align-items: center; }
+  .row-date { font-family: var(--font-mono); font-size: 12.5px; color: var(--ink-soft); }
+  .row-desc-main { font-size: 14px; font-weight: 600; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row-desc-sub { font-size: 12px; color: var(--ink-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row-amount { text-align: right; font-family: var(--font-mono); font-size: 14px; font-weight: 600; }
+  .row-amount .dir { display: block; font-family: var(--font-body); font-weight: 500; font-size: 10.5px; color: var(--ink-faint); text-align: right; }
+  .cat-pill { display: inline-block; padding: 4px 10px; border-radius: var(--radius-pill); background: var(--track-bg); color: var(--ink-soft); font-size: 12px; font-weight: 600;
+    max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .conf-wrap { display: flex; align-items: center; gap: 8px; }
+  .conf-ring-label { font-size: 12px; }
+  .conf-ring-label b { display: block; font-family: var(--font-mono); font-size: 13.5px; }
+  .row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 4px; }
+  .icon-btn { width: 28px; height: 28px; border-radius: 7px; border: 1px solid var(--card-border); background: var(--paper); display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 13px; color: var(--ink-soft); }
+  .icon-btn.approve:hover { background: var(--high-bg); color: var(--high); border-color: var(--high-bg); }
+  .icon-btn.flag:hover { background: var(--low-bg); color: var(--low); border-color: var(--low-bg); }
+  .icon-btn:disabled { opacity: .4; cursor: default; }
+
+  .row-line2 { padding-left: 126px; margin-top: 6px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .reason-text { font-size: 12.5px; color: var(--ink-soft); }
+  .reason-text .spark { margin-right: 5px; }
+  .badge { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: var(--radius-pill); border: 1px solid var(--card-border); color: var(--ink-faint); background: var(--paper); }
+
+  .dupe-pair { padding-left: 126px; margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+  .dupe-line { display: flex; gap: 10px; font-size: 12.5px; color: var(--ink-soft); }
+  .dupe-line .tag { font-weight: 700; color: var(--dupe); width: 74px; flex-shrink: 0; }
+
+  .more-strip { padding: 16px 22px; display: flex; align-items: center; justify-content: space-between; background: var(--page); border-top: 1px solid var(--card-border); font-size: 13px; color: var(--ink-soft); }
+  .empty { padding: 40px; text-align: center; color: var(--ink-fainter); font-size: 14px; }
+
+  .panel { width: 0; flex-shrink: 0; overflow: hidden; background: var(--paper); border-left: 1px solid var(--card-border); transition: width .22s ease; }
+  .panel.open { width: var(--panel-w); }
+  .panel-inner { width: var(--panel-w); height: 100%; overflow-y: auto; padding: 22px 26px 60px; }
+  .panel-head { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 14px; }
+  .panel-close { width: 30px; height: 30px; border-radius: 8px; border: 1px solid var(--card-border); background: var(--paper); cursor: pointer; font-size: 14px; color: var(--ink-soft); flex-shrink: 0; }
+  .panel-eyebrow { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--ink-faint); margin-bottom: 5px; }
+  .panel-title { font-size: 19px; font-weight: 700; }
+  .panel-amount { font-family: var(--font-mono); font-size: 15px; color: var(--ink-soft); margin-top: 4px; }
+
+  .gate-banner { border-radius: 10px; padding: 12px 14px; font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 8px; margin-bottom: 22px; transition: all .2s ease; }
+
+  .panel-section { margin-top: 24px; }
+  .panel-section h4 { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-faint); margin: 0 0 10px; }
+  .kv { display: flex; justify-content: space-between; font-size: 13.5px; padding: 6px 0; border-bottom: 1px dashed var(--card-border); }
+  .kv span:first-child { color: var(--ink-soft); }
+  .kv span:last-child { font-weight: 600; text-align: right; }
+
+  .ring-block { display: flex; align-items: center; gap: 18px; }
+  .ring-text b { display: block; font-size: 13.5px; }
+  .ring-text span { font-size: 12.5px; color: var(--ink-soft); }
+
+  .field-row { padding: 12px 0; border-bottom: 1px solid var(--card-border); }
+  .field-row:last-child { border-bottom: none; }
+  .field-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+  .field-label { font-size: 12.5px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+  .field-tag { font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; padding: 1px 6px; border-radius: 4px; }
+  .field-tag.critical { background: var(--low-bg); color: var(--low); }
+  .field-tag.important { background: var(--medium-bg); color: var(--medium); }
+  .field-pct { font-family: var(--font-mono); font-size: 12px; }
+  .field-track { height: 5px; border-radius: 3px; background: var(--track-bg); overflow: hidden; margin-bottom: 8px; }
+  .field-fill { height: 100%; border-radius: 3px; transition: width .2s ease, background .2s ease; }
+  .field-editrow { display: flex; gap: 6px; }
+  .field-input { flex: 1; padding: 6px 9px; border-radius: 7px; border: 1px solid var(--card-border); font-size: 12.5px; font-family: var(--font-body); background: var(--paper); color: var(--ink); }
+  .field-confirm { flex-shrink: 0; }
+
+  .factor-caption { font-size: 12px; color: var(--ink-faint); margin-top: 10px; }
+  .reasoning-p { font-size: 13.5px; line-height: 1.55; color: var(--ink); background: var(--page); border-radius: 10px; padding: 14px 16px; }
+
+  .evidence-list, .history-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+  .evidence-list li { font-size: 13px; color: var(--ink-soft); display: flex; gap: 8px; line-height: 1.5; }
+  .history-item { font-size: 12.5px; padding: 8px 10px; background: var(--page); border-radius: 8px; line-height: 1.5; }
+  .history-item .h-date { color: var(--ink-faint); font-family: var(--font-mono); display: block; font-size: 11px; margin-top: 2px; }
+
+  .li-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .li-table th { text-align: left; font-size: 10.5px; text-transform: uppercase; letter-spacing: .03em; color: var(--ink-faint); padding: 0 0 6px; }
+  .li-table td { padding: 6px 0; border-top: 1px solid var(--card-border); color: var(--ink-soft); }
+  .li-table td:last-child, .li-table th:last-child { text-align: right; font-family: var(--font-mono); color: var(--ink); }
+
+  .panel-footer { display: flex; gap: 8px; margin-top: 28px; }
+  .panel-footer .btn { flex: 1; }
+
+  .toast { position: fixed; bottom: 24px; right: 24px; background: var(--sidebar-bg); color: white; padding: 13px 18px; border-radius: 10px; font-size: 13.5px; font-weight: 600;
+    box-shadow: 0 8px 24px rgba(0,0,0,.25); transform: translateY(12px); opacity: 0; pointer-events: none; transition: all .18s ease; z-index: 20; }
+  .toast.show { transform: translateY(0); opacity: 1; }
+
+  .kbd-hint { position: fixed; left: 256px; bottom: 16px; font-size: 11.5px; color: var(--ink-faint); display: flex; gap: 14px; }
+  .kbd-hint kbd { font-family: var(--font-mono); background: var(--track-bg); border-radius: 4px; padding: 1px 5px; }
+
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+  @media (max-width: 980px) {
+    .col-head { display: none; }
+    .row-line1 { grid-template-columns: 24px 1fr auto; grid-template-areas: "check desc amount" "check cat conf" "check actions actions"; row-gap: 8px; }
+    .row-date { display: none; }
+    .row-line2, .dupe-pair { padding-left: 0; }
+    .panel { position: fixed; inset: 0; z-index: 30; width: 100%; transition: transform .22s ease; transform: translateX(100%); border-left: none; }
+    .panel.open { width: 100%; transform: translateX(0); }
+    .panel-inner { width: 100%; }
+    .kbd-hint { display: none; }
+    .hero { flex-direction: column; align-items: flex-start; }
+  }
+</style>
+
+<div class="shell">
+  <nav class="sidebar" aria-label="Primary">
+    <div class="brand">Zaki<span>.</span></div>
+    <div class="nav-item"><span>🏠</span>Dashboard</div>
+
+    <div class="nav-group-label">Extraction</div>
+    <div class="nav-item"><span>📤</span>Upload &amp; Extract</div>
+    <div class="nav-item active"><span>✏️</span>Review &amp; Edit</div>
+    <div class="nav-item"><span>✅</span>Batch Review</div>
+
+    <div class="nav-group-label">Reconciliation</div>
+    <div class="nav-item"><span>🏦</span>Upload Statement</div>
+    <div class="nav-item"><span>🔍</span>Review Matches</div>
+    <div class="nav-item"><span>✔️</span>Batch Review</div>
+
+    <div class="nav-group-label">Organization</div>
+    <div class="nav-item"><span>📁</span>Auto-Categorize<span class="soon">SOON</span></div>
+    <div class="nav-item"><span>📋</span>Document Portal<span class="soon">SOON</span></div>
+
+    <div class="nav-group-label">Insights</div>
+    <div class="nav-item"><span>📊</span>Reports &amp; Analytics<span class="soon">SOON</span></div>
+
+    <div class="nav-group-label">Account</div>
+    <div class="nav-item"><span>⚙️</span>Settings</div>
+
+    <div class="sidebar-footer"><b>zabdi908@gmail.com</b><span style="cursor:pointer;text-decoration:underline;">Sign out</span></div>
+  </nav>
+
+  <div class="content-area">
+    <main class="main" id="main">
+      <div class="main-inner">
+        <h1 class="page-title">Review &amp; Edit</h1>
+        <p class="page-sub">Invoices and receipts uploaded this week · <span id="reviewedCount">0</span> of <span id="totalCount">0</span> documents reviewed</p>
+
+        <div class="legend">
+          <div class="legend-item"><span class="legend-dot" style="background:var(--high)"></span>High confidence</div>
+          <div class="legend-item"><span class="legend-dot" style="background:var(--medium)"></span>Medium confidence</div>
+          <div class="legend-item"><span class="legend-dot" style="background:var(--dupe)"></span>Possible duplicate</div>
+          <div class="legend-item"><span class="legend-dot" style="background:var(--low)"></span>Low confidence / blocked</div>
+        </div>
+
+        <div class="progress-track"><div class="progress-fill" id="progressFill" style="width:0%"></div></div>
+
+        <div class="hero">
+          <div>
+            <div class="hero-count" id="heroCount">41</div>
+            <div class="hero-label">Ready to approve — every critical field cleared 80%+ confidence and the numbers add up.</div>
+            <div class="hero-sub">Nothing here needs a click. Approve the batch, then spend your time on the sections below.</div>
+          </div>
+          <button class="btn btn-success btn-lg" id="approveAllReady">Approve all <span id="approveAllCount">41</span></button>
+        </div>
+
+        <div class="bulkbar" id="bulkbar">
+          <span><b id="selCount">0</b> selected</span>
+          <div style="display:flex;gap:8px;">
+            <button class="btn btn-outline btn-sm" style="background:transparent;color:white;border-color:var(--sidebar-border);" id="clearSel">Clear</button>
+            <button class="btn btn-success btn-sm" id="approveSel">Approve selected</button>
+          </div>
+        </div>
+
+        <div id="groups"></div>
+      </div>
+    </main>
+
+    <aside class="panel" id="panel">
+      <div class="panel-inner" id="panelInner"></div>
+    </aside>
+  </div>
+</div>
+
+<div class="kbd-hint">
+  <span><kbd>↑</kbd><kbd>↓</kbd> move</span>
+  <span><kbd>Enter</kbd> open</span>
+  <span><kbd>A</kbd> approve</span>
+  <span><kbd>Esc</kbd> close panel</span>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+
+// ---------------------------------------------------------------------------
+// Gate logic mirrors the real lib/validation.ts exactly: Critical fields
+// (supplier, invoice #, date, total — invoice # dropped for receipts) must
+// clear 80% confidence or the document is blocked; Important fields (tax,
+// currency) must clear 60% or it's flagged for review. Editing a field in
+// the panel sets it to 100% (a real correction) and live-recomputes the
+// gate, exactly like the production approve flow does.
+// ---------------------------------------------------------------------------
+
+const CRITICAL_THRESHOLD = 0.8;
+const IMPORTANT_THRESHOLD = 0.6;
+const CRITICAL_FIELDS_BY_TYPE = {
+  invoice: ["supplierName", "invoiceNumber", "invoiceDate", "total"],
+  receipt: ["supplierName", "invoiceDate", "total"],
+};
+const IMPORTANT_FIELDS = ["tax", "currency"];
+const FIELD_LABELS_BY_TYPE = {
+  invoice: { supplierName: "Supplier", invoiceNumber: "Invoice number", invoiceDate: "Invoice date", currency: "Currency", subtotal: "Subtotal", tax: "Tax", total: "Total" },
+  receipt: { supplierName: "Merchant", invoiceNumber: "Receipt number (optional)", invoiceDate: "Receipt date", currency: "Currency", subtotal: "Subtotal", tax: "VAT", total: "Total" },
+};
+const REVIEWABLE_FIELDS = ["supplierName", "invoiceNumber", "invoiceDate", "currency", "subtotal", "tax", "total"];
+
+function fieldLabels(docType) { return FIELD_LABELS_BY_TYPE[docType] ?? FIELD_LABELS_BY_TYPE.invoice; }
+
+function reasonText(field, confidence, docType) {
+  const pct = Math.round(confidence * 100);
+  if (field === "documentType") return `Not sure whether this is an invoice or a receipt (${pct}%) — confirm below`;
+  return `${fieldLabels(docType)[field]} ${pct === 0 ? "not detected" : "low confidence"} (${pct}%)`;
+}
+
+function computeGate(doc) {
+  if (doc.documentType.confidence < CRITICAL_THRESHOLD && !doc.documentTypeConfirmed) {
+    return { status: "blocked", reasons: [{ field: "documentType", confidence: doc.documentType.confidence }] };
+  }
+  const docType = doc.documentType.value;
+  const critical = CRITICAL_FIELDS_BY_TYPE[docType].filter((f) => doc.fields[f].confidence < CRITICAL_THRESHOLD);
+  if (critical.length) return { status: "blocked", reasons: critical.map((f) => ({ field: f, confidence: doc.fields[f].confidence })) };
+
+  const importantFields = doc.taxItemized === false ? IMPORTANT_FIELDS.filter((f) => f !== "tax") : IMPORTANT_FIELDS;
+  const important = importantFields.filter((f) => doc.fields[f].confidence < IMPORTANT_THRESHOLD);
+  if (important.length) return { status: "review", reasons: important.map((f) => ({ field: f, confidence: doc.fields[f].confidence })) };
+
+  return { status: "ready", reasons: [] };
+}
+
+function checkTotals(doc) {
+  if (!doc.taxItemized) return null;
+  const expected = doc.fields.subtotal.value + doc.fields.tax.value;
+  const found = doc.fields.total.value;
+  return { ok: Math.abs(expected - found) <= 0.01, expected, found };
+}
+
+function sectionFor(doc) {
+  if (doc.duplicateOf) return "duplicate";
+  return computeGate(doc).status === "ready" ? "ready" : computeGate(doc).status === "review" ? "review" : "issue";
+}
+
+function svgRing(pct, size, stroke, color) {
+  const r = (size - stroke) / 2, c = 2 * Math.PI * r, dash = (pct / 100) * c;
+  return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" style="transform:rotate(-90deg)">
+    <circle cx="${size/2}" cy="${size/2}" r="${r}" fill="none" stroke="var(--track-bg)" stroke-width="${stroke}" />
+    <circle cx="${size/2}" cy="${size/2}" r="${r}" fill="none" stroke="${color}" stroke-width="${stroke}" stroke-linecap="round" stroke-dasharray="${dash} ${c}" /></svg>`;
+}
+
+// UI confidence pill still uses the app's existing tierFor bands (95/70) — a
+// separate, already-shipped concept from the 80/60 gate thresholds above.
+function tierFor(pct) {
+  if (pct >= 95) return { label: "High confidence", color: "var(--high)", bg: "var(--high-bg)" };
+  if (pct >= 70) return { label: "Medium confidence", color: "var(--medium)", bg: "var(--medium-bg)" };
+  return { label: "Low confidence", color: "var(--low)", bg: "var(--low-bg)" };
+}
+function fieldTier(pct) { return pct >= 80 ? "var(--high)" : pct >= 60 ? "var(--medium)" : "var(--low)"; }
+function money(n) { return "£" + n.toFixed(2); }
+function fmtDate(iso) { const d = new Date(iso + "T00:00:00"); return d.toLocaleDateString("en-GB", { day: "2-digit", month: "short" }); }
+
+const BADGE_ICON = { Recurring: "🔁", "New supplier": "🆕", "Missing tax": "🧮", Duplicate: "⚠️", "Type unclear": "❓" };
+
+function f(value, confidence) { return { value, confidence }; }
+
+let txns = [
+  // ---- Ready to approve ----
+  mk("v1", "invoice", "Office Depot", "INV-77410", "2026-06-14", "GBP", 119.08, 23.82, 142.90, true, "Office Supplies",
+    [["Printer paper A4", 10, 4.20, 42.00], ["Toner cartridge", 2, 38.54, 77.08]],
+    { supplierName: .99, invoiceNumber: .97, invoiceDate: .98, currency: .99, subtotal: .96, tax: .95, total: .99 },
+    "Every field read with high confidence, and the numbers add up: £119.08 + £23.82 = £142.90.", ["Recurring"],
+    [["12 May 2026", "Categorised as Office Supplies"], ["3 Apr 2026", "Categorised as Office Supplies"]]),
+
+  mk("v2", "invoice", "Amazon Business", "AMZ-2291-06", "2026-06-15", "GBP", 57.00, 11.40, 68.40, true, "Office Supplies",
+    [["USB-C hub", 3, 19.00, 57.00]],
+    { supplierName: .98, invoiceNumber: .96, invoiceDate: .99, currency: .99, subtotal: .97, tax: .96, total: .98 },
+    "Supplier and totals match exactly. Categorised as Office Supplies 11 times before.", ["Recurring"],
+    [["29 May 2026", "Categorised as Office Supplies"], ["14 May 2026", "Categorised as Office Supplies"]]),
+
+  mk("v3", "receipt", "Pret A Manger", "", "2026-06-16", "GBP", 9.33, 1.87, 11.20, true, "Meals & Entertainment",
+    [], { supplierName: .99, invoiceNumber: .1, invoiceDate: .97, currency: .98, subtotal: .9, tax: .88, total: .99 },
+    "Receipt total and date read clearly. No receipt number printed, which is normal for this merchant.", [],
+    [["9 Jun 2026", "Categorised as Meals & Entertainment"]]),
+
+  mk("v4", "invoice", "British Telecom", "BT-994512", "2026-06-01", "GBP", 70.83, 14.16, 84.99, true, "Telecoms",
+    [["Business broadband — June", 1, 70.83, 70.83]],
+    { supplierName: .99, invoiceNumber: .98, invoiceDate: .99, currency: .99, subtotal: .97, tax: .96, total: .99 },
+    "Recurring monthly bill — same supplier, same amount range for 8 months running.", ["Recurring"],
+    [["1 May 2026", "Categorised as Telecoms"], ["1 Apr 2026", "Categorised as Telecoms"]]),
+
+  mk("v5", "receipt", "Staples", "", "2026-06-17", "GBP", 21.79, 4.36, 26.15, true, "Office Supplies",
+    [], { supplierName: .99, invoiceNumber: .1, invoiceDate: .98, currency: .99, subtotal: .95, tax: .93, total: .99 },
+    "Merchant and total both read at 99%+. Matches the pattern of 6 prior Staples receipts.", ["Recurring"],
+    [["30 May 2026", "Categorised as Office Supplies"]]),
+
+  mk("v6", "receipt", "Uber for Business", "", "2026-06-18", "GBP", 12.17, 2.43, 14.60, true, "Travel",
+    [], { supplierName: .99, invoiceNumber: .1, invoiceDate: .99, currency: .99, subtotal: .96, tax: .94, total: .99 },
+    "Clean read across every field — nothing needs a second look.", [],
+    [["11 Jun 2026", "Categorised as Travel"]]),
+
+  mk("v7", "invoice", "Zoom Video Communications", "ZM-55821", "2026-06-01", "USD", 119.90, 23.98, 143.88, true, "Software & Hosting",
+    [["Zoom Business — annual", 1, 119.90, 119.90]],
+    { supplierName: .99, invoiceNumber: .98, invoiceDate: .99, currency: .97, subtotal: .96, tax: .94, total: .98 },
+    "Subscription invoice — matches last month's amount and billing date exactly.", ["Recurring"],
+    [["1 May 2026", "Categorised as Software & Hosting"]]),
+
+  mk("v8", "invoice", "Iron Mountain", "IM-30215", "2026-06-19", "GBP", 175.00, 35.00, 210.00, true, "Facilities",
+    [["Document storage — Q2", 1, 175.00, 175.00]],
+    { supplierName: .99, invoiceNumber: .99, invoiceDate: .98, currency: .99, subtotal: .98, tax: .97, total: .99 },
+    "Supplier read with 99% confidence on every field. Approved the same way every time this supplier has appeared.", ["Recurring"],
+    [["19 Mar 2026", "Categorised as Facilities"]]),
+
+  // ---- Needs review (Important field low: tax or currency) ----
+  mkReview("r1", "receipt", "Costa Coffee", "", "2026-06-10", "GBP", 4.67, 0.93, 5.60, true, "Meals & Entertainment",
+    { supplierName: .97, invoiceNumber: .1, invoiceDate: .95, currency: .9, subtotal: .8, tax: .42, total: .94 },
+    "VAT amount is hard to read on this receipt (42% confidence) — the total itself is clear. Worth a quick check before posting."),
+
+  mkReview("r2", "receipt", "Trainline", "", "2026-06-11", "GBP", 30.00, 0, 30.00, false, "Travel",
+    { supplierName: .96, invoiceNumber: .1, invoiceDate: .97, currency: .55, subtotal: .9, tax: .1, total: .96 },
+    "Currency wasn't stated clearly on this receipt (55% confidence) — confirm it's GBP before approving."),
+
+  mkReview("r3", "invoice", "Facebook Ads", "FB-88213-06", "2026-06-12", "USD", 200.00, 40.00, 240.00, true, "Marketing",
+    { supplierName: .95, invoiceNumber: .93, invoiceDate: .96, currency: .88, subtotal: .9, tax: .58, total: .95 },
+    "Tax breakdown is faint on this invoice (58% confidence). Total itself reads clearly."),
+
+  mkReview("r4", "receipt", "Selfridges", "", "2026-06-13", "GBP", 66.67, 13.33, 80.00, true, "Meals & Entertainment",
+    { supplierName: .97, invoiceNumber: .1, invoiceDate: .95, currency: .51, subtotal: .85, tax: .8, total: .96 },
+    "Currency symbol is faded on the scan (51% confidence) — likely GBP based on the merchant, but worth confirming."),
+
+  mkReview("r5", "invoice", "DHL Express", "DHL-220914", "2026-06-14", "GBP", 42.50, 8.50, 51.00, true, "Postage & Courier",
+    { supplierName: .96, invoiceNumber: .94, invoiceDate: .95, currency: .9, subtotal: .88, tax: .47, total: .95 },
+    "Tax line is smudged on this invoice (47% confidence)."),
+
+  mkReview("r6", "invoice", "Regus Coworking", "RG-40021", "2026-06-15", "GBP", 250.00, 50.00, 300.00, true, "Facilities",
+    { supplierName: .95, invoiceNumber: .91, invoiceDate: .94, currency: .59, subtotal: .87, tax: .82, total: .94 },
+    "This invoice template shows two currencies — confirm which one applies before approving."),
+
+  mkReview("r7", "receipt", "Screwfix", "", "2026-06-16", "GBP", 28.75, 5.75, 34.50, true, "Office Supplies",
+    { supplierName: .97, invoiceNumber: .1, invoiceDate: .96, currency: .89, subtotal: .82, tax: .44, total: .95 },
+    "VAT breakdown didn't scan clearly (44% confidence) — total is unaffected."),
+
+  // ---- Possible duplicates ----
+  mkDupe("d1", "invoice", "Iron Mountain", "IM-30215", "2026-06-19", "GBP", 175.00, 35.00, 210.00, true, "Facilities",
+    { supplierName: .98, invoiceNumber: .98, invoiceDate: .97, currency: .99, subtotal: .96, tax: .95, total: .98 },
+    "Same invoice number, supplier, and total already in your queue — likely uploaded twice.",
+    { desc: "Iron Mountain (already in queue)", time: "PDF upload, 19 Jun", amount: 210.00 },
+    { desc: "Iron Mountain (this document)", time: "Email forward, 19 Jun", amount: 210.00 }),
+
+  mkDupe("d2", "receipt", "Uber for Business", "", "2026-06-18", "GBP", 12.17, 2.43, 14.60, true, "Travel",
+    { supplierName: .97, invoiceNumber: .1, invoiceDate: .96, currency: .98, subtotal: .93, tax: .9, total: .97 },
+    "Same merchant, amount, and date as another receipt already in this batch.",
+    { desc: "Uber receipt (already in queue)", time: "IMG_4021.jpg", amount: 14.60 },
+    { desc: "Uber receipt (this document)", time: "IMG_4022.jpg", amount: 14.60 }),
+
+  mkDupe("d3", "invoice", "Amazon Business", "AMZ-2291-06", "2026-06-15", "GBP", 57.00, 11.40, 68.40, true, "Office Supplies",
+    { supplierName: .95, invoiceNumber: .96, invoiceDate: .95, currency: .97, subtotal: .93, tax: .9, total: .96 },
+    "This looks like the same Amazon order captured twice — a PDF invoice and an email screenshot.",
+    { desc: "Amazon Business (PDF invoice)", time: "Uploaded 15 Jun", amount: 68.40 },
+    { desc: "Amazon Business (email screenshot)", time: "Uploaded 15 Jun", amount: 68.40 }),
+
+  mkDupe("d4", "invoice", "Zoom Video Communications", "ZM-55821", "2026-06-01", "USD", 119.90, 23.98, 143.88, true, "Software & Hosting",
+    { supplierName: .96, invoiceNumber: .97, invoiceDate: .9, currency: .93, subtotal: .92, tax: .89, total: .95 },
+    "Invoice number ZM-55821 matches one already approved on 3 May — check this isn't last month's file re-uploaded.",
+    { desc: "Zoom Video (approved 3 May)", time: "3 May 2026", amount: 143.88 },
+    { desc: "Zoom Video (this document)", time: "1 Jun 2026", amount: 143.88 }),
+
+  // ---- Potential issues (blocked: critical field low, or arithmetic mismatch, or type unclear) ----
+  mkIssue("i1", "invoice", "(unreadable)", "", "2026-06-20", "GBP", 0, 0, 96.00, false, "Uncategorised",
+    { supplierName: .38, invoiceNumber: .6, invoiceDate: .85, currency: .9, subtotal: .3, tax: .3, total: .8 },
+    "Supplier name wasn't readable on this scan (38% confidence) — this document can't be posted until it's confirmed.", []),
+
+  mkIssue("i2", "receipt", "Handwritten receipt", "", "2026-06-21", "GBP", 0, 0, 40.00, false, "Uncategorised",
+    { supplierName: .7, invoiceNumber: .1, invoiceDate: .78, currency: .85, subtotal: .3, tax: .3, total: .52 },
+    "This looks handwritten — the total is only 52% confidence. Please check it against the original.", []),
+
+  mkIssue("i3", "invoice", "Digital River Ltd", "DR-88231", "2026-06-22", "GBP", 120.00, 24.00, 152.40, true, "Software & Hosting",
+    { supplierName: .96, invoiceNumber: .95, invoiceDate: .94, currency: .97, subtotal: .93, tax: .91, total: .95 },
+    "Subtotal + tax (£144.00) doesn't match the printed total (£152.40) — check for a missing line item or discount.",
+    [["Software licence", 1, 120.00, 120.00]]),
+
+  mkIssue("i4", "unknown", "Crumpled receipt", "", "2026-06-23", "GBP", 0, 0, 18.00, false, "Uncategorised",
+    { supplierName: .82, invoiceNumber: .1, invoiceDate: .8, currency: .9, subtotal: .3, tax: .3, total: .84 },
+    "Not sure whether this is an invoice or a receipt (61% confidence) — confirm the type before this can be categorised.", [],
+    0.61),
+
+  mkIssue("i5", "invoice", "Meridian Trading GmbH", "MT-2291", "2026-06-24", "EUR", 300.00, 60.00, 360.00, true, "Professional Fees",
+    { supplierName: .93, invoiceNumber: .9, invoiceDate: .44, currency: .95, subtotal: .88, tax: .86, total: .93 },
+    "The date format on this invoice is ambiguous (44% confidence) — could be DD/MM or MM/DD. Please confirm.", []),
+];
+
+function mk(id, docType, supplier, invNum, date, currency, subtotal, tax, total, taxItemized, category, lineItems, conf, reason, badges, history) {
+  return {
+    id, section: "ready", date, category, taxItemized, badges: badges || [], reason, history: history || [], lineItems: lineItems || [],
+    documentType: f(docType, 0.99), documentTypeConfirmed: false,
+    fields: {
+      supplierName: f(supplier, conf.supplierName), invoiceNumber: f(invNum, conf.invoiceNumber), invoiceDate: f(date, conf.invoiceDate),
+      currency: f(currency, conf.currency), subtotal: f(subtotal, conf.subtotal), tax: f(tax, conf.tax), total: f(total, conf.total),
+    },
+  };
+}
+function mkReview(id, docType, supplier, invNum, date, currency, subtotal, tax, total, taxItemized, category, conf, reason) {
+  const d = mk(id, docType, supplier, invNum, date, currency, subtotal, tax, total, taxItemized, category, [], conf, reason, [], []);
+  d.history = [];
+  return d;
+}
+function mkDupe(id, docType, supplier, invNum, date, currency, subtotal, tax, total, taxItemized, category, conf, reason, dupeOfEntry, thisEntry) {
+  const d = mk(id, docType, supplier, invNum, date, currency, subtotal, tax, total, taxItemized, category, [], conf, reason, ["Duplicate"], []);
+  d.duplicateOf = dupeOfEntry;
+  d.dupe = { a: dupeOfEntry, b: thisEntry };
+  return d;
+}
+function mkIssue(id, docType, supplier, invNum, date, currency, subtotal, tax, total, taxItemized, category, conf, reason, lineItems, typeConfidence) {
+  const d = mk(id, docType === "unknown" ? "invoice" : docType, supplier, invNum, date, currency, subtotal, tax, total, taxItemized, category, lineItems, conf, reason, [], []);
+  if (typeConfidence !== undefined) d.documentType = f("invoice", typeConfidence);
+  return d;
+}
+
+// Pad "Ready to approve" up to 41 with generated near-identical high-confidence docs.
+(function padReady() {
+  const suppliers = [["Sainsbury's Local", "Office Supplies"], ["Ocado Business", "Office Supplies"], ["EE Broadband", "Telecoms"], ["Royal Mail", "Postage & Courier"], ["Notion Labs", "Software & Hosting"], ["Figma Inc", "Software & Hosting"], ["Slack Technologies", "Software & Hosting"], ["Trainline", "Travel"]];
+  let n = 0;
+  while (txns.filter((t) => t.section === "ready" || sectionFor(t) === "ready").length < 41) {
+    const [supplier, category] = suppliers[n % suppliers.length];
+    const total = Math.round((14 + (n * 6.7) % 90) * 100) / 100;
+    const tax = Math.round(total * 0.2 * 100) / 100;
+    const subtotal = Math.round((total - tax) * 100) / 100;
+    txns.push(mk("gen" + n, "receipt", supplier, "", "2026-06-" + String(2 + (n % 26)).padStart(2, "0"), "GBP", subtotal, tax, total, true, category, [],
+      { supplierName: .97, invoiceNumber: .1, invoiceDate: .97, currency: .98, subtotal: .93, tax: .91, total: .97 },
+      "Categorised the same way every prior time this supplier appeared.", ["Recurring"], [["May 2026", "Categorised as " + category]]));
+    n++;
+  }
+})();
+
+// ---------------------------------------------------------------------------
+// Rendering
+// ---------------------------------------------------------------------------
+
+const SECTIONS = [
+  { key: "ready", title: "Ready to Approve", accent: "var(--high)", bulkAllLabel: "Approve all",
+    desc: "Every critical field cleared 80%+ confidence and the numbers add up. Safe to approve as a batch." },
+  { key: "review", title: "Needs Review", accent: "var(--medium)",
+    desc: "Tax or currency needs a quick confirmation — the essentials (supplier, number, date, total) are solid." },
+  { key: "duplicate", title: "Possible Duplicates", accent: "var(--dupe)",
+    desc: "Looks like the same document was captured more than once." },
+  { key: "issue", title: "Potential Issues", accent: "var(--low)",
+    desc: "A critical field is uncertain, the type is unclear, or the numbers don't add up — can't post until it's fixed." },
+];
+
+const state = { selected: new Set(), approved: new Set(), collapsed: new Set(), focusIdx: -1, panelId: null };
+
+function byId(id) { return txns.find((t) => t.id === id); }
+
+function render() {
+  const groupsEl = document.getElementById("groups");
+  groupsEl.innerHTML = "";
+
+  const total = txns.length, reviewed = state.approved.size;
+  document.getElementById("totalCount").textContent = total;
+  document.getElementById("reviewedCount").textContent = reviewed;
+  document.getElementById("progressFill").style.width = Math.round((reviewed / total) * 100) + "%";
+
+  const readyOpen = txns.filter((t) => !state.approved.has(t.id) && sectionFor(t) === "ready");
+  document.getElementById("heroCount").textContent = readyOpen.length;
+  document.getElementById("approveAllCount").textContent = readyOpen.length;
+  document.getElementById("approveAllReady").disabled = readyOpen.length === 0;
+  document.querySelector(".hero").style.display = readyOpen.length === 0 ? "none" : "flex";
+
+  SECTIONS.forEach((sec) => groupsEl.appendChild(renderGroup(sec)));
+  updateBulkbar();
+}
+
+function renderGroup(sec) {
+  const rows = txns.filter((t) => sectionFor(t) === sec.key);
+  const openRowsInSec = rows.filter((t) => !state.approved.has(t.id));
+  const collapsed = state.collapsed.has(sec.key);
+
+  const wrap = document.createElement("div");
+  wrap.className = "group" + (collapsed ? " collapsed" : "");
+
+  const showAllKey = "showAll_" + sec.key;
+  const visRows = sec.key === "ready" && !state[showAllKey] ? openRowsInSec.slice(0, 8) : openRowsInSec;
+  const hiddenCount = openRowsInSec.length - visRows.length;
+
+  wrap.innerHTML = `
+    <div class="group-head" data-toggle="${sec.key}">
+      <div class="group-accent" style="background:${sec.accent}"></div>
+      <div class="group-title-wrap">
+        <div class="group-title"><span class="chevron">▾</span>${sec.title}<span class="group-count" style="color:${sec.accent}">${openRowsInSec.length}</span></div>
+        <div class="group-desc">${sec.desc}</div>
+      </div>
+      <div class="group-actions">
+        ${sec.key === "ready" && openRowsInSec.length ? `<button class="btn btn-success btn-sm" data-approve-group="${sec.key}">${sec.bulkAllLabel} ${openRowsInSec.length}</button>` : ""}
+      </div>
+    </div>
+    <div class="group-body">
+      ${rows.length === 0 ? `<div class="empty">Nothing here.</div>` : ""}
+      ${rows.length > 0 && openRowsInSec.length === 0 ? `<div class="empty">All reviewed ✓</div>` : ""}
+      <div class="col-head" ${visRows.length ? "" : "style='display:none'"}>
+        <span></span><span>Date</span><span>Description</span><span>Amount</span><span>Category</span><span>Confidence</span><span></span>
+      </div>
+      <div class="rows"></div>
+      ${hiddenCount > 0 ? `<div class="more-strip"><span>+ ${hiddenCount} more, all high confidence, same review pattern</span><button class="btn btn-outline btn-sm" data-showall="${sec.key}">Show all ${openRowsInSec.length}</button></div>` : ""}
+    </div>
+  `;
+
+  const rowsEl = wrap.querySelector(".rows");
+  visRows.forEach((t) => rowsEl.appendChild(renderRow(t)));
+  return wrap;
+}
+
+function renderRow(t) {
+  const pct = Math.round(t.fields.total.value > 0 ? avgConfidence(t) * 100 : avgConfidence(t) * 100);
+  const tier = tierFor(pct);
+  const el = document.createElement("div");
+  el.className = "row" + (state.approved.has(t.id) ? " approved" : "");
+  el.dataset.id = t.id;
+  el.tabIndex = 0;
+
+  const badges = t.badges.map((b) => `<span class="badge">${BADGE_ICON[b] || ""} ${b}</span>`).join("");
+  const docLabel = t.documentType.value === "receipt" ? "🧾 Receipt" : "📄 Invoice";
+  const supplierLabel = t.fields.supplierName.value || "(supplier unclear)";
+  const subLabel = [t.fields.invoiceNumber.value || null, t.category].filter(Boolean).join(" · ");
+
+  el.innerHTML = `
+    <div class="row-line1">
+      <input type="checkbox" data-check="${t.id}" ${state.selected.has(t.id) ? "checked" : ""} ${state.approved.has(t.id) ? "disabled" : ""} aria-label="Select ${supplierLabel}" />
+      <div class="row-date">${fmtDate(t.date)}</div>
+      <div>
+        <div class="row-desc-main">${supplierLabel}</div>
+        <div class="row-desc-sub">${subLabel || "&nbsp;"}</div>
+      </div>
+      <div class="row-amount">${money(t.fields.total.value)}<span class="dir">${docLabel}</span></div>
+      <div><span class="cat-pill" title="${t.category}">${t.category}</span></div>
+      <div class="conf-wrap">
+        ${svgRing(pct, 30, 4, tier.color)}
+        <div class="conf-ring-label"><b>${pct}%</b><span style="color:${tier.color}">${tier.label}</span></div>
+      </div>
+      <div class="row-actions">
+        <button class="icon-btn approve" data-approve="${t.id}" title="Approve" ${state.approved.has(t.id) ? "disabled" : ""} aria-label="Approve">✓</button>
+        <button class="icon-btn flag" data-flag="${t.id}" title="Flag for review" aria-label="Flag">⚑</button>
+      </div>
+    </div>
+    ${t.dupe ? `
+      <div class="dupe-pair">
+        <div class="dupe-line"><span class="tag">Entry A</span>${t.dupe.a.desc} · ${t.dupe.a.time} · ${money(t.dupe.a.amount)}</div>
+        <div class="dupe-line"><span class="tag">Entry B</span>${t.dupe.b.desc} · ${t.dupe.b.time} · ${money(t.dupe.b.amount)}</div>
+      </div>` : ""}
+    <div class="row-line2">
+      <span class="reason-text"><span class="spark">✦</span>${t.reason}</span>
+      ${badges}
+    </div>
+  `;
+  return el;
+}
+
+function avgConfidence(t) {
+  const vals = REVIEWABLE_FIELDS.filter((f) => !(f === "invoiceNumber" && t.documentType.value === "receipt") && !(f === "tax" && t.taxItemized === false))
+    .map((f) => t.fields[f].confidence);
+  return vals.reduce((a, b) => a + b, 0) / vals.length;
+}
+
+function updateBulkbar() {
+  const bar = document.getElementById("bulkbar");
+  const n = state.selected.size;
+  document.getElementById("selCount").textContent = n;
+  bar.classList.toggle("show", n > 0);
+}
+
+function toast(msg) {
+  const el = document.getElementById("toast");
+  el.textContent = msg;
+  el.classList.add("show");
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => el.classList.remove("show"), 2600);
+}
+
+function approve(ids) {
+  ids.forEach((id) => { state.approved.add(id); state.selected.delete(id); });
+  render();
+  toast(`${ids.length} ${ids.length === 1 ? "document" : "documents"} approved`);
+  if (state.panelId && ids.includes(state.panelId)) closePanel();
+}
+
+// ---------------------------------------------------------------------------
+// Side panel — editing a field or hitting "Confirm as-is" sets its effective
+// confidence to 100% (a real correction/confirmation) and live-recomputes the
+// gate, so a document can visibly clear from Potential Issues to Ready.
+// ---------------------------------------------------------------------------
+
+function openPanel(id) {
+  const t = byId(id);
+  if (!t) return;
+  state.panelId = id;
+  renderPanel(t);
+  document.getElementById("panel").classList.add("open");
+  document.querySelectorAll(".row").forEach((r) => r.classList.toggle("focused", r.dataset.id === id));
+}
+
+function renderPanel(t) {
+  const gate = computeGate(t);
+  const pct = Math.round(avgConfidence(t) * 100);
+  const tier = tierFor(pct);
+  const totals = checkTotals(t);
+  const docType = t.documentType.value;
+  const inner = document.getElementById("panelInner");
+
+  const gateBanner = gate.status === "ready"
+    ? `<div class="gate-banner" style="background:var(--high-bg);color:var(--high)">✓ Ready to approve — nothing blocking this document.</div>`
+    : `<div class="gate-banner" style="background:${gate.status === "blocked" ? "var(--low-bg)" : "var(--medium-bg)"};color:${gate.status === "blocked" ? "var(--low)" : "var(--medium)"}">
+        ${gate.status === "blocked" ? "🔒" : "!"} ${gate.status === "blocked" ? "Blocked" : "Review recommended"} — ${gate.reasons.map((r) => reasonText(r.field, r.confidence, docType)).join("; ")}
+      </div>`;
+
+  inner.innerHTML = `
+    <div class="panel-head">
+      <div>
+        <div class="panel-eyebrow">${SECTIONS.find((s) => s.key === sectionFor(t)).title}</div>
+        <div class="panel-title">${t.fields.supplierName.value || "(supplier unclear)"}</div>
+        <div class="panel-amount">${money(t.fields.total.value)} · ${docType === "receipt" ? "Receipt" : "Invoice"} · ${fmtDate(t.date)}</div>
+      </div>
+      <button class="panel-close" id="panelClose" aria-label="Close panel">✕</button>
+    </div>
+
+    ${gateBanner}
+
+    <div class="panel-section">
+      <h4>Document details</h4>
+      <div class="kv"><span>Type</span><span>${docType === "receipt" ? "Receipt" : "Invoice"} ${t.documentType.confidence < 0.8 ? `(${Math.round(t.documentType.confidence*100)}% confident)` : ""}</span></div>
+      <div class="kv"><span>${fieldLabels(docType).invoiceNumber}</span><span>${t.fields.invoiceNumber.value || "—"}</span></div>
+      <div class="kv"><span>Date</span><span>${fmtDate(t.date)}</span></div>
+      <div class="kv"><span>Currency</span><span>${t.fields.currency.value}</span></div>
+      <div class="kv"><span>Suggested category</span><span>${t.category}</span></div>
+    </div>
+
+    <div class="panel-section">
+      <h4>Extraction check</h4>
+      ${totals === null
+        ? `<div class="reasoning-p">No tax breakdown on this document — nothing to cross-check.</div>`
+        : `<div class="kv"><span>Subtotal + tax</span><span>£${totals.expected.toFixed(2)}</span></div>
+           <div class="kv"><span>Printed total</span><span>£${totals.found.toFixed(2)}</span></div>
+           <div class="reasoning-p" style="margin-top:8px;background:${totals.ok ? "var(--high-bg)" : "var(--low-bg)"};color:${totals.ok ? "var(--high)" : "var(--low)"}">
+             ${totals.ok ? "✓ Numbers add up." : "✕ Doesn't add up — check for a missing line item or discount."}
+           </div>`}
+    </div>
+
+    <div class="panel-section">
+      <h4>Confidence score</h4>
+      <div class="ring-block">
+        ${svgRing(pct, 92, 8, tier.color)}
+        <div class="ring-text"><b style="font-size:22px;color:${tier.color}">${pct}%</b><span>${tier.label} overall</span></div>
+      </div>
+      <div style="margin-top:18px;" id="fieldRows"></div>
+      <div class="factor-caption">Every field carries its own confidence. Critical fields (Supplier, ${fieldLabels(docType).invoiceNumber.replace(" (optional)","")}, Date, Total) must clear 80% to post; Tax and Currency must clear 60%. Edit a field or confirm it as-is to clear the gate.</div>
+    </div>
+
+    <div class="panel-section">
+      <h4>AI reasoning</h4>
+      <div class="reasoning-p">${t.reason}</div>
+    </div>
+
+    <div class="panel-section">
+      <h4>Supporting evidence</h4>
+      ${t.lineItems.length ? `
+        <table class="li-table">
+          <thead><tr><th>Line item</th><th>Qty</th><th>Amount</th></tr></thead>
+          <tbody>${t.lineItems.map((li) => `<tr><td>${li[0]}</td><td>${li[1]}</td><td>£${li[3].toFixed(2)}</td></tr>`).join("")}</tbody>
+        </table>` : `<div class="reasoning-p">No line items extracted from this document.</div>`}
+    </div>
+
+    <div class="panel-section">
+      <h4>History — previous corrections</h4>
+      ${t.history.length
+        ? `<div class="history-list">${t.history.map(([d, txt]) => `<div class="history-item">${txt}<span class="h-date">${d}</span></div>`).join("")}</div>`
+        : `<div class="reasoning-p" style="background:var(--page)">No prior corrections for this supplier — this is the first time it's appeared.</div>`}
+    </div>
+
+    <div class="panel-footer">
+      <button class="btn btn-danger-outline btn-lg" id="panelFlag">Flag</button>
+      <button class="btn btn-success btn-lg" id="panelApprove" ${state.approved.has(t.id) ? "disabled" : ""}>${state.approved.has(t.id) ? "Approved ✓" : "Approve"}</button>
+    </div>
+  `;
+
+  const fieldRowsEl = document.getElementById("fieldRows");
+  REVIEWABLE_FIELDS.forEach((fieldKey) => {
+    if (fieldKey === "invoiceNumber" && docType === "receipt") return;
+    if (fieldKey === "tax" && t.taxItemized === false) return;
+    fieldRowsEl.appendChild(renderFieldRow(t, fieldKey));
+  });
+
+  document.getElementById("panelClose").onclick = closePanel;
+  document.getElementById("panelApprove").onclick = () => approve([t.id]);
+  document.getElementById("panelFlag").onclick = () => toast(`${t.fields.supplierName.value || "Document"} flagged for a second look`);
+}
+
+function renderFieldRow(t, fieldKey) {
+  const field = t.fields[fieldKey];
+  const pct = Math.round(field.confidence * 100);
+  const isCritical = CRITICAL_FIELDS_BY_TYPE[t.documentType.value].includes(fieldKey);
+  const isImportant = IMPORTANT_FIELDS.includes(fieldKey);
+  const displayVal = fieldKey === "subtotal" || fieldKey === "tax" || fieldKey === "total" ? "£" + field.value.toFixed(2) : field.value;
+
+  const row = document.createElement("div");
+  row.className = "field-row";
+  row.innerHTML = `
+    <div class="field-top">
+      <span class="field-label">${fieldLabels(t.documentType.value)[fieldKey]}
+        ${isCritical ? `<span class="field-tag critical">Critical</span>` : isImportant ? `<span class="field-tag important">Important</span>` : ""}
+      </span>
+      <span class="field-pct" style="color:${fieldTier(pct)}">${pct}%</span>
+    </div>
+    <div class="field-track"><div class="field-fill" style="width:${pct}%;background:${fieldTier(pct)}"></div></div>
+    <div class="field-editrow">
+      <input class="field-input" data-field="${fieldKey}" value="${displayVal}" />
+      <button class="btn btn-outline btn-xs field-confirm" data-confirm="${fieldKey}" title="Confirm as-is">✓ Confirm</button>
+    </div>
+  `;
+
+  row.querySelector("[data-confirm]").onclick = () => confirmField(t, fieldKey);
+  row.querySelector("[data-field]").addEventListener("change", (e) => editField(t, fieldKey, e.target.value));
+  return row;
+}
+
+function confirmField(t, fieldKey) {
+  t.fields[fieldKey].confidence = 1;
+  toast(`${fieldLabels(t.documentType.value)[fieldKey]} confirmed as-is`);
+  refreshAfterFieldChange(t);
+}
+function editField(t, fieldKey, newVal) {
+  const raw = String(t.fields[fieldKey].value);
+  if (newVal === raw || newVal.trim() === "") return;
+  const numeric = ["subtotal", "tax", "total"].includes(fieldKey);
+  t.fields[fieldKey].value = numeric ? parseFloat(newVal.replace(/[^0-9.]/g, "")) || t.fields[fieldKey].value : newVal;
+  t.fields[fieldKey].confidence = 1;
+  toast(`${fieldLabels(t.documentType.value)[fieldKey]} corrected — saved for next time`);
+  refreshAfterFieldChange(t);
+}
+function refreshAfterFieldChange(t) {
+  const wasBlocked = state.panelId === t.id;
+  render();
+  if (wasBlocked) openPanel(t.id);
+}
+
+function closePanel() {
+  state.panelId = null;
+  document.getElementById("panel").classList.remove("open");
+  document.querySelectorAll(".row").forEach((r) => r.classList.remove("focused"));
+}
+
+// ---------------------------------------------------------------------------
+// Event delegation
+// ---------------------------------------------------------------------------
+
+document.getElementById("groups").addEventListener("click", (e) => {
+  const t = e.target;
+
+  const toggle = t.closest("[data-toggle]");
+  if (toggle && !t.closest(".group-actions")) {
+    const key = toggle.dataset.toggle;
+    if (state.collapsed.has(key)) state.collapsed.delete(key); else state.collapsed.add(key);
+    render();
+    return;
+  }
+
+  const approveGroup = t.closest("[data-approve-group]");
+  if (approveGroup) {
+    const key = approveGroup.dataset.approveGroup;
+    const ids = txns.filter((x) => sectionFor(x) === key && !state.approved.has(x.id)).map((x) => x.id);
+    approve(ids);
+    return;
+  }
+
+  const showAll = t.closest("[data-showall]");
+  if (showAll) { state["showAll_" + showAll.dataset.showall] = true; render(); return; }
+
+  const approveBtn = t.closest("[data-approve]");
+  if (approveBtn) { e.stopPropagation(); approve([approveBtn.dataset.approve]); return; }
+
+  const flagBtn = t.closest("[data-flag]");
+  if (flagBtn) { e.stopPropagation(); toast(`${byId(flagBtn.dataset.flag).fields.supplierName.value || "Document"} flagged for a second look`); return; }
+
+  const check = t.closest("[data-check]");
+  if (check) {
+    e.stopPropagation();
+    const id = check.dataset.check;
+    if (state.selected.has(id)) state.selected.delete(id); else state.selected.add(id);
+    updateBulkbar();
+    return;
+  }
+
+  const row = t.closest(".row");
+  if (row) openPanel(row.dataset.id);
+});
+
+document.getElementById("approveAllReady").addEventListener("click", () => {
+  const ids = txns.filter((t) => sectionFor(t) === "ready" && !state.approved.has(t.id)).map((t) => t.id);
+  approve(ids);
+});
+document.getElementById("approveSel").addEventListener("click", () => approve([...state.selected]));
+document.getElementById("clearSel").addEventListener("click", () => { state.selected.clear(); render(); });
+
+function visibleRowEls() { return [...document.querySelectorAll(".row")]; }
+function focusedId() { const els = visibleRowEls(); return els[state.focusIdx] ? els[state.focusIdx].dataset.id : null; }
+function applyFocusStyles() { const els = visibleRowEls(); els.forEach((r, i) => r.classList.toggle("focused", i === state.focusIdx)); }
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") { closePanel(); return; }
+  const tag = (e.target.tagName || "").toLowerCase();
+  if (tag === "input" || tag === "textarea") return;
+
+  const els = visibleRowEls();
+  if (e.key === "ArrowDown") { e.preventDefault(); state.focusIdx = Math.min(state.focusIdx + 1, els.length - 1); els[state.focusIdx]?.scrollIntoView({ block: "nearest" }); applyFocusStyles(); }
+  else if (e.key === "ArrowUp") { e.preventDefault(); state.focusIdx = Math.max(state.focusIdx - 1, 0); els[state.focusIdx]?.scrollIntoView({ block: "nearest" }); applyFocusStyles(); }
+  else if (e.key === "Enter") { const id = focusedId(); if (id) openPanel(id); }
+  else if (e.key.toLowerCase() === "a") { const id = focusedId(); if (id) approve([id]); }
+});
+
+render();
+</script>

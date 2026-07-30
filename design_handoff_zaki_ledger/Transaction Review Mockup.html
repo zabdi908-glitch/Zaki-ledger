@@ -1,0 +1,989 @@
+<!doctype html>
+<title>Review Matches — Zaki Ledger</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root {
+    --page: oklch(98% 0.004 240);
+    --paper: #ffffff;
+    --card-border: oklch(90% 0.008 240);
+    --track-bg: oklch(94% 0.006 240);
+
+    --ink: oklch(20% 0.02 240);
+    --ink-soft: oklch(48% 0.02 240);
+    --ink-faint: oklch(60% 0.01 240);
+    --ink-fainter: oklch(55% 0.02 240);
+
+    --teal: oklch(62% 0.11 195);
+    --teal-bright: oklch(70% 0.12 195);
+
+    --sidebar-bg: oklch(24% 0.05 260);
+    --sidebar-active: oklch(32% 0.07 260);
+    --sidebar-btn: oklch(30% 0.08 260);
+    --sidebar-text: oklch(78% 0.02 260);
+    --sidebar-text-dim: oklch(52% 0.02 260);
+    --sidebar-group-label: oklch(50% 0.02 260);
+    --sidebar-border: oklch(38% 0.05 260);
+    --sidebar-footer-text: oklch(70% 0.02 260);
+
+    --high: oklch(45% 0.14 155);
+    --high-bg: oklch(94% 0.05 155);
+    --medium: oklch(48% 0.15 80);
+    --medium-bg: oklch(94% 0.06 80);
+    --low: oklch(48% 0.18 25);
+    --low-bg: oklch(94% 0.06 25);
+    --dupe: oklch(48% 0.14 305);
+    --dupe-bg: oklch(94% 0.045 305);
+
+    --radius-sm: 7px;
+    --radius-md: 12px;
+    --radius-lg: 14px;
+    --radius-pill: 999px;
+
+    --font-body: "Inter", -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+
+    --panel-w: 440px;
+  }
+
+  :root[data-theme="dark"] {
+    --page: oklch(18% 0.012 250);
+    --paper: oklch(22% 0.014 250);
+    --card-border: oklch(30% 0.016 250);
+    --track-bg: oklch(28% 0.014 250);
+    --ink: oklch(94% 0.006 240);
+    --ink-soft: oklch(78% 0.012 240);
+    --ink-faint: oklch(62% 0.012 240);
+    --ink-fainter: oklch(58% 0.012 240);
+    --high-bg: oklch(28% 0.06 155);
+    --medium-bg: oklch(28% 0.07 80);
+    --low-bg: oklch(28% 0.08 25);
+    --dupe-bg: oklch(28% 0.06 305);
+    --high: oklch(78% 0.13 155);
+    --medium: oklch(80% 0.13 80);
+    --low: oklch(80% 0.15 25);
+    --dupe: oklch(80% 0.11 305);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --page: oklch(18% 0.012 250);
+      --paper: oklch(22% 0.014 250);
+      --card-border: oklch(30% 0.016 250);
+      --track-bg: oklch(28% 0.014 250);
+      --ink: oklch(94% 0.006 240);
+      --ink-soft: oklch(78% 0.012 240);
+      --ink-faint: oklch(62% 0.012 240);
+      --ink-fainter: oklch(58% 0.012 240);
+      --high-bg: oklch(28% 0.06 155);
+      --medium-bg: oklch(28% 0.07 80);
+      --low-bg: oklch(28% 0.08 25);
+      --dupe-bg: oklch(28% 0.06 305);
+      --high: oklch(78% 0.13 155);
+      --medium: oklch(80% 0.13 80);
+      --low: oklch(80% 0.15 25);
+      --dupe: oklch(80% 0.11 305);
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    font-family: var(--font-body);
+    color: var(--ink);
+    background: var(--page);
+    -webkit-font-smoothing: antialiased;
+  }
+  button { font-family: inherit; }
+  ::selection { background: var(--teal); color: white; }
+
+  .shell { display: flex; height: 100vh; overflow: hidden; }
+
+  /* ---------------- sidebar ---------------- */
+  .sidebar {
+    width: 240px; flex-shrink: 0; background: var(--sidebar-bg); color: white;
+    display: flex; flex-direction: column; padding: 24px 16px; overflow-y: auto;
+  }
+  .brand { font-size: 21px; font-weight: 700; letter-spacing: -0.02em; padding: 8px 4px 28px; }
+  .brand span { color: var(--teal-bright); }
+  .nav-group-label {
+    font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--sidebar-group-label); padding: 12px 12px 4px;
+  }
+  .nav-item {
+    display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 8px;
+    font-size: 14.5px; font-weight: 500; color: var(--sidebar-text); text-decoration: none; cursor: pointer;
+  }
+  .nav-item.active { background: var(--sidebar-active); color: white; }
+  .nav-item .soon { margin-left: auto; font-size: 10px; font-weight: 700; letter-spacing: 0.03em;
+    color: var(--sidebar-text-dim); border: 1px solid var(--sidebar-border); border-radius: 4px; padding: 2px 5px; }
+  .sidebar-footer { margin-top: auto; padding: 12px; font-size: 12px; color: var(--sidebar-footer-text);
+    border-top: 1px solid var(--sidebar-border); }
+  .sidebar-footer b { display: block; color: white; margin-bottom: 2px; font-weight: 600; }
+
+  /* ---------------- content area ---------------- */
+  .content-area { flex: 1; display: flex; min-width: 0; overflow: hidden; }
+  .main { flex: 1; min-width: 0; overflow-y: auto; padding: 36px 44px 80px; }
+  .main-inner { max-width: 980px; margin: 0 auto; }
+
+  .page-title { font-size: 30px; font-weight: 700; margin: 0 0 4px; letter-spacing: -0.01em; }
+  .page-sub { font-size: 14.5px; color: var(--ink-soft); margin: 0 0 18px; }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 14px; margin-bottom: 24px; }
+  .legend-item { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--ink-soft); }
+  .legend-dot { width: 8px; height: 8px; border-radius: 50%; }
+
+  .progress-track { height: 6px; border-radius: 3px; background: var(--track-bg); overflow: hidden; margin-bottom: 26px; }
+  .progress-fill { height: 100%; border-radius: 3px; background: var(--teal); transition: width .3s ease; }
+
+  /* ---------------- hero action bar ---------------- */
+  .hero {
+    background: linear-gradient(135deg, var(--high-bg), var(--paper) 65%);
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius-lg);
+    padding: 26px 28px;
+    display: flex; align-items: center; justify-content: space-between; gap: 20px;
+    margin-bottom: 28px;
+  }
+  .hero-count { font-size: 40px; font-weight: 700; font-family: var(--font-mono); line-height: 1; color: var(--ink); }
+  .hero-label { font-size: 14.5px; color: var(--ink-soft); margin-top: 6px; max-width: 46ch; }
+  .hero-sub { font-size: 12.5px; color: var(--ink-faint); margin-top: 4px; }
+
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    font-weight: 600; cursor: pointer; border: none; line-height: 1.2; white-space: nowrap;
+    font-family: var(--font-body);
+  }
+  .btn-lg { padding: 13px 22px; border-radius: 9px; font-size: 14.5px; }
+  .btn-md { padding: 9px 15px; border-radius: 7px; font-size: 13.5px; }
+  .btn-sm { padding: 5px 11px; border-radius: 6px; font-size: 12.5px; }
+  .btn-success { background: var(--high); color: white; }
+  .btn-primary { background: var(--sidebar-btn); color: white; }
+  .btn-outline { background: var(--paper); color: var(--ink); border: 1px solid var(--card-border); }
+  .btn-danger-outline { background: var(--paper); color: var(--low); border: 1px solid var(--card-border); }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .btn:focus-visible, .row:focus-visible, .icon-btn:focus-visible, input:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
+
+  /* ---------------- bulk bar ---------------- */
+  .bulkbar {
+    position: sticky; top: 0; z-index: 5; display: flex; align-items: center; justify-content: space-between;
+    background: var(--sidebar-bg); color: white; border-radius: var(--radius-md);
+    padding: 12px 18px; margin-bottom: 22px; font-size: 13.5px;
+    transform: translateY(-12px); opacity: 0; pointer-events: none; transition: all .15s ease;
+  }
+  .bulkbar.show { transform: translateY(0); opacity: 1; pointer-events: auto; }
+  .bulkbar b { font-family: var(--font-mono); }
+
+  /* ---------------- section groups ---------------- */
+  .group { margin-bottom: 30px; border: 1px solid var(--card-border); border-radius: var(--radius-lg); background: var(--paper); overflow: hidden; }
+  .group-head { display: flex; align-items: center; gap: 14px; padding: 18px 22px; cursor: pointer; }
+  .group-accent { width: 4px; align-self: stretch; border-radius: 3px; flex-shrink: 0; }
+  .group-title-wrap { flex: 1; min-width: 0; }
+  .group-title { font-size: 15.5px; font-weight: 700; display: flex; align-items: center; gap: 9px; }
+  .group-count { font-family: var(--font-mono); }
+  .group-desc { font-size: 13px; color: var(--ink-soft); margin-top: 3px; }
+  .group-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+  .chevron { transition: transform .15s ease; color: var(--ink-faint); font-size: 12px; }
+  .group.collapsed .chevron { transform: rotate(-90deg); }
+  .group-body { border-top: 1px solid var(--card-border); }
+  .group.collapsed .group-body { display: none; }
+
+  .col-head {
+    display: grid; grid-template-columns: 30px 84px minmax(200px,1.4fr) 118px 156px 128px 92px;
+    gap: 12px; padding: 10px 22px; font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
+    color: var(--ink-faint); background: var(--page);
+  }
+  .col-head span:nth-child(4) { text-align: right; }
+
+  /* ---------------- transaction row ---------------- */
+  .row { border-top: 1px solid var(--card-border); padding: 13px 22px 12px; cursor: pointer; transition: background .1s ease; }
+  .row:first-child { border-top: none; }
+  .row:hover, .row.focused { background: var(--page); }
+  .row.approved { opacity: .38; }
+  .row-line1 {
+    display: grid; grid-template-columns: 30px 84px minmax(200px,1.4fr) 118px 156px 128px 92px;
+    gap: 12px; align-items: center;
+  }
+  .row-date { font-family: var(--font-mono); font-size: 12.5px; color: var(--ink-soft); }
+  .row-desc-main { font-size: 14px; font-weight: 600; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row-desc-sub { font-size: 12px; color: var(--ink-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row-amount { text-align: right; font-family: var(--font-mono); font-size: 14px; font-weight: 600; }
+  .row-amount .dir { display: block; font-family: var(--font-body); font-weight: 500; font-size: 10.5px; color: var(--ink-faint); text-align: right; }
+  .cat-pill { display: inline-block; padding: 4px 10px; border-radius: var(--radius-pill); background: var(--track-bg); color: var(--ink-soft);
+    font-size: 12px; font-weight: 600; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .conf-wrap { display: flex; align-items: center; gap: 8px; }
+  .conf-ring-label { font-size: 12px; }
+  .conf-ring-label b { display: block; font-family: var(--font-mono); font-size: 13.5px; }
+  .row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 4px; }
+  .icon-btn {
+    width: 28px; height: 28px; border-radius: 7px; border: 1px solid var(--card-border); background: var(--paper);
+    display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 13px; color: var(--ink-soft);
+  }
+  .icon-btn.approve:hover { background: var(--high-bg); color: var(--high); border-color: var(--high-bg); }
+  .icon-btn.flag:hover { background: var(--low-bg); color: var(--low); border-color: var(--low-bg); }
+  .icon-btn:disabled { opacity: .4; cursor: default; }
+
+  .row-line2 { padding-left: 126px; margin-top: 6px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .reason-text { font-size: 12.5px; color: var(--ink-soft); }
+  .reason-text .spark { margin-right: 5px; }
+  .badge { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 600; padding: 2px 8px;
+    border-radius: var(--radius-pill); border: 1px solid var(--card-border); color: var(--ink-faint); background: var(--paper); }
+
+  .dupe-pair { padding-left: 126px; margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+  .dupe-line { display: flex; gap: 10px; font-size: 12.5px; color: var(--ink-soft); }
+  .dupe-line .tag { font-weight: 700; color: var(--dupe); width: 74px; flex-shrink: 0; }
+
+  .more-strip { padding: 16px 22px; display: flex; align-items: center; justify-content: space-between;
+    background: var(--page); border-top: 1px solid var(--card-border); font-size: 13px; color: var(--ink-soft); }
+
+  .empty { padding: 40px; text-align: center; color: var(--ink-fainter); font-size: 14px; }
+
+  /* ---------------- side panel ---------------- */
+  .panel { width: 0; flex-shrink: 0; overflow: hidden; background: var(--paper); border-left: 1px solid var(--card-border);
+    transition: width .22s ease; }
+  .panel.open { width: var(--panel-w); }
+  .panel-inner { width: var(--panel-w); height: 100%; overflow-y: auto; padding: 22px 26px 60px; }
+  .panel-head { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 18px; }
+  .panel-close { width: 30px; height: 30px; border-radius: 8px; border: 1px solid var(--card-border); background: var(--paper);
+    cursor: pointer; font-size: 14px; color: var(--ink-soft); flex-shrink: 0; }
+  .panel-eyebrow { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--ink-faint); margin-bottom: 5px; }
+  .panel-title { font-size: 19px; font-weight: 700; }
+  .panel-amount { font-family: var(--font-mono); font-size: 15px; color: var(--ink-soft); margin-top: 4px; }
+
+  .panel-section { margin-top: 26px; }
+  .panel-section h4 { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-faint); margin: 0 0 10px; }
+  .kv { display: flex; justify-content: space-between; font-size: 13.5px; padding: 6px 0; border-bottom: 1px dashed var(--card-border); }
+  .kv span:first-child { color: var(--ink-soft); }
+  .kv span:last-child { font-weight: 600; text-align: right; }
+
+  .ring-block { display: flex; align-items: center; gap: 18px; }
+  .ring-text b { display: block; font-size: 13.5px; }
+  .ring-text span { font-size: 12.5px; color: var(--ink-soft); }
+
+  .factor { margin-bottom: 12px; }
+  .factor-top { display: flex; justify-content: space-between; font-size: 12.5px; margin-bottom: 4px; }
+  .factor-top b { font-family: var(--font-mono); }
+  .factor-track { height: 6px; border-radius: 3px; background: var(--track-bg); overflow: hidden; }
+  .factor-fill { height: 100%; border-radius: 3px; }
+  .factor-note { font-size: 12px; color: var(--ink-faint); margin-top: 4px; }
+  .factor-caption { font-size: 12px; color: var(--ink-faint); margin-top: 10px; }
+
+  .reasoning-p { font-size: 13.5px; line-height: 1.55; color: var(--ink); background: var(--page); border-radius: 10px; padding: 14px 16px; }
+
+  .evidence-list, .history-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+  .evidence-list li { font-size: 13px; color: var(--ink-soft); display: flex; gap: 8px; line-height: 1.5; }
+  .evidence-list li .ico { flex-shrink: 0; }
+  .history-item { display: flex; justify-content: space-between; font-size: 12.5px; padding: 8px 10px; background: var(--page); border-radius: 8px; }
+  .history-item .h-date { color: var(--ink-faint); font-family: var(--font-mono); }
+  .history-item .h-cat { font-weight: 600; }
+
+  .panel-footer { display: flex; gap: 8px; margin-top: 28px; }
+  .panel-footer .btn { flex: 1; }
+
+  .toast { position: fixed; bottom: 24px; right: 24px; background: var(--sidebar-bg); color: white; padding: 13px 18px;
+    border-radius: 10px; font-size: 13.5px; font-weight: 600; box-shadow: 0 8px 24px rgba(0,0,0,.25);
+    transform: translateY(12px); opacity: 0; pointer-events: none; transition: all .18s ease; z-index: 20; }
+  .toast.show { transform: translateY(0); opacity: 1; }
+
+  .kbd-hint { position: fixed; left: 256px; bottom: 16px; font-size: 11.5px; color: var(--ink-faint); display: flex; gap: 14px; }
+  .kbd-hint kbd { font-family: var(--font-mono); background: var(--track-bg); border-radius: 4px; padding: 1px 5px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; animation: none !important; }
+  }
+
+  @media (max-width: 980px) {
+    .col-head { display: none; }
+    .row-line1 { grid-template-columns: 24px 1fr auto; grid-template-areas: "check desc amount" "check cat conf" "check actions actions"; row-gap: 8px; }
+    .row-date { display: none; }
+    .row-line2, .dupe-pair { padding-left: 0; }
+    .panel { position: fixed; inset: 0; z-index: 30; width: 100%; transition: transform .22s ease; transform: translateX(100%); border-left: none; }
+    .panel.open { width: 100%; transform: translateX(0); }
+    .panel-inner { width: 100%; }
+    .kbd-hint { display: none; }
+    .hero { flex-direction: column; align-items: flex-start; }
+  }
+</style>
+
+<div class="shell">
+  <nav class="sidebar" aria-label="Primary">
+    <div class="brand">Zaki<span>.</span></div>
+    <div class="nav-item"><span>🏠</span>Dashboard</div>
+
+    <div class="nav-group-label">Extraction</div>
+    <div class="nav-item"><span>📤</span>Upload &amp; Extract</div>
+    <div class="nav-item"><span>✏️</span>Review &amp; Edit</div>
+    <div class="nav-item"><span>✅</span>Batch Review</div>
+
+    <div class="nav-group-label">Reconciliation</div>
+    <div class="nav-item"><span>🏦</span>Upload Statement</div>
+    <div class="nav-item active"><span>🔍</span>Review Matches</div>
+    <div class="nav-item"><span>✔️</span>Batch Review</div>
+
+    <div class="nav-group-label">Organization</div>
+    <div class="nav-item"><span>📁</span>Auto-Categorize<span class="soon">SOON</span></div>
+    <div class="nav-item"><span>📋</span>Document Portal<span class="soon">SOON</span></div>
+
+    <div class="nav-group-label">Insights</div>
+    <div class="nav-item"><span>📊</span>Reports &amp; Analytics<span class="soon">SOON</span></div>
+
+    <div class="nav-group-label">Account</div>
+    <div class="nav-item"><span>⚙️</span>Settings</div>
+
+    <div class="sidebar-footer"><b>zabdi908@gmail.com</b><span style="cursor:pointer;text-decoration:underline;">Sign out</span></div>
+  </nav>
+
+  <div class="content-area">
+    <main class="main" id="main">
+      <div class="main-inner">
+        <h1 class="page-title">Review Matches</h1>
+        <p class="page-sub">Barclays Business — statement 1–30 Jun 2026 · <span id="reviewedCount">0</span> of <span id="totalCount">0</span> transactions reviewed</p>
+
+        <div class="legend">
+          <div class="legend-item"><span class="legend-dot" style="background:var(--high)"></span>Exact / strong match</div>
+          <div class="legend-item"><span class="legend-dot" style="background:var(--medium)"></span>Review recommended</div>
+          <div class="legend-item"><span class="legend-dot" style="background:var(--dupe)"></span>Possible duplicate</div>
+          <div class="legend-item"><span class="legend-dot" style="background:var(--low)"></span>Insufficient evidence</div>
+        </div>
+
+        <div class="progress-track"><div class="progress-fill" id="progressFill" style="width:0%"></div></div>
+
+        <div class="hero">
+          <div>
+            <div class="hero-count" id="heroCount">98</div>
+            <div class="hero-label">High-confidence matches — every one scored 95%+ on amount, date, and merchant against your accounting records.</div>
+            <div class="hero-sub">Nothing here needs a click. Approve the batch, then spend your time on the sections below.</div>
+          </div>
+          <button class="btn btn-success btn-lg" id="approveAllReady">Approve all <span id="approveAllCount">98</span></button>
+        </div>
+
+        <div class="bulkbar" id="bulkbar">
+          <span><b id="selCount">0</b> selected</span>
+          <div style="display:flex;gap:8px;">
+            <button class="btn btn-outline btn-sm" style="background:transparent;color:white;border-color:var(--sidebar-border);" id="clearSel">Clear</button>
+            <button class="btn btn-success btn-sm" id="approveSel">Approve selected</button>
+          </div>
+        </div>
+
+        <div id="groups"></div>
+      </div>
+    </main>
+
+    <aside class="panel" id="panel">
+      <div class="panel-inner" id="panelInner"></div>
+    </aside>
+  </div>
+</div>
+
+<div class="kbd-hint">
+  <span><kbd>↑</kbd><kbd>↓</kbd> move</span>
+  <span><kbd>Enter</kbd> open</span>
+  <span><kbd>A</kbd> approve</span>
+  <span><kbd>Esc</kbd> close panel</span>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+
+// ---------------------------------------------------------------------------
+// Sample data. Confidence factor weights (40 / 35 / 25) mirror the real
+// scorePair() engine in lib/reconciliation-matching.ts — amount, date,
+// merchant — so this mockup's "why" is the product's actual logic, not a
+// black box.
+// ---------------------------------------------------------------------------
+
+function svgRing(pct, size, stroke, color) {
+  const r = (size - stroke) / 2;
+  const c = 2 * Math.PI * r;
+  const dash = (pct / 100) * c;
+  return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" style="transform:rotate(-90deg)">
+    <circle cx="${size/2}" cy="${size/2}" r="${r}" fill="none" stroke="var(--track-bg)" stroke-width="${stroke}" />
+    <circle cx="${size/2}" cy="${size/2}" r="${r}" fill="none" stroke="${color}" stroke-width="${stroke}"
+      stroke-linecap="round" stroke-dasharray="${dash} ${c}" />
+  </svg>`;
+}
+
+function tierFor(pct) {
+  if (pct >= 98) return { label: "Exact match", color: "var(--high)", bg: "var(--high-bg)" };
+  if (pct >= 90) return { label: "Strong match", color: "var(--high)", bg: "var(--high-bg)" };
+  if (pct >= 65) return { label: "Review recommended", color: "var(--medium)", bg: "var(--medium-bg)" };
+  return { label: "Insufficient evidence", color: "var(--low)", bg: "var(--low-bg)" };
+}
+
+function money(n, dir) {
+  const v = "£" + Math.abs(n).toFixed(2);
+  return dir === "out" ? "−" + v : "+" + v;
+}
+
+function factorsFor(pct, notes) {
+  // Split pct proportionally across the engine's real 40/35/25 weights.
+  const scale = pct / 100;
+  return [
+    { label: "Amount", max: 40, score: Math.round(40 * Math.min(scale * 1.05, 1)), note: notes.amount },
+    { label: "Date", max: 35, score: Math.round(35 * Math.min(scale, 1)), note: notes.date },
+    { label: "Merchant", max: 25, score: Math.round(25 * Math.min(scale * 0.95, 1)), note: notes.merchant },
+  ];
+}
+
+const BADGE_ICON = { Recurring: "🔁", Transfer: "🔗", Payroll: "👥", VAT: "🧾", Subscription: "📅", Duplicate: "⚠️" };
+
+let txns = [
+  // ---- Ready to approve (95-100%) ----
+  { id: "t1", section: "ready", date: "2026-06-02", merchant: "AWS EMEA", sub: "Cloud hosting — recurring", amount: 412.18, dir: "out",
+    category: "Software & Hosting", conf: 99, badges: ["Recurring"], reason: "Amount matches to the penny. This supplier has been approved 14 times in the last 12 months.",
+    match: { desc: "AWS EMEA — hosting invoice", ref: "INV-AWS-88213", date: "2026-06-01", amount: 412.18 },
+    notes: { amount: "Matches to the penny.", date: "Posted 1 day after invoice date — normal for this supplier.", merchant: "Exact name match, 14/14 prior approvals." },
+    evidence: ["Invoice INV-AWS-88213 linked, dated 1 day earlier.", "Categorised as Software & Hosting every time this supplier has appeared."],
+    history: [["1 May 2026","Software & Hosting"],["1 Apr 2026","Software & Hosting"],["1 Mar 2026","Software & Hosting"]] },
+
+  { id: "t2", section: "ready", date: "2026-06-03", merchant: "Sainsbury's Local", sub: "Card purchase", amount: 18.42, dir: "out",
+    category: "Office Supplies", conf: 98, badges: ["Recurring"], reason: "Amount and date match exactly. Categorised the same way every time this supplier has appeared.",
+    match: { desc: "Sainsbury's — card purchase", ref: "POS-44192", date: "2026-06-03", amount: 18.42 },
+    notes: { amount: "Exact match.", date: "Same day.", merchant: "Exact name match, 6/6 prior approvals." },
+    evidence: ["Card reference POS-44192 matches your accounting entry exactly.", "Same category chosen 6 times previously."],
+    history: [["19 May 2026","Office Supplies"],["6 May 2026","Office Supplies"]] },
+
+  { id: "t3", section: "ready", date: "2026-06-04", merchant: "Octopus Energy", sub: "Direct debit", amount: 284.00, dir: "out",
+    category: "Utilities", conf: 97, badges: ["Recurring"], reason: "Recurring monthly payment — amount within £2 of the last 6 months.",
+    match: { desc: "Octopus Energy — direct debit", ref: "DD-OCT-2201", date: "2026-06-04", amount: 284.00 },
+    notes: { amount: "Within normal monthly range (£281–£286).", date: "Same collection date as prior 6 months.", merchant: "Exact name match." },
+    evidence: ["Direct debit reference unchanged since Jan 2026.", "Amount trend is stable — no anomaly detected."],
+    history: [["4 May 2026","Utilities"],["4 Apr 2026","Utilities"],["4 Mar 2026","Utilities"]] },
+
+  { id: "t4", section: "ready", date: "2026-06-05", merchant: "Google Workspace", sub: "Subscription", amount: 48.00, dir: "out",
+    category: "Software & Hosting", conf: 99, badges: ["Subscription"], reason: "Subscription charge — matches invoice GW-88213, issued 2 days earlier.",
+    match: { desc: "Google Workspace — Business Standard", ref: "GW-88213", date: "2026-06-03", amount: 48.00 },
+    notes: { amount: "Matches invoice exactly.", date: "Charged 2 days after invoice — consistent pattern.", merchant: "Exact name match." },
+    evidence: ["Invoice GW-88213 linked.", "Same £48.00 charge for 11 consecutive months."],
+    history: [["5 May 2026","Software & Hosting"],["5 Apr 2026","Software & Hosting"]] },
+
+  { id: "t5", section: "ready", date: "2026-06-06", merchant: "Stripe Payout", sub: "Settlement", amount: 6214.55, dir: "in",
+    category: "Sales Income", conf: 100, badges: ["Recurring"], reason: "Amount matches the Stripe settlement report exactly. Payout reference matches your ledger entry.",
+    match: { desc: "Stripe payout — weekly settlement", ref: "PO_1N8x7ZQ", date: "2026-06-06", amount: 6214.55 },
+    notes: { amount: "Matches settlement report to the penny.", date: "Same day.", merchant: "Payout reference matches ledger entry exactly." },
+    evidence: ["Stripe settlement report PO_1N8x7ZQ matches this deposit exactly.", "Weekly payout pattern — 9th consecutive match."],
+    history: [["30 May 2026","Sales Income"],["23 May 2026","Sales Income"]] },
+
+  { id: "t6", section: "ready", date: "2026-06-07", merchant: "HMRC VAT", sub: "VAT payment", amount: 9847.02, dir: "out",
+    category: "VAT Payment", conf: 99, badges: ["VAT"], reason: "VAT reference number matches this quarter's return. Amount matches to the penny.",
+    match: { desc: "HMRC — VAT return Q2 2026", ref: "VRN-994-Q2", date: "2026-06-07", amount: 9847.02 },
+    notes: { amount: "Matches the filed VAT return exactly.", date: "Paid on the return's due date.", merchant: "HMRC reference matches VRN on file." },
+    evidence: ["VAT return VRN-994-Q2 filed 5 days earlier for this exact amount.", "Payment reference matches HMRC's expected format."],
+    history: [["7 Mar 2026","VAT Payment"],["7 Dec 2025","VAT Payment"]] },
+
+  { id: "t7", section: "ready", date: "2026-06-08", merchant: "Tom's Payroll Ltd", sub: "Payroll run", amount: 14320.00, dir: "out",
+    category: "Payroll", conf: 98, badges: ["Payroll", "Recurring"], reason: "Matches this month's payroll run total exactly. Same date pattern as the last 11 pay runs.",
+    match: { desc: "June payroll run — 14 employees", ref: "PAYRUN-2026-06", date: "2026-06-08", amount: 14320.00 },
+    notes: { amount: "Matches payroll provider's total exactly.", date: "Paid on the 8th, as every month.", merchant: "Same payroll processor for 11 consecutive runs." },
+    evidence: ["Payroll run PAYRUN-2026-06 totals £14,320.00 for 14 employees.", "Same pay date for 11 consecutive months."],
+    history: [["8 May 2026","Payroll"],["8 Apr 2026","Payroll"]] },
+
+  { id: "t8", section: "ready", date: "2026-06-09", merchant: "Adobe Creative Cloud", sub: "Subscription", amount: 52.99, dir: "out",
+    category: "Software & Hosting", conf: 96, badges: ["Subscription", "Recurring"], reason: "Supplier previously categorised the same way 9 times. Amount within normal range (£51–£54).",
+    match: { desc: "Adobe Creative Cloud — All Apps", ref: "ADB-778213", date: "2026-06-09", amount: 52.99 },
+    notes: { amount: "Within normal FX-adjusted range.", date: "Same billing day every month.", merchant: "Exact name match, 9/9 prior approvals." },
+    evidence: ["Billing day unchanged for 9 months.", "Small monthly variance is normal FX movement on a USD-billed subscription."],
+    history: [["9 May 2026","Software & Hosting"],["9 Apr 2026","Software & Hosting"]] },
+
+  // ---- Needs review ----
+  { id: "r1", section: "review", date: "2026-06-10", merchant: "SQ *THE CORNER CAFE", sub: "Card purchase", amount: 34.20, dir: "out",
+    category: "Meals & Entertainment", conf: 78, badges: [], reason: "Merchant name is abbreviated on the statement, and this supplier hasn't been categorised before.",
+    match: { desc: "No exact accounting entry found", ref: "—", date: "—", amount: null },
+    notes: { amount: "No accounting entry to compare against.", date: "n/a", merchant: "\"SQ *\" prefix suggests a Square card reader — name is truncated." },
+    evidence: ["No prior transaction from this merchant in your history.", "Category suggested from similar Square card-reader purchases."],
+    history: [] },
+
+  { id: "r2", section: "review", date: "2026-06-11", merchant: "Wire transfer — INV-3391", sub: "Bank transfer", amount: 2400.00, dir: "out",
+    category: "Contractor Payment", conf: 82, badges: [], reason: "Amount matches invoice INV-3391, but the invoice was issued to a different contact name.",
+    match: { desc: "Invoice INV-3391 — J. Whitfield Design", ref: "INV-3391", date: "2026-06-09", amount: 2400.00 },
+    notes: { amount: "Matches invoice exactly.", date: "Paid 2 days after invoice date.", merchant: "Payee name on the statement doesn't match the invoice contact." },
+    evidence: ["Invoice INV-3391 for £2,400.00 is open and unpaid.", "Statement payee name differs from the invoice contact — worth a quick check."],
+    history: [["12 Mar 2026","Contractor Payment"]] },
+
+  { id: "r3", section: "review", date: "2026-06-11", merchant: "DL* AMAZON WEB SVC", sub: "Card purchase", amount: 61.03, dir: "out",
+    category: "Software & Hosting", conf: 74, badges: ["Recurring"], reason: "Amount is £0.87 higher than the last AWS charge — could be a currency conversion difference.",
+    match: { desc: "AWS — usage overage", ref: "—", date: "2026-06-10", amount: 60.16 },
+    notes: { amount: "Close but not exact — 1.4% higher than usual.", date: "1 day later than usual.", merchant: "Exact name match." },
+    evidence: ["Last 4 AWS charges: £60.10–£60.30. This one is £61.03.", "Difference is consistent with USD/GBP rate movement, not a new charge type."],
+    history: [["10 May 2026","Software & Hosting"],["10 Apr 2026","Software & Hosting"]] },
+
+  { id: "r4", section: "review", date: "2026-06-12", merchant: "Faster Payment", sub: "Bank transfer", amount: 500.00, dir: "out",
+    category: "Director's Loan", conf: 71, badges: [], reason: "No invoice or recurring pattern found. Amount is round, which fits either a loan or a one-off payment.",
+    match: { desc: "No accounting entry found", ref: "—", date: "—", amount: null },
+    notes: { amount: "Round number — no invoice to confirm against.", date: "n/a", merchant: "No merchant name given, only \"Faster Payment\"." },
+    evidence: ["No invoice or bill matches this amount.", "Round £500 transfers from this account have been Director's Loan twice before."],
+    history: [["14 Feb 2026","Director's Loan"]] },
+
+  { id: "r5", section: "review", date: "2026-06-12", merchant: "PAYPAL *ETSYSELLER", sub: "Card purchase", amount: 89.99, dir: "out",
+    category: "Office Supplies", conf: 76, badges: [], reason: "New supplier — no history to match. Category suggested from similar purchases by other Etsy sellers.",
+    match: { desc: "No accounting entry found", ref: "—", date: "—", amount: null },
+    notes: { amount: "No prior purchase to compare.", date: "n/a", merchant: "First transaction from this merchant." },
+    evidence: ["No previous PayPal/Etsy transactions on file.", "87% of PayPal *Etsy purchases on this account are categorised as Office Supplies."],
+    history: [] },
+
+  { id: "r6", section: "review", date: "2026-06-13", merchant: "Bank transfer (incoming)", sub: "Faster payment", amount: 1200.00, dir: "in",
+    category: "Owner's Investment", conf: 68, badges: [], reason: "Round amount, no invoice on file. Could be a capital injection or a customer overpayment.",
+    match: { desc: "No accounting entry found", ref: "—", date: "—", amount: null },
+    notes: { amount: "Round number, no invoice to confirm.", date: "n/a", merchant: "No payer reference on the statement." },
+    evidence: ["No open invoice for this amount.", "No customer account currently shows a £1,200 overpayment."],
+    history: [] },
+
+  { id: "r7", section: "review", date: "2026-06-14", merchant: "WORLDPAY *TAXI4X", sub: "Card purchase", amount: 22.50, dir: "out",
+    category: "Travel", conf: 73, badges: [], reason: "One-off amount that doesn't match a recurring pattern, but the merchant type strongly suggests travel.",
+    match: { desc: "No accounting entry found", ref: "—", date: "—", amount: null },
+    notes: { amount: "No pattern to compare against.", date: "n/a", merchant: "Merchant category code matches known taxi operators." },
+    evidence: ["Merchant category code (4121) is registered to taxi/rideshare operators.", "No prior transactions from this merchant."],
+    history: [] },
+
+  { id: "r8", section: "review", date: "2026-06-15", merchant: "GOCARDLESS-COLLECT", sub: "Direct debit", amount: 340.00, dir: "out",
+    category: "Insurance", conf: 79, badges: ["Recurring"], reason: "Amount is within 2% of last quarter's premium, but the collection date shifted by 9 days.",
+    match: { desc: "Business insurance — quarterly premium", ref: "POL-5521", date: "2026-06-24", amount: 336.40 },
+    notes: { amount: "Within 2% of the expected premium.", date: "Collected 9 days earlier than the usual schedule.", merchant: "GoCardless reference matches this policy's collection mandate." },
+    evidence: ["Policy POL-5521 usually collects on the 24th — this landed on the 15th.", "Amount variance is consistent with a small premium adjustment."],
+    history: [["24 Mar 2026","Insurance"],["24 Dec 2025","Insurance"]] },
+
+  { id: "r9", section: "review", date: "2026-06-16", merchant: "Cheque #001042", sub: "Cheque payment", amount: 750.00, dir: "out",
+    category: "Professional Fees", conf: 70, badges: [], reason: "No matching invoice found, but the cheque number is sequential with your last two accountancy payments.",
+    match: { desc: "No accounting entry found", ref: "—", date: "—", amount: null },
+    notes: { amount: "No invoice to confirm against.", date: "n/a", merchant: "Cheque numbering is sequential with known accountancy payments." },
+    evidence: ["Cheques #001040 and #001041 were both Professional Fees to the same payee.", "No invoice on file for this specific amount."],
+    history: [["18 Mar 2026","Professional Fees"],["19 Dec 2025","Professional Fees"]] },
+
+  // ---- Possible duplicates ----
+  { id: "d1", section: "duplicate", date: "2026-06-14", merchant: "UBER TRIP HELP.UBER.COM", sub: "Card purchase ×2", amount: 18.40, dir: "out",
+    category: "Travel", conf: 91, badges: ["Duplicate"], reason: "Same amount, same merchant, same day — 3 minutes apart. Likely a duplicate authorisation, not two trips.",
+    dupe: { a: { desc: "Uber trip", time: "14 Jun, 08:12", amount: 18.40 }, b: { desc: "Uber trip", time: "14 Jun, 08:15", amount: 18.40 } },
+    match: { desc: "No accounting entry found", ref: "—", date: "—", amount: null },
+    notes: { amount: "Identical to the penny.", date: "3 minutes apart.", merchant: "Exact name match on both entries." },
+    evidence: ["Two authorisations 3 minutes apart is a known Uber pre-auth pattern.", "Only one trip appears in your Uber for Business receipts for this day."],
+    history: [] },
+
+  { id: "d2", section: "duplicate", date: "2026-06-01", merchant: "AWS EMEA", sub: "Possible re-post", amount: 412.18, dir: "out",
+    category: "Software & Hosting", conf: 88, badges: ["Duplicate"], reason: "Amount and merchant match a transaction already approved on 12 Jun. Could be a pending-to-cleared re-post.",
+    dupe: { a: { desc: "AWS EMEA (approved)", time: "12 Jun, cleared", amount: 412.18 }, b: { desc: "AWS EMEA (this statement)", time: "1 Jun, pending→cleared", amount: 412.18 } },
+    match: { desc: "AWS EMEA — hosting invoice (already matched)", ref: "INV-AWS-88213", date: "2026-06-01", amount: 412.18 },
+    notes: { amount: "Identical to an already-approved match.", date: "Same billing cycle date.", merchant: "Exact name match." },
+    evidence: ["This invoice (INV-AWS-88213) was already matched and approved on 12 Jun.", "Recommend rejecting this one to avoid double-counting."],
+    history: [["1 May 2026","Software & Hosting"]] },
+
+  { id: "d3", section: "duplicate", date: "2026-06-18", merchant: "OFFICE DEPOT", sub: "Card purchase ×2", amount: 64.50, dir: "out",
+    category: "Office Supplies", conf: 76, badges: ["Duplicate"], reason: "Two charges, same amount, one day apart. Office Depot is known to pre-auth then charge separately.",
+    dupe: { a: { desc: "Office Depot", time: "18 Jun", amount: 64.50 }, b: { desc: "Office Depot", time: "19 Jun", amount: 64.50 } },
+    match: { desc: "No accounting entry found", ref: "—", date: "—", amount: null },
+    notes: { amount: "Identical to the penny.", date: "1 day apart.", merchant: "Exact name match on both entries." },
+    evidence: ["Office Depot commonly pre-authorises then settles as a second charge.", "Recommend keeping both unless you only placed one order."],
+    history: [["3 Apr 2026","Office Supplies"]] },
+
+  { id: "d4", section: "duplicate", date: "2026-06-20", merchant: "DIRECT DEBIT — VODAFONE", sub: "Direct debit", amount: 45.00, dir: "out",
+    category: "Utilities", conf: 84, badges: ["Duplicate"], reason: "Matches a Vodafone payment already reconciled last week — possible duplicate collection.",
+    dupe: { a: { desc: "Vodafone (reconciled)", time: "13 Jun", amount: 45.00 }, b: { desc: "Vodafone (this statement)", time: "20 Jun", amount: 45.00 } },
+    match: { desc: "Vodafone — mobile contract (already reconciled)", ref: "DD-VF-2291", date: "2026-06-13", amount: 45.00 },
+    notes: { amount: "Identical to last week's payment.", date: "7 days apart — unusual for a monthly direct debit.", merchant: "Exact name match." },
+    evidence: ["A £45.00 Vodafone direct debit already cleared and was approved on 13 Jun.", "Worth a call to Vodafone if this wasn't expected."],
+    history: [["13 May 2026","Utilities"],["13 Apr 2026","Utilities"]] },
+
+  // ---- Potential issues ----
+  { id: "i1", section: "issue", date: "2026-06-21", merchant: "TRANSFER TO xx4471", sub: "Bank transfer", amount: 15000.00, dir: "out",
+    category: "Uncategorised", conf: 45, badges: [], reason: "No invoice, no recurring pattern, and no matching accounting entry. Large amount — recommend manual review.",
+    match: { desc: "No accounting entry found", ref: "—", date: "—", amount: null },
+    notes: { amount: "No entry to compare against.", date: "n/a", merchant: "Only a masked account number given — no name." },
+    evidence: ["No invoice, bill, or recurring pattern matches this transfer.", "This is the largest unmatched transaction on this statement."],
+    history: [] },
+
+  { id: "i2", section: "issue", date: "2026-06-22", merchant: "FX WIRE — USD", sub: "$3,200.00 · currency mismatch", amount: 2528.16, dir: "out",
+    category: "Uncategorised", conf: 52, badges: [], reason: "Statement currency is USD but your ledger is in GBP — couldn't match without a confirmed exchange rate.",
+    match: { desc: "No accounting entry found", ref: "—", date: "—", amount: null },
+    notes: { amount: "Converted at an estimated rate — not confirmed.", date: "n/a", merchant: "No merchant name on the wire." },
+    evidence: ["Original amount was $3,200.00 USD; GBP shown uses today's estimated rate.", "Confirm the actual settled rate before categorising."],
+    history: [] },
+
+  { id: "i3", section: "issue", date: "2026-06-22", merchant: "UNKNOWN MERCHANT 4429", sub: "Card purchase", amount: 128.00, dir: "out",
+    category: "Uncategorised", conf: 40, badges: [], reason: "No merchant name on the statement, and nothing in your history matches this reference.",
+    match: { desc: "No accounting entry found", ref: "—", date: "—", amount: null },
+    notes: { amount: "No entry to compare against.", date: "n/a", merchant: "Statement gives only a numeric reference." },
+    evidence: ["Reference \"4429\" doesn't match any known merchant code on this account."],
+    history: [] },
+
+  { id: "i4", section: "issue", date: "2026-06-23", merchant: "CHARGEBACK REVERSAL", sub: "Card reversal", amount: 220.00, dir: "in",
+    category: "Uncategorised", conf: 48, badges: [], reason: "This reverses a transaction that hasn't been found in your accounting records yet.",
+    match: { desc: "No accounting entry found", ref: "—", date: "—", amount: null },
+    notes: { amount: "No original charge found to reverse.", date: "n/a", merchant: "No merchant name given." },
+    evidence: ["No matching £220.00 charge exists in the last 90 days.", "Recommend investigating with your card provider before categorising."],
+    history: [] },
+
+  { id: "i5", section: "issue", date: "2026-06-24", merchant: "SQ *REFUND", sub: "Card refund", amount: 34.20, dir: "in",
+    category: "Uncategorised", conf: 55, badges: ["Duplicate"], reason: "Matches the amount of a Corner Cafe charge from 2 days ago, but as a refund — possible duplicate charge.",
+    match: { desc: "Possibly linked to SQ *THE CORNER CAFE (10 Jun)", ref: "—", date: "2026-06-10", amount: 34.20 },
+    notes: { amount: "Exact match to the earlier charge.", date: "2 days after the original charge.", merchant: "Same \"SQ *\" Square prefix." },
+    evidence: ["A £34.20 charge from SQ *THE CORNER CAFE appears 2 days earlier in Needs Review.", "Worth confirming with the supplier whether the original charge should stand."],
+    history: [] },
+];
+
+// Pad "Ready to approve" up to 98 with generated near-identical high-confidence rows.
+(function padReady() {
+  const merchants = ["Zettle Card Reader", "British Gas", "Royal Mail", "Slack", "Notion Labs", "Figma Inc", "Starling Business", "EE Broadband", "Ocado Business", "Trainline"];
+  const cats = ["Software & Hosting", "Utilities", "Postage & Courier", "Software & Hosting", "Software & Hosting", "Software & Hosting", "Bank Charges", "Utilities", "Office Supplies", "Travel"];
+  let n = 0;
+  while (txns.filter(t => t.section === "ready").length < 98) {
+    const i = n % merchants.length;
+    const amt = Math.round((15 + (n * 7.3) % 380) * 100) / 100;
+    txns.push({
+      id: "gen" + n, section: "ready", generated: true,
+      date: "2026-06-" + String(2 + (n % 27)).padStart(2, "0"),
+      merchant: merchants[i], sub: "Recurring — matched automatically", amount: amt, dir: n % 5 === 0 ? "in" : "out",
+      category: cats[i], conf: 95 + (n % 5), badges: ["Recurring"],
+      reason: "Amount and date match exactly. Categorised the same way every prior time.",
+      match: { desc: merchants[i] + " — recurring charge", ref: "AUTO-" + (1000 + n), date: "2026-06-" + String(2 + (n % 27)).padStart(2, "0"), amount: amt },
+      notes: { amount: "Matches to the penny.", date: "Same cycle date as prior months.", merchant: "Exact name match." },
+      evidence: ["Categorised the same way every prior time this supplier appeared."],
+      history: [["May 2026", cats[i]]],
+    });
+    n++;
+  }
+})();
+
+// ---------------------------------------------------------------------------
+// Rendering
+// ---------------------------------------------------------------------------
+
+const SECTIONS = [
+  { key: "ready", title: "Ready to Approve", accent: "var(--high)", bulkAllLabel: "Approve all",
+    desc: "95%+ confidence — amount, date, and merchant all match. Safe to approve as a batch." },
+  { key: "review", title: "Needs Review", accent: "var(--medium)",
+    desc: "Below 95% confidence, or missing an accounting match. Worth a quick look before approving." },
+  { key: "duplicate", title: "Possible Duplicates", accent: "var(--dupe)",
+    desc: "Two entries that look like the same transaction. Decide whether to keep both or reject one." },
+  { key: "issue", title: "Potential Issues", accent: "var(--low)",
+    desc: "No match found, a currency mismatch, or an amount large enough to flag for manual review." },
+];
+
+const state = { selected: new Set(), approved: new Set(), collapsed: new Set(), focusIdx: -1, panelId: null };
+
+function byId(id) { return txns.find(t => t.id === id); }
+function openRows() { return txns.filter(t => !state.approved.has(t.id)); }
+
+function render() {
+  const groupsEl = document.getElementById("groups");
+  groupsEl.innerHTML = "";
+
+  const total = txns.length;
+  const reviewed = state.approved.size;
+  document.getElementById("totalCount").textContent = total;
+  document.getElementById("reviewedCount").textContent = reviewed;
+  document.getElementById("progressFill").style.width = Math.round((reviewed / total) * 100) + "%";
+
+  const readyOpen = txns.filter(t => t.section === "ready" && !state.approved.has(t.id));
+  document.getElementById("heroCount").textContent = readyOpen.length;
+  document.getElementById("approveAllCount").textContent = readyOpen.length;
+  document.getElementById("approveAllReady").disabled = readyOpen.length === 0;
+  document.querySelector(".hero").style.display = readyOpen.length === 0 ? "none" : "flex";
+
+  SECTIONS.forEach(sec => groupsEl.appendChild(renderGroup(sec)));
+  updateBulkbar();
+  applyFocusStyles();
+}
+
+function renderGroup(sec) {
+  const rows = txns.filter(t => t.section === sec.key);
+  const openRowsInSec = rows.filter(t => !state.approved.has(t.id));
+  const collapsed = state.collapsed.has(sec.key);
+
+  const wrap = document.createElement("div");
+  wrap.className = "group" + (collapsed ? " collapsed" : "");
+
+  const showAllKey = "showAll_" + sec.key;
+  const visRows = sec.key === "ready" && !state[showAllKey] ? openRowsInSec.slice(0, 8) : openRowsInSec;
+  const hiddenCount = openRowsInSec.length - visRows.length;
+
+  wrap.innerHTML = `
+    <div class="group-head" data-toggle="${sec.key}">
+      <div class="group-accent" style="background:${sec.accent}"></div>
+      <div class="group-title-wrap">
+        <div class="group-title"><span class="chevron">▾</span>${sec.title}<span class="group-count" style="color:${sec.accent}">${openRowsInSec.length}</span></div>
+        <div class="group-desc">${sec.desc}</div>
+      </div>
+      <div class="group-actions">
+        ${sec.key === "ready" && openRowsInSec.length ? `<button class="btn btn-success btn-sm" data-approve-group="${sec.key}">${sec.bulkAllLabel} ${openRowsInSec.length}</button>` : ""}
+      </div>
+    </div>
+    <div class="group-body">
+      ${rows.length === 0 ? `<div class="empty">Nothing here.</div>` : ""}
+      ${rows.length > 0 && openRowsInSec.length === 0 ? `<div class="empty">All reviewed ✓</div>` : ""}
+      <div class="col-head" ${visRows.length ? "" : "style='display:none'"}>
+        <span></span><span>Date</span><span>Description</span><span>Amount</span><span>Category</span><span>Confidence</span><span></span>
+      </div>
+      <div class="rows"></div>
+      ${hiddenCount > 0 ? `<div class="more-strip"><span>+ ${hiddenCount} more, all 95%+ confidence, same review pattern</span><button class="btn btn-outline btn-sm" data-showall="${sec.key}">Show all ${openRowsInSec.length}</button></div>` : ""}
+    </div>
+  `;
+
+  const rowsEl = wrap.querySelector(".rows");
+  visRows.forEach(t => rowsEl.appendChild(renderRow(t)));
+  return wrap;
+}
+
+function renderRow(t) {
+  const tier = tierFor(t.conf);
+  const el = document.createElement("div");
+  el.className = "row" + (state.approved.has(t.id) ? " approved" : "");
+  el.dataset.id = t.id;
+  el.tabIndex = 0;
+
+  const badges = t.badges.map(b => `<span class="badge">${BADGE_ICON[b] || ""} ${b}</span>`).join("");
+
+  el.innerHTML = `
+    <div class="row-line1">
+      <input type="checkbox" data-check="${t.id}" ${state.selected.has(t.id) ? "checked" : ""} ${state.approved.has(t.id) ? "disabled" : ""} aria-label="Select ${t.merchant}" />
+      <div class="row-date">${fmtDate(t.date)}</div>
+      <div>
+        <div class="row-desc-main">${t.merchant}</div>
+        <div class="row-desc-sub">${t.sub}</div>
+      </div>
+      <div class="row-amount">${money(t.amount, t.dir)}<span class="dir">${t.dir === "out" ? "↓ Money out" : "↑ Money in"}</span></div>
+      <div><span class="cat-pill" title="${t.category}">${t.category}</span></div>
+      <div class="conf-wrap">
+        ${svgRing(t.conf, 30, 4, tier.color)}
+        <div class="conf-ring-label"><b>${t.conf}%</b><span style="color:${tier.color}">${tier.label}</span></div>
+      </div>
+      <div class="row-actions">
+        <button class="icon-btn approve" data-approve="${t.id}" title="Approve" ${state.approved.has(t.id) ? "disabled" : ""} aria-label="Approve">✓</button>
+        <button class="icon-btn flag" data-flag="${t.id}" title="Flag for review" aria-label="Flag">⚑</button>
+      </div>
+    </div>
+    ${t.dupe ? `
+      <div class="dupe-pair">
+        <div class="dupe-line"><span class="tag">Entry A</span>${t.dupe.a.desc} · ${t.dupe.a.time} · ${money(t.dupe.a.amount,"out")}</div>
+        <div class="dupe-line"><span class="tag">Entry B</span>${t.dupe.b.desc} · ${t.dupe.b.time} · ${money(t.dupe.b.amount,"out")}</div>
+      </div>` : ""}
+    <div class="row-line2">
+      <span class="reason-text"><span class="spark">✦</span>${t.reason}</span>
+      ${badges}
+    </div>
+  `;
+  return el;
+}
+
+function fmtDate(iso) {
+  const d = new Date(iso + "T00:00:00");
+  return d.toLocaleDateString("en-GB", { day: "2-digit", month: "short" });
+}
+
+function updateBulkbar() {
+  const bar = document.getElementById("bulkbar");
+  const n = state.selected.size;
+  document.getElementById("selCount").textContent = n;
+  bar.classList.toggle("show", n > 0);
+}
+
+function toast(msg) {
+  const el = document.getElementById("toast");
+  el.textContent = msg;
+  el.classList.add("show");
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => el.classList.remove("show"), 2600);
+}
+
+function approve(ids) {
+  ids.forEach(id => { state.approved.add(id); state.selected.delete(id); });
+  render();
+  toast(`${ids.length} ${ids.length === 1 ? "transaction" : "transactions"} approved`);
+  if (state.panelId && ids.includes(state.panelId)) closePanel();
+}
+
+// ---------------------------------------------------------------------------
+// Side panel
+// ---------------------------------------------------------------------------
+
+function openPanel(id) {
+  const t = byId(id);
+  if (!t) return;
+  state.panelId = id;
+  const tier = tierFor(t.conf);
+  const factors = factorsFor(t.conf, t.notes);
+  const panel = document.getElementById("panel");
+  const inner = document.getElementById("panelInner");
+
+  inner.innerHTML = `
+    <div class="panel-head">
+      <div>
+        <div class="panel-eyebrow">${SECTIONS.find(s=>s.key===t.section).title}</div>
+        <div class="panel-title">${t.merchant}</div>
+        <div class="panel-amount">${money(t.amount, t.dir)} · ${t.dir === "out" ? "Money out" : "Money in"} · ${fmtDate(t.date)}</div>
+      </div>
+      <button class="panel-close" id="panelClose" aria-label="Close panel">✕</button>
+    </div>
+
+    <div class="panel-section">
+      <h4>Transaction details</h4>
+      <div class="kv"><span>Date</span><span>${fmtDate(t.date)}</span></div>
+      <div class="kv"><span>Description</span><span>${t.sub}</span></div>
+      <div class="kv"><span>Amount</span><span>${money(t.amount, t.dir)}</span></div>
+      <div class="kv"><span>Direction</span><span>${t.dir === "out" ? "Money out ↓" : "Money in ↑"}</span></div>
+      <div class="kv"><span>Suggested category</span><span>${t.category}</span></div>
+    </div>
+
+    <div class="panel-section">
+      <h4>Suggested match</h4>
+      ${t.match.amount === null
+        ? `<div class="reasoning-p">No matching accounting entry found yet.</div>`
+        : `<div class="kv"><span>Entry</span><span>${t.match.desc}</span></div>
+           <div class="kv"><span>Reference</span><span>${t.match.ref}</span></div>
+           <div class="kv"><span>Date</span><span>${t.match.date}</span></div>
+           <div class="kv"><span>Amount</span><span>£${t.match.amount.toFixed(2)}</span></div>`}
+    </div>
+
+    <div class="panel-section">
+      <h4>Confidence score</h4>
+      <div class="ring-block">
+        ${svgRing(t.conf, 92, 8, tier.color)}
+        <div class="ring-text"><b style="font-size:22px;color:${tier.color}">${t.conf}%</b><span>${tier.label}</span></div>
+      </div>
+      <div style="margin-top:18px;">
+        ${factors.map(f => `
+          <div class="factor">
+            <div class="factor-top"><span>${f.label}</span><b>${f.score}/${f.max} pts</b></div>
+            <div class="factor-track"><div class="factor-fill" style="width:${(f.score/f.max)*100}%;background:${tier.color}"></div></div>
+            <div class="factor-note">${f.note}</div>
+          </div>`).join("")}
+      </div>
+      <div class="factor-caption">Zaki scores every match on these three signals, out of 100 points — the same engine that ranks every transaction on this page.</div>
+    </div>
+
+    <div class="panel-section">
+      <h4>AI reasoning</h4>
+      <div class="reasoning-p">${t.reason}</div>
+    </div>
+
+    <div class="panel-section">
+      <h4>Supporting evidence</h4>
+      <ul class="evidence-list">${t.evidence.map(e => `<li><span class="ico">•</span>${e}</li>`).join("") || "<li>No supporting evidence on file.</li>"}</ul>
+    </div>
+
+    <div class="panel-section">
+      <h4>History — previous categorisations</h4>
+      ${t.history.length
+        ? `<div class="history-list">${t.history.map(([d,c]) => `<div class="history-item"><span class="h-date">${d}</span><span class="h-cat">${c}</span></div>`).join("")}</div>`
+        : `<div class="reasoning-p" style="background:var(--page)">No prior categorisation on file — this is a new supplier.</div>`}
+    </div>
+
+    <div class="panel-footer">
+      <button class="btn btn-danger-outline btn-lg" id="panelFlag">Flag</button>
+      <button class="btn btn-success btn-lg" id="panelApprove" ${state.approved.has(t.id) ? "disabled" : ""}>${state.approved.has(t.id) ? "Approved ✓" : "Approve"}</button>
+    </div>
+  `;
+
+  panel.classList.add("open");
+  document.getElementById("panelClose").onclick = closePanel;
+  document.getElementById("panelApprove").onclick = () => approve([t.id]);
+  document.getElementById("panelFlag").onclick = () => toast(`${t.merchant} flagged for a second look`);
+
+  document.querySelectorAll(".row").forEach(r => r.classList.toggle("focused", r.dataset.id === id));
+}
+
+function closePanel() {
+  state.panelId = null;
+  document.getElementById("panel").classList.remove("open");
+  document.querySelectorAll(".row").forEach(r => r.classList.remove("focused"));
+}
+
+// ---------------------------------------------------------------------------
+// Event delegation
+// ---------------------------------------------------------------------------
+
+document.getElementById("groups").addEventListener("click", (e) => {
+  const t = e.target;
+
+  const toggle = t.closest("[data-toggle]");
+  if (toggle && !t.closest(".group-actions")) {
+    const key = toggle.dataset.toggle;
+    if (state.collapsed.has(key)) state.collapsed.delete(key); else state.collapsed.add(key);
+    render();
+    return;
+  }
+
+  const approveGroup = t.closest("[data-approve-group]");
+  if (approveGroup) {
+    const key = approveGroup.dataset.approveGroup;
+    const ids = txns.filter(x => x.section === key && !state.approved.has(x.id)).map(x => x.id);
+    approve(ids);
+    return;
+  }
+
+  const showAll = t.closest("[data-showall]");
+  if (showAll) {
+    state["showAll_" + showAll.dataset.showall] = true;
+    render();
+    return;
+  }
+
+  const approveBtn = t.closest("[data-approve]");
+  if (approveBtn) { e.stopPropagation(); approve([approveBtn.dataset.approve]); return; }
+
+  const flagBtn = t.closest("[data-flag]");
+  if (flagBtn) { e.stopPropagation(); toast(`${byId(flagBtn.dataset.flag).merchant} flagged for a second look`); return; }
+
+  const check = t.closest("[data-check]");
+  if (check) {
+    e.stopPropagation();
+    const id = check.dataset.check;
+    if (state.selected.has(id)) state.selected.delete(id); else state.selected.add(id);
+    updateBulkbar();
+    check.closest(".row")?.classList.toggle("focused", false);
+    return;
+  }
+
+  const row = t.closest(".row");
+  if (row) openPanel(row.dataset.id);
+});
+
+document.getElementById("approveAllReady").addEventListener("click", () => {
+  const ids = txns.filter(t => t.section === "ready" && !state.approved.has(t.id)).map(t => t.id);
+  approve(ids);
+});
+
+document.getElementById("approveSel").addEventListener("click", () => {
+  approve([...state.selected]);
+});
+document.getElementById("clearSel").addEventListener("click", () => {
+  state.selected.clear();
+  render();
+});
+
+function applyFocusStyles() {
+  document.querySelectorAll(".row").forEach((r, i) => r.classList.toggle("focused", i === state.focusIdx && r.dataset.id === focusedId()));
+}
+function visibleRowEls() { return [...document.querySelectorAll(".row")]; }
+function focusedId() {
+  const els = visibleRowEls();
+  return els[state.focusIdx] ? els[state.focusIdx].dataset.id : null;
+}
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") { closePanel(); return; }
+  const tag = (e.target.tagName || "").toLowerCase();
+  if (tag === "input" || tag === "textarea") return;
+
+  const els = visibleRowEls();
+  if (e.key === "ArrowDown") {
+    e.preventDefault();
+    state.focusIdx = Math.min(state.focusIdx + 1, els.length - 1);
+    els[state.focusIdx]?.scrollIntoView({ block: "nearest" });
+    applyFocusStyles();
+  } else if (e.key === "ArrowUp") {
+    e.preventDefault();
+    state.focusIdx = Math.max(state.focusIdx - 1, 0);
+    els[state.focusIdx]?.scrollIntoView({ block: "nearest" });
+    applyFocusStyles();
+  } else if (e.key === "Enter") {
+    const id = focusedId();
+    if (id) openPanel(id);
+  } else if (e.key.toLowerCase() === "a") {
+    const id = focusedId();
+    if (id) approve([id]);
+  }
+});
+
+render();
+</script>
