@@ -45,6 +45,15 @@ export const shellColor = {
 
   dupe: "oklch(48% 0.14 305)",
   dupeBg: "oklch(94% 0.045 305)",
+
+  // Accents for the pattern-detection review sections. Same lightness and
+  // chroma as the tiers above so a section header never reads as louder than
+  // the confidence colour sitting next to it — only the hue changes.
+  reversal: "oklch(48% 0.14 340)",
+  refund: "oklch(48% 0.13 265)",
+  split: "oklch(48% 0.12 230)",
+  transfer: "oklch(48% 0.11 195)",
+  recurring: "oklch(48% 0.12 135)",
 } as const;
 
 export const shellFont = {

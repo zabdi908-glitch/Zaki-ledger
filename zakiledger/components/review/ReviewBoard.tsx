@@ -14,7 +14,35 @@ import { disabledOverride, microLabel, shellButton, shellColor, shellFigures, sh
  * lib/extraction-insights.ts for the two current callers.
  */
 
-export type ReviewSectionKey = "ready" | "review" | "duplicate" | "issue";
+export type ReviewSectionKey =
+  | "ready"
+  | "review"
+  | "duplicate"
+  | "refund"
+  | "reversal"
+  | "split"
+  | "transfer"
+  | "recurring"
+  | "issue";
+
+/**
+ * A named finding about a row — "this looks like a refund of that charge" —
+ * with the figures behind it. Deliberately shaped as labelled lines rather
+ * than typed fields so any caller can describe any kind of finding without
+ * this component learning what a refund or an invoice is.
+ */
+export interface ReviewDetection {
+  title: string;
+  /** One plain sentence: why we think this. */
+  summary: string;
+  /** The figures being compared, in display order. */
+  lines: { label: string; value: string }[];
+  /** The bottom-line figure, if the finding has one (net effect, total). */
+  footer?: { label: string; value: string };
+  /** Short factual statements backing the finding. */
+  evidence: string[];
+  confidencePct: number;
+}
 
 export interface ReviewRow {
   id: string;
@@ -31,6 +59,7 @@ export interface ReviewRow {
   reason: string;
   badges: string[];
   comparePair?: { aLabel: string; a: string; bLabel: string; b: string };
+  detection?: ReviewDetection;
 }
 
 export interface ReviewSectionConfig {
@@ -62,6 +91,10 @@ const BADGE_ICON: Record<string, string> = {
   VAT: "🧾",
   Subscription: "📅",
   Duplicate: "⚠️",
+  Reversal: "↩️",
+  Refund: "💷",
+  "Split payment": "🧩",
+  "Related merchant": "🏷️",
 };
 
 export default function ReviewBoard({
@@ -96,6 +129,13 @@ export default function ReviewBoard({
     for (const sec of sections) map.set(sec.key, openRows.filter((r) => r.section === sec.key));
     return map;
   }, [openRows, sections]);
+
+  /** A section with nothing in it is scroll an accountant has to do to reach
+   * one that does, so it isn't rendered at all. */
+  const visibleSections = useMemo(
+    () => sections.filter((sec) => (rowsBySection.get(sec.key) ?? []).length > 0),
+    [sections, rowsBySection],
+  );
 
   const orderedVisibleIds = useMemo(() => {
     const ids: string[] = [];
@@ -251,7 +291,12 @@ export default function ReviewBoard({
 
       <div style={{ display: "flex", minWidth: 0 }}>
         <div style={{ flex: 1, minWidth: 0 }}>
-          {sections.map((sec) => (
+          {visibleSections.length === 0 && (
+            <div style={{ padding: 40, textAlign: "center", color: shellColor.inkFainter, fontSize: 14 }}>
+              Nothing left to review.
+            </div>
+          )}
+          {visibleSections.map((sec) => (
             <SectionBlock
               key={sec.key}
               sec={sec}

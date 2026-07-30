@@ -171,6 +171,60 @@ describe("sectionFor", () => {
     expect(sectionFor(match({ flaggedLevel: "red" }), false)).toBe("issue");
     expect(sectionFor(null, false)).toBe("issue");
   });
+  it("routes a detected pattern to its own section ahead of the match score", () => {
+    expect(sectionFor(match({ flaggedLevel: "red" }), false, "reversal")).toBe("reversal");
+    expect(sectionFor(match({ flaggedLevel: "red" }), false, "refund")).toBe("refund");
+    expect(sectionFor(match({ flaggedLevel: "red" }), false, "split")).toBe("split");
+  });
+  it("keeps a confidently matched transfer in ready rather than pulling it out", () => {
+    expect(sectionFor(match({ flaggedLevel: "green" }), false, null, ["Transfer"])).toBe("ready");
+  });
+  it("routes unmatched transfers and recurring charges to their sections", () => {
+    expect(sectionFor(null, false, null, ["Transfer"])).toBe("transfer");
+    expect(sectionFor(null, false, null, ["Recurring"])).toBe("recurring");
+  });
+  it("still puts a duplicate in the duplicate section even when a pattern was found", () => {
+    expect(sectionFor(match(), true, "refund")).toBe("duplicate");
+  });
+});
+
+describe("buildReviewRows detections", () => {
+  it("explains a reversal pair with a net effect of zero and no leftover issue rows", () => {
+    const a = bank({ id: "b1", merchant: "CLIENT PAYMENT INV-1003", amount: -1750, transactionDate: "2026-06-02" });
+    const b = bank({ id: "b2", merchant: "CLIENT PAYMENT INV-1003", amount: 1750, transactionDate: "2026-06-04" });
+    const rows = buildReviewRows({ bankTransactions: [a, b], qbTransactions: [], matches: [] });
+    expect(rows.map((r) => r.row.section)).toEqual(["reversal", "reversal"]);
+    expect(rows[0].row.detection?.title).toBe("Possible reversal");
+    expect(rows[0].row.detection?.footer).toEqual({ label: "Net effect", value: "£0.00" });
+  });
+
+  it("explains a refund using the original charge", () => {
+    const charge = bank({ id: "b1", merchant: "AMZN MKTPLACE UK", amount: 123.45, transactionDate: "2026-06-02" });
+    const refund = bank({ id: "b2", merchant: "REFUND AMAZON", amount: -123.45, transactionDate: "2026-06-09" });
+    const rows = buildReviewRows({ bankTransactions: [charge, refund], qbTransactions: [], matches: [] });
+    expect(rows.every((r) => r.row.section === "refund")).toBe(true);
+    expect(rows[0].row.detection?.lines).toContainEqual({ label: "Original charge", value: "£123.45" });
+    expect(rows[0].row.detection?.evidence).toContain("Amounts match exactly.");
+  });
+
+  it("groups a split payment and shows the combined amount", () => {
+    const a = bank({ id: "b1", merchant: "CLIENT PAYMENT INV-1001", amount: -1000, transactionDate: "2026-06-02" });
+    const b = bank({ id: "b2", merchant: "CLIENT PAYMENT INV-1001", amount: -500, transactionDate: "2026-06-06" });
+    const rows = buildReviewRows({ bankTransactions: [a, b], qbTransactions: [], matches: [] });
+    expect(rows.every((r) => r.row.section === "split")).toBe(true);
+    expect(rows[0].row.detection?.footer).toEqual({ label: "Total received", value: "£1500.00" });
+  });
+
+  it("never shows an accountant how the resemblance was measured", () => {
+    const a = bank({ id: "b1", merchant: "MICROSOFT 365", amount: 12, transactionDate: "2026-06-02" });
+    const b = bank({ id: "b2", merchant: "MICROSOFT*365", amount: 40, transactionDate: "2026-06-20" });
+    const rows = buildReviewRows({ bankTransactions: [a, b], qbTransactions: [], matches: [] });
+    const copy = JSON.stringify(rows).toLowerCase();
+    for (const jargon of ["levenshtein", "dice", "fuzzy", "edit distance", "token"]) {
+      expect(copy).not.toContain(jargon);
+    }
+    expect(rows[0].row.detection?.title).toBe("Possible related merchant");
+  });
 });
 
 describe("buildReviewRows", () => {

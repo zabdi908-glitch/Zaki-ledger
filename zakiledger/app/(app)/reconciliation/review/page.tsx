@@ -35,6 +35,11 @@ type ReportData = {
   isReconciled: boolean;
 };
 
+/**
+ * Order matters: the accountant works top to bottom, so the sections that can
+ * be cleared fastest come first, then the ones where we can say exactly what
+ * happened, and only then the residual pile that still needs investigating.
+ */
 const SECTIONS: ReviewSectionConfig[] = [
   {
     key: "ready",
@@ -54,6 +59,36 @@ const SECTIONS: ReviewSectionConfig[] = [
     title: "Possible Duplicates",
     accentColor: shellColor.dupe,
     description: "Two entries that look like the same transaction. Decide whether to keep both or reject one.",
+  },
+  {
+    key: "refund",
+    title: "Refunds",
+    accentColor: shellColor.refund,
+    description: "Money back from a supplier that matches an earlier charge. Confirm the pair, then approve both.",
+  },
+  {
+    key: "reversal",
+    title: "Reversals",
+    accentColor: shellColor.reversal,
+    description: "Equal and opposite transactions that cancel each other out. Net effect on the books is nil.",
+  },
+  {
+    key: "split",
+    title: "Split Payments",
+    accentColor: shellColor.split,
+    description: "Several transactions quoting one invoice reference — one bill or payment settled in parts.",
+  },
+  {
+    key: "transfer",
+    title: "Transfers",
+    accentColor: shellColor.transfer,
+    description: "Money moving between your own accounts rather than in or out of the business.",
+  },
+  {
+    key: "recurring",
+    title: "Recurring Transactions",
+    accentColor: shellColor.recurring,
+    description: "Charges from a supplier that appears more than once on this statement.",
   },
   {
     key: "issue",
@@ -324,6 +359,29 @@ function ReconciliationPanelBody({
         <KV label="Suggested category" value={row.categoryLabel} />
       </div>
 
+      {row.detection && (
+        <div style={{ marginBottom: 24 }}>
+          <SectionLabel>Detection results</SectionLabel>
+          <div style={{ background: shellColor.page, borderRadius: 10, padding: "14px 16px" }}>
+            <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12, marginBottom: 10 }}>
+              <span style={{ fontSize: 14.5, fontWeight: 600 }}>{row.detection.title}</span>
+              <span style={{ ...pill(row.confidenceColor, shellColor.paper), whiteSpace: "nowrap" }}>
+                {row.detection.confidencePct}% confident
+              </span>
+            </div>
+            {row.detection.lines.map((line, i) => (
+              <KV key={`${line.label}-${i}`} label={line.label} value={line.value} />
+            ))}
+            {row.detection.footer && (
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14, fontWeight: 700, paddingTop: 10 }}>
+                <span>{row.detection.footer.label}</span>
+                <span style={shellFigures}>{row.detection.footer.value}</span>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       <div style={{ marginBottom: 24 }}>
         <div style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.04em", color: shellColor.inkFaint, marginBottom: 10 }}>
           Suggested match
@@ -372,6 +430,17 @@ function ReconciliationPanelBody({
         <div style={{ fontSize: 13.5, lineHeight: 1.55, background: shellColor.page, borderRadius: 10, padding: "14px 16px" }}>{row.reason}</div>
       </div>
 
+      {row.detection && row.detection.evidence.length > 0 && (
+        <div style={{ marginBottom: 24 }}>
+          <SectionLabel>Supporting evidence</SectionLabel>
+          <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13.5, lineHeight: 1.7, color: shellColor.inkSoft }}>
+            {row.detection.evidence.map((item) => (
+              <li key={item}>{item}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       <div style={{ display: "flex", gap: 8, marginTop: 28 }}>
         <button style={{ ...shellButton("dangerOutline", "lg"), flex: 1 }} onClick={onReject} disabled={!match}>
           Reject
@@ -381,6 +450,14 @@ function ReconciliationPanelBody({
         </button>
       </div>
     </>
+  );
+}
+
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <div style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.04em", color: shellColor.inkFaint, marginBottom: 10 }}>
+      {children}
+    </div>
   );
 }
 
