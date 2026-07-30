@@ -1,7 +1,7 @@
 "use client";
 
 import { useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useShellToast } from "@/components/AppShell";
 import { formatMoney } from "@/lib/currency";
 import type { BankTransaction, QbTransaction, ReconciliationMatch } from "@/lib/reconciliation-schema";
@@ -40,6 +40,14 @@ type ReportData = {
  * be cleared fastest come first, then the ones where we can say exactly what
  * happened, and only then the residual pile that still needs investigating.
  */
+/**
+ * This page drops approved rows by refetching rather than by tracking them
+ * client-side, so the board's "already approved" set is always empty. Hoisted
+ * to a constant because a fresh Set on every render would invalidate every
+ * memo inside ReviewBoard that depends on it.
+ */
+const NO_APPROVED_IDS: Set<string> = new Set();
+
 const SECTIONS: ReviewSectionConfig[] = [
   {
     key: "ready",
@@ -158,6 +166,32 @@ export default function ReconciliationReviewPage() {
     if (resolved) load();
   }, [resolved, load]);
 
+  /**
+   * The whole board's derived state, rebuilt only when the fetched data
+   * changes. This is deliberately one memo above the early returns: it runs
+   * every detector over every transaction, so recomputing it on each render —
+   * which is what selecting a row or opening the panel would otherwise cause —
+   * is what made the page feel unresponsive on a full statement.
+   */
+  const board = useMemo(() => {
+    if (!review) return null;
+    const openBankIds = new Set([
+      ...review.matches.filter((m) => m.approvedAt === null).map((m) => m.bankTransactionId),
+      ...review.unmatchedBank,
+    ]);
+    const openBanks = review.bankTransactions.filter((b) => openBankIds.has(b.id));
+    const built = buildReviewRows({
+      bankTransactions: openBanks,
+      qbTransactions: review.qbTransactions,
+      matches: review.matches.filter((m) => m.approvedAt === null),
+    });
+    return {
+      openBanks,
+      rows: built.map((b) => b.row),
+      rowsById: new Map(built.map((b) => [b.id, b])),
+    };
+  }, [review]);
+
   function openCount(data: ReviewData): number {
     const unapproved = data.matches.filter((m) => m.approvedAt === null).length;
     return unapproved + data.unmatchedBank.length;
@@ -182,7 +216,20 @@ export default function ReconciliationReviewPage() {
     const matchIds = bankIds
       .map((id) => rowsById.get(id)?.matchId)
       .filter((id): id is string => id !== null && id !== undefined);
-    if (matchIds.length === 0) return;
+    // A transaction with no accounting entry has no match to approve. Saying
+    // so beats the button looking broken, which is what a silent return here
+    // looked like to anyone clicking it.
+    if (matchIds.length === 0) {
+      showToast(
+        bankIds.length === 1
+          ? "Nothing to approve — this transaction has no accounting entry to match. Find it a match first."
+          : "Nothing to approve — none of the selected transactions have an accounting entry to match.",
+      );
+      return;
+    }
+    if (matchIds.length < bankIds.length) {
+      showToast(`${bankIds.length - matchIds.length} skipped — no accounting entry to match yet.`);
+    }
     const res = await fetch(`/api/reconciliation/${statementId}/approve`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -234,21 +281,11 @@ export default function ReconciliationReviewPage() {
     );
   }
 
-  const openBankIds = new Set([
-    ...review.matches.filter((m) => m.approvedAt === null).map((m) => m.bankTransactionId),
-    ...review.unmatchedBank,
-  ]);
-  const openBanks = review.bankTransactions.filter((b) => openBankIds.has(b.id));
+  if (!board) return null;
+  const { openBanks, rows, rowsById } = board;
   const reviewed = (initialOpenCount ?? openBanks.length) - openBanks.length;
   const reviewedPct = initialOpenCount ? Math.round((reviewed / initialOpenCount) * 100) : 0;
   const reportCurrency = review.bankTransactions[0]?.currency ?? null;
-
-  const built = buildReviewRows({
-    bankTransactions: openBanks,
-    qbTransactions: review.qbTransactions,
-    matches: review.matches.filter((m) => m.approvedAt === null),
-  });
-  const rowsById = new Map(built.map((b) => [b.id, b]));
 
   return (
     <div>
@@ -262,9 +299,9 @@ export default function ReconciliationReviewPage() {
 
       {openBanks.length > 0 && (
         <ReviewBoard
-          rows={built.map((b) => b.row)}
+          rows={rows}
           sections={SECTIONS}
-          approvedIds={new Set()}
+          approvedIds={NO_APPROVED_IDS}
           onApprove={(ids) => boardApprove(ids, rowsById)}
           onFlag={(id) => showToast(`${rowsById.get(id)?.row.title ?? "Transaction"} flagged for a second look`)}
           heroTitle="High-confidence matches"

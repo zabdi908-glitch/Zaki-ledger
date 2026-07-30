@@ -60,6 +60,14 @@ export interface ReviewRow {
   badges: string[];
   comparePair?: { aLabel: string; a: string; bLabel: string; b: string };
   detection?: ReviewDetection;
+  /**
+   * Whether approving this row can actually do anything. Defaults to true.
+   * Rows that set it false render a disabled approve control, so the reason
+   * shows before the click rather than after — see `notApprovableReason`.
+   */
+  approvable?: boolean;
+  /** Tooltip explaining why approve is unavailable. Ignored when approvable. */
+  notApprovableReason?: string;
 }
 
 export interface ReviewSectionConfig {
@@ -516,6 +524,7 @@ function RowView({
   focused: boolean;
   setRef: (el: HTMLDivElement | null) => void;
 }) {
+  const approvable = row.approvable !== false;
   const line1Style: CSSProperties = {
     display: "grid",
     gridTemplateColumns: "30px 84px minmax(200px,1.4fr) 118px 156px 148px 92px",
@@ -583,13 +592,14 @@ function RowView({
         </div>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 4 }}>
           <button
-            title="Approve"
+            title={approvable ? "Approve" : row.notApprovableReason ?? "Can't be approved yet"}
             aria-label="Approve"
+            disabled={!approvable}
             onClick={(e) => {
               e.stopPropagation();
               onApprove();
             }}
-            style={iconButtonStyle()}
+            style={iconButtonStyle(!approvable)}
           >
             ✓
           </button>
@@ -649,7 +659,7 @@ function RowView({
   );
 }
 
-function iconButtonStyle(): CSSProperties {
+function iconButtonStyle(disabled = false): CSSProperties {
   return {
     width: 28,
     height: 28,
@@ -659,9 +669,10 @@ function iconButtonStyle(): CSSProperties {
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    cursor: "pointer",
+    cursor: disabled ? "not-allowed" : "pointer",
     fontSize: 13,
-    color: shellColor.inkSoft,
+    color: disabled ? shellColor.inkFainter : shellColor.inkSoft,
+    opacity: disabled ? 0.5 : 1,
   };
 }
 

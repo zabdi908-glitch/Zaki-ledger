@@ -80,7 +80,14 @@ function normalizeMerchant(t: BankTransaction): string {
 /** Badges derivable from a single statement's data. Cross-statement
  * recurrence (a stronger "this happens every month" claim) would need a new
  * store query across statements — out of scope for this pass. */
-export function detectBadges(bank: BankTransaction, allBank: BankTransaction[]): string[] {
+export function detectBadges(
+  bank: BankTransaction,
+  allBank: BankTransaction[],
+  /** Merchant key -> how many transactions carry it. Supplied by callers that
+   * badge a whole statement, so the count is tallied once instead of rescanned
+   * for every row; computed here when absent. */
+  merchantCounts?: Map<string, number>,
+): string[] {
   const text = `${bank.merchant ?? ""} ${bank.description ?? ""}`;
   const badges: string[] = [];
   if (VAT_RE.test(text)) badges.push("VAT");
@@ -88,8 +95,18 @@ export function detectBadges(bank: BankTransaction, allBank: BankTransaction[]):
   if (SUBSCRIPTION_MERCHANTS.test(text)) badges.push("Subscription");
   if (TRANSFER_RE.test(text)) badges.push("Transfer");
   const key = normalizeMerchant(bank);
-  if (key && allBank.filter((b) => normalizeMerchant(b) === key).length > 1) badges.push("Recurring");
+  const counts = merchantCounts ?? countMerchants(allBank);
+  if (key && (counts.get(key) ?? 0) > 1) badges.push("Recurring");
   return badges;
+}
+
+function countMerchants(bank: BankTransaction[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const t of bank) {
+    const key = normalizeMerchant(t);
+    if (key) counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return counts;
 }
 
 /** Matched -> the QB account name. Unmatched -> the most common account name
@@ -101,14 +118,18 @@ export function suggestCategory(
   qb: QbTransaction | null,
   matches: ReconciliationMatch[],
   qbTxns: QbTransaction[],
+  /** Accounting entries indexed by id. Callers categorising a whole statement
+   * pass theirs so it is built once rather than per row. */
+  qbById?: Map<string, QbTransaction>,
 ): string {
   if (qb?.accountName) return qb.accountName;
   const key = normalizeMerchant(bank);
   if (!key) return "Uncategorised";
+  const index = qbById ?? new Map(qbTxns.map((q) => [q.id, q]));
   const counts = new Map<string, number>();
   for (const m of matches) {
     if (!m.qbTransactionId) continue;
-    const matchedQb = qbTxns.find((q) => q.id === m.qbTransactionId);
+    const matchedQb = index.get(m.qbTransactionId);
     if (!matchedQb?.accountName) continue;
     counts.set(matchedQb.accountName, (counts.get(matchedQb.accountName) ?? 0) + 1);
   }
@@ -360,23 +381,37 @@ export function buildReviewRows(data: {
   const dupes = detectDuplicates(data.bankTransactions);
   const detections = buildDetections(data.bankTransactions);
 
+  // Indexes built once for the whole statement. Every lookup below used to be
+  // a scan inside the per-row map, which made the cost of rendering the board
+  // grow with the square of the statement's size.
+  const bankById = new Map(data.bankTransactions.map((b) => [b.id, b]));
+  const qbById = new Map(data.qbTransactions.map((q) => [q.id, q]));
+  const merchantCounts = countMerchants(data.bankTransactions);
+  const matchByBankId = new Map<string, ReconciliationMatch>();
+  // Only matches whose bank transaction shares a merchant are relevant to that
+  // merchant's category, and suggestCategory can't do that filtering itself —
+  // it never sees the bank side. So the grouping happens here, once.
+  const matchesByMerchant = new Map<string, ReconciliationMatch[]>();
+  for (const m of data.matches) {
+    if (!matchByBankId.has(m.bankTransactionId)) matchByBankId.set(m.bankTransactionId, m);
+    const otherBank = bankById.get(m.bankTransactionId);
+    if (!otherBank) continue;
+    const otherKey = normalizeMerchant(otherBank);
+    if (!otherKey) continue;
+    const bucket = matchesByMerchant.get(otherKey);
+    if (bucket) bucket.push(m);
+    else matchesByMerchant.set(otherKey, [m]);
+  }
+
   return data.bankTransactions.map((bank) => {
-    const match = data.matches.find((m) => m.bankTransactionId === bank.id) ?? null;
-    const qb = match?.qbTransactionId ? data.qbTransactions.find((q) => q.id === match.qbTransactionId) ?? null : null;
+    const match = matchByBankId.get(bank.id) ?? null;
+    const qb = match?.qbTransactionId ? qbById.get(match.qbTransactionId) ?? null : null;
     const isDuplicate = dupes.has(bank.id);
     const found = detections.get(bank.id) ?? null;
-    // Only consider matches whose bank transaction shares this merchant —
-    // suggestCategory itself doesn't know about other bank transactions, so
-    // the merchant filter has to happen here, at the one place that does.
     const key = normalizeMerchant(bank);
-    const sameMerchantMatches = key
-      ? data.matches.filter((m) => {
-          const otherBank = data.bankTransactions.find((b) => b.id === m.bankTransactionId);
-          return otherBank ? normalizeMerchant(otherBank) === key : false;
-        })
-      : [];
-    const category = suggestCategory(bank, qb, sameMerchantMatches, data.qbTransactions);
-    const badges = detectBadges(bank, data.bankTransactions);
+    const sameMerchantMatches = key ? matchesByMerchant.get(key) ?? [] : [];
+    const category = suggestCategory(bank, qb, sameMerchantMatches, data.qbTransactions, qbById);
+    const badges = detectBadges(bank, data.bankTransactions, merchantCounts);
     if (isDuplicate) badges.unshift("Duplicate");
     if (found) badges.unshift(found.badge);
     const dupeOther = dupes.get(bank.id);
@@ -404,6 +439,11 @@ export function buildReviewRows(data: {
           ? plainEnglishReason(match)
           : "No accounting entry matches this transaction closely enough to suggest one.",
       badges,
+      // Approving reconciles a bank line against an accounting entry, so a
+      // line with no match has nothing to approve. Saying that on the control
+      // is clearer than letting the click do nothing.
+      approvable: match !== null,
+      notApprovableReason: "No accounting entry matched yet — match this transaction before approving.",
       detection: found?.detection ?? (isDuplicate && dupeOther ? duplicateDetection(bank, dupeOther) : undefined),
       comparePair: dupeOther
         ? {

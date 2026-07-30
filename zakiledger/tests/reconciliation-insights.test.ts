@@ -10,6 +10,7 @@ import {
   suggestCategory,
 } from "@/lib/reconciliation-insights";
 import type { BankTransaction, QbTransaction, ReconciliationMatch } from "@/lib/reconciliation-schema";
+import { syntheticStatement } from "./fixtures/statement";
 
 function bank(overrides: Partial<BankTransaction> = {}): BankTransaction {
   return {
@@ -240,5 +241,58 @@ describe("buildReviewRows", () => {
     const rows = buildReviewRows({ bankTransactions: [bank({ id: "b9" })], qbTransactions: [], matches: [] });
     expect(rows[0].row.section).toBe("issue");
     expect(rows[0].matchId).toBeNull();
+  });
+});
+
+/**
+ * Approving reconciles a bank line against an accounting entry, so a line with
+ * no match has nothing to approve. The review page filters those out before
+ * calling the approve endpoint — if the row does not also say it is
+ * unapprovable, the button renders enabled and does nothing when clicked.
+ */
+describe("rows report whether approving them can do anything", () => {
+  it("marks a matched transaction approvable", () => {
+    const rows = buildReviewRows({
+      bankTransactions: [bank()],
+      qbTransactions: [qb()],
+      matches: [match()],
+    });
+    expect(rows[0].matchId).toBe("m1");
+    expect(rows[0].row.approvable).toBe(true);
+  });
+
+  it("marks a transaction with no accounting entry unapprovable, with a reason", () => {
+    const rows = buildReviewRows({
+      bankTransactions: [bank({ id: "b9", merchant: "UNKNOWN VENDOR" })],
+      qbTransactions: [],
+      matches: [],
+    });
+    expect(rows[0].matchId).toBeNull();
+    expect(rows[0].row.approvable).toBe(false);
+    expect(rows[0].row.notApprovableReason).toBeTruthy();
+  });
+
+  it("keeps matchId and approvable consistent across a mixed statement", () => {
+    const rows = buildReviewRows({
+      bankTransactions: [bank({ id: "b1" }), bank({ id: "b2", merchant: "NO MATCH LTD", amount: 55 })],
+      qbTransactions: [qb()],
+      matches: [match({ bankTransactionId: "b1" })],
+    });
+    for (const r of rows) expect(r.row.approvable).toBe(r.matchId !== null);
+  });
+});
+
+describe("buildReviewRows cost on a full statement", () => {
+  it("stays well inside a frame budget for 400 transactions", () => {
+    const bankTransactions = syntheticStatement(400);
+    const qbTransactions = Array.from({ length: 400 }, (_, i) => qb({ id: `q${i}`, amount: 100 + i }));
+    const matches = bankTransactions.map((b, i) =>
+      match({ id: `m${i}`, bankTransactionId: b.id, qbTransactionId: `q${i}` }),
+    );
+    const started = performance.now();
+    buildReviewRows({ bankTransactions, qbTransactions, matches });
+    // The per-row scans this replaced made the same input take seconds, which
+    // is what made clicking a row feel like the button had not registered.
+    expect(performance.now() - started).toBeLessThan(600);
   });
 });

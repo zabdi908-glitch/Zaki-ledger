@@ -7,8 +7,10 @@ import {
   detectSplitGroups,
   extractReference,
   merchantSimilarity,
+  tokenSimilarity,
 } from "@/lib/reconciliation-detectors";
 import type { BankTransaction } from "@/lib/reconciliation-schema";
+import { syntheticStatement } from "./fixtures/statement";
 
 /** Sign convention: positive = money out (debit), negative = money in (credit). */
 function bank(overrides: Partial<BankTransaction> = {}): BankTransaction {
@@ -170,5 +172,72 @@ describe("detectDuplicates", () => {
     const a = bank({ id: "b1", merchant: "UBER TRIP", amount: 18.4, transactionDate: "2026-06-14" });
     const b = bank({ id: "b2", merchant: "UBER TRIP", amount: 18.4, transactionDate: "2026-06-14" });
     expect(detectDuplicates([a, b]).get("b1")?.id).toBe("b2");
+  });
+});
+
+/**
+ * The detectors compare every transaction against every other, so they carry
+ * short-circuits that skip work a pair cannot possibly need. A short-circuit
+ * that is wrong in the rejecting direction silently invents or destroys
+ * findings, which is worse than being slow — these lock the escape hatches to
+ * results the slow path would also have produced.
+ */
+describe("similarity short-circuits stay faithful to the exact score", () => {
+  const words = [
+    "amazon", "amzn", "adobe", "adobesystems", "aws", "google", "goggle", "microsoft",
+    "stripe", "strpe", "a", "ab", "marketplace", "mktplace", "xyzzy", "", "reallylongsuppliername",
+  ];
+
+  it("never skips a token pair that would have cleared the match threshold", () => {
+    // softDice rejects a pair on length alone when `1 - lengthGap / longest`
+    // falls below the threshold. That is only sound if the expression really
+    // is an upper bound on tokenSimilarity — assert exactly that, since a
+    // violation would mean real supplier matches are being thrown away.
+    const THRESHOLD = 0.85;
+    for (const a of words) {
+      for (const b of words) {
+        const longest = Math.max(a.length, b.length);
+        if (longest === 0) continue;
+        const bound = 1 - Math.abs(a.length - b.length) / longest;
+        const actual = tokenSimilarity(a, b);
+        // Abbreviations are scored by shape, not edit distance, so the length
+        // bound does not apply to them — the guard exempts them for this reason.
+        const abbreviation = actual === 0.9;
+        if (!abbreviation) expect(actual).toBeLessThanOrEqual(bound + 1e-9);
+      }
+    }
+  });
+
+  it("scores a known set of supplier pairs exactly as before the pairs were precomputed", () => {
+    expect(merchantSimilarity("ADOBE CREATIVE CLOUD", "ADOBE SYSTEMS IRELAND")).toBeGreaterThanOrEqual(0.7);
+    expect(merchantSimilarity("AMZN MKTPLACE UK", "AMAZON WEB SERVICES")).toBeGreaterThanOrEqual(0.7);
+    expect(merchantSimilarity("BRITISH GAS", "THAMES WATER")).toBeLessThan(0.7);
+    expect(merchantSimilarity("STRIPE", "SHOPIFY")).toBeLessThan(0.7);
+  });
+
+  it("is symmetric", () => {
+    for (const a of words) {
+      for (const b of words) {
+        expect(merchantSimilarity(a, b)).toBeCloseTo(merchantSimilarity(b, a), 10);
+      }
+    }
+  });
+});
+
+describe("detector cost on a full statement", () => {
+  it("runs every detector over 400 transactions well inside a frame budget", () => {
+    const txns = syntheticStatement(400);
+    const started = performance.now();
+    detectDuplicates(txns);
+    detectReversals(txns);
+    detectRefunds(txns);
+    detectSplitGroups(txns);
+    detectMerchantLinks(txns);
+    const elapsed = performance.now() - started;
+    // Comparing every pair of names took ~1s on this input before the token
+    // profiles, edit-distance buffer, and comparison cache went in. The bound
+    // leaves room for a slow machine while still failing loudly if any of the
+    // three is removed.
+    expect(elapsed).toBeLessThan(600);
   });
 });
