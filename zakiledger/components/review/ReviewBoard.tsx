@@ -249,8 +249,23 @@ export default function ReviewBoard({
 
   const transition = (value: string) => (reducedMotion ? "none" : value);
 
+  /**
+   * The row grid's fixed-width columns need ~900px (date/amount/category/
+   * confidence/action columns are all px-sized). The docked detail panel
+   * (PANEL_WIDTH, 440px) plus the app's nav sidebar can leave the row list
+   * with less room than that on a laptop-width window — the grid used to
+   * overflow its box with no scrollbar, which visually painted the category,
+   * confidence, and approve/reject controls underneath the panel instead of
+   * showing them. Rather than reusing the mobile breakpoint's CSS (which
+   * reuses one grid template across two wrapped rows and clips the category
+   * pill into the 24px checkbox column), SectionBlock/RowView switch to a
+   * purpose-built compact layout whenever a panel is open, independent of
+   * viewport width.
+   */
+  const compactRows = !!openPanelRow;
+
   return (
-    <div className={openPanelRow ? "review-board-panel-open" : undefined}>
+    <div>
       <style>{`
         @media (max-width: 980px) {
           .review-board-col-head { display: none; }
@@ -260,22 +275,6 @@ export default function ReviewBoard({
           .review-board-panel { position: fixed !important; inset: 0; z-index: 30; width: 100% !important; border-left: none; }
           .review-board-hero { flex-direction: column; align-items: flex-start; }
         }
-        /*
-         * The docked detail panel (PANEL_WIDTH, 440px) plus the app's nav
-         * sidebar can leave less room for the row list than the row grid's
-         * fixed-width columns need (~900px: date/amount/category/confidence/
-         * action columns are all px-sized) — on a laptop-width window that
-         * squeeze hid the category, confidence, and approve/reject controls
-         * behind the panel. Reusing the same compact row layout the mobile
-         * breakpoint already uses, but keyed on "a panel is docked" rather
-         * than viewport width, keeps every control visible regardless of
-         * window size.
-         */
-        .review-board-panel-open .review-board-col-head { display: none; }
-        .review-board-panel-open .review-board-row-line1 { grid-template-columns: 24px 1fr auto !important; }
-        .review-board-panel-open .review-board-row-date { display: none; }
-        .review-board-panel-open .review-board-row-line2,
-        .review-board-panel-open .review-board-dupe-pair { padding-left: 0 !important; }
       `}</style>
 
       {readyOpen.length > 0 && (
@@ -366,6 +365,7 @@ export default function ReviewBoard({
               rowRefs={rowRefs}
               onOpenBulkPreview={() => setBulkPreview({ section: sec, deselected: new Set() })}
               onSelectAll={setSelectionForIds}
+              compact={compactRows}
             />
           ))}
         </div>
@@ -542,6 +542,7 @@ function SectionBlock({
   rowRefs,
   onOpenBulkPreview,
   onSelectAll,
+  compact,
 }: {
   sec: ReviewSectionConfig;
   rows: ReviewRow[];
@@ -559,6 +560,10 @@ function SectionBlock({
   rowRefs: React.MutableRefObject<Map<string, HTMLDivElement>>;
   onOpenBulkPreview: () => void;
   onSelectAll: (ids: string[], select: boolean) => void;
+  /** True while any row's detail panel is docked open — the row grid's
+   * fixed-width columns no longer fit the space left over, so rows switch
+   * to a two-line compact layout instead of overflowing. */
+  compact: boolean;
 }) {
   const collapsed = collapsedSet.has(sec.key);
   const visible = expandedSections.has(sec.key) ? rows : rows.slice(0, READY_VISIBLE_CAP);
@@ -630,7 +635,7 @@ function SectionBlock({
            * page) keeps the header cells and row cells lined up.
            */}
           <div style={{ overflowX: "auto" }}>
-            {visible.length > 0 && (
+            {visible.length > 0 && !compact && (
               <div
                 className="review-board-col-head"
                 style={{
@@ -660,6 +665,20 @@ function SectionBlock({
                 <span />
               </div>
             )}
+            {compact && visible.length > 0 && (
+              <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "8px 22px" }}>
+                <input
+                  type="checkbox"
+                  checked={rows.length > 0 && rows.every((r) => selected.has(r.id))}
+                  onChange={(e) => onSelectAll(rows.map((r) => r.id), e.target.checked)}
+                  aria-label={`Select all in ${sec.title}`}
+                  title="Select all in this section"
+                />
+                <span style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.04em", color: shellColor.inkFaint }}>
+                  Select all
+                </span>
+              </div>
+            )}
             <div>
               {visible.map((row) => (
                 <RowView
@@ -671,6 +690,7 @@ function SectionBlock({
                   onFlag={() => onFlag(row.id)}
                   onOpen={() => setOpenPanelId(row.id)}
                   focused={focusedId === row.id || openPanelId === row.id}
+                  compact={compact}
                   setRef={(el) => {
                     if (el) rowRefs.current.set(row.id, el);
                     else rowRefs.current.delete(row.id);
@@ -710,6 +730,7 @@ function RowView({
   onFlag,
   onOpen,
   focused,
+  compact,
   setRef,
 }: {
   row: ReviewRow;
@@ -719,6 +740,9 @@ function RowView({
   onFlag: () => void;
   onOpen: () => void;
   focused: boolean;
+  /** Two-line layout instead of the fixed-width grid — see the `compactRows`
+   * doc comment in ReviewBoard for why. */
+  compact: boolean;
   setRef: (el: HTMLDivElement | null) => void;
 }) {
   const approvable = row.approvable !== false;
@@ -736,6 +760,85 @@ function RowView({
       onClick={onOpen}
       style={{ borderTop: `1px solid ${shellColor.cardBorder}`, padding: "13px 22px 12px", cursor: "pointer", background: focused ? shellColor.page : "transparent" }}
     >
+      {compact && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <input
+              type="checkbox"
+              checked={selected}
+              onChange={(e) => {
+                e.stopPropagation();
+                toggleSelected();
+              }}
+              onClick={(e) => e.stopPropagation()}
+              aria-label={`Select ${row.title}`}
+            />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 14, fontWeight: 600, color: shellColor.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{row.title}</div>
+              <div style={{ fontSize: 12, color: shellColor.inkFaint, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{row.subtitle || " "}</div>
+            </div>
+            <div style={{ textAlign: "right", fontFamily: shellFont.mono, fontSize: 14, fontWeight: 600, flexShrink: 0 }}>
+              {row.amountLabel}
+              <span style={{ display: "block", fontFamily: shellFont.body, fontWeight: 500, fontSize: 10.5, color: shellColor.inkFaint, textAlign: "right" }}>
+                {row.amountSubLabel}
+              </span>
+            </div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, paddingLeft: 36 }}>
+            <span
+              title={row.categoryLabel}
+              style={{
+                display: "inline-block",
+                padding: "4px 10px",
+                borderRadius: shellRadius.pill,
+                background: shellColor.trackBg,
+                color: shellColor.inkSoft,
+                fontSize: 12,
+                fontWeight: 600,
+                maxWidth: 160,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {row.categoryLabel}
+            </span>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <ConfidenceRing pct={row.confidencePct} size={30} stroke={4} color={row.confidenceColor} />
+              <div style={{ fontSize: 12 }}>
+                <b style={{ display: "block", fontFamily: shellFont.mono, fontSize: 13.5 }}>{row.confidencePct}%</b>
+                <span style={{ color: row.confidenceColor }}>{row.confidenceLabel}</span>
+              </div>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 4, marginLeft: "auto" }}>
+              <button
+                title={approvable ? "Approve" : row.notApprovableReason ?? "Can't be approved yet"}
+                aria-label="Approve"
+                disabled={!approvable}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onApprove();
+                }}
+                style={iconButtonStyle(!approvable)}
+              >
+                {"✓"}
+              </button>
+              <button
+                title="Flag for review"
+                aria-label="Flag"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onFlag();
+                }}
+                style={iconButtonStyle()}
+              >
+                {"⚑"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {!compact && (
       <div className="review-board-row-line1" style={line1Style}>
         <input
           type="checkbox"
@@ -813,9 +916,10 @@ function RowView({
           </button>
         </div>
       </div>
+      )}
 
       {row.comparePair && (
-        <div className="review-board-dupe-pair" style={{ paddingLeft: 126, marginTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
+        <div className="review-board-dupe-pair" style={{ paddingLeft: compact ? 0 : 126, marginTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
           <div style={{ display: "flex", gap: 10, fontSize: 12.5, color: shellColor.inkSoft }}>
             <span style={{ fontWeight: 700, color: shellColor.dupe, width: 74, flexShrink: 0 }}>{row.comparePair.aLabel}</span>
             {row.comparePair.a}
@@ -827,7 +931,7 @@ function RowView({
         </div>
       )}
 
-      <div className="review-board-row-line2" style={{ paddingLeft: 126, marginTop: 6, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
+      <div className="review-board-row-line2" style={{ paddingLeft: compact ? 0 : 126, marginTop: 6, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
         <span style={{ fontSize: 12.5, color: shellColor.inkSoft }}>
           <span style={{ marginRight: 5 }}>✦</span>
           {row.reason}
