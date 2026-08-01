@@ -118,7 +118,7 @@ export default function ReviewBoard({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [collapsed, setCollapsed] = useState<Set<ReviewSectionKey>>(new Set());
   const [openPanelId, setOpenPanelId] = useState<string | null>(null);
-  const [showAllReady, setShowAllReady] = useState(false);
+  const [expandedSections, setExpandedSections] = useState<Set<ReviewSectionKey>>(new Set());
   const [focusedIdx, setFocusedIdx] = useState(-1);
   const [reducedMotion, setReducedMotion] = useState(false);
   const rowRefs = useRef<Map<string, HTMLDivElement>>(new Map());
@@ -150,11 +150,11 @@ export default function ReviewBoard({
     for (const sec of sections) {
       if (collapsed.has(sec.key)) continue;
       const secRows = rowsBySection.get(sec.key) ?? [];
-      const visible = sec.key === "ready" && !showAllReady ? secRows.slice(0, READY_VISIBLE_CAP) : secRows;
+      const visible = expandedSections.has(sec.key) ? secRows : secRows.slice(0, READY_VISIBLE_CAP);
       for (const r of visible) ids.push(r.id);
     }
     return ids;
-  }, [sections, collapsed, rowsBySection, showAllReady]);
+  }, [sections, collapsed, rowsBySection, expandedSections]);
 
   const readyOpen = rowsBySection.get("ready") ?? [];
   const openPanelRow = openPanelId ? rows.find((r) => r.id === openPanelId) ?? null : null;
@@ -311,8 +311,8 @@ export default function ReviewBoard({
               rows={rowsBySection.get(sec.key) ?? []}
               collapsedSet={collapsed}
               setCollapsed={setCollapsed}
-              showAllReady={showAllReady}
-              setShowAllReady={setShowAllReady}
+              expandedSections={expandedSections}
+              setExpandedSections={setExpandedSections}
               selected={selected}
               toggleSelected={toggleSelected}
               approve={approve}
@@ -380,8 +380,8 @@ function SectionBlock({
   rows,
   collapsedSet,
   setCollapsed,
-  showAllReady,
-  setShowAllReady,
+  expandedSections,
+  setExpandedSections,
   selected,
   toggleSelected,
   approve,
@@ -395,8 +395,8 @@ function SectionBlock({
   rows: ReviewRow[];
   collapsedSet: Set<ReviewSectionKey>;
   setCollapsed: React.Dispatch<React.SetStateAction<Set<ReviewSectionKey>>>;
-  showAllReady: boolean;
-  setShowAllReady: React.Dispatch<React.SetStateAction<boolean>>;
+  expandedSections: Set<ReviewSectionKey>;
+  setExpandedSections: React.Dispatch<React.SetStateAction<Set<ReviewSectionKey>>>;
   selected: Set<string>;
   toggleSelected: (id: string) => void;
   approve: (ids: string[]) => void;
@@ -407,7 +407,7 @@ function SectionBlock({
   rowRefs: React.MutableRefObject<Map<string, HTMLDivElement>>;
 }) {
   const collapsed = collapsedSet.has(sec.key);
-  const visible = sec.key === "ready" && !showAllReady ? rows.slice(0, READY_VISIBLE_CAP) : rows;
+  const visible = expandedSections.has(sec.key) ? rows : rows.slice(0, READY_VISIBLE_CAP);
   const hidden = rows.length - visible.length;
 
   function toggle() {
@@ -494,7 +494,16 @@ function SectionBlock({
           {hidden > 0 && (
             <div style={{ padding: "16px 22px", display: "flex", alignItems: "center", justifyContent: "space-between", background: shellColor.page, borderTop: `1px solid ${shellColor.cardBorder}`, fontSize: 13, color: shellColor.inkSoft }}>
               <span>+ {hidden} more, all high confidence, same review pattern</span>
-              <button style={shellButton("outline", "sm")} onClick={() => setShowAllReady(true)}>
+              <button
+                style={shellButton("outline", "sm")}
+                onClick={() =>
+                  setExpandedSections((prev) => {
+                    const next = new Set(prev);
+                    next.add(sec.key);
+                    return next;
+                  })
+                }
+              >
                 Show all {rows.length}
               </button>
             </div>
