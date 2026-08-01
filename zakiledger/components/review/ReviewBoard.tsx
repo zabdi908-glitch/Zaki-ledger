@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import ConfidenceRing from "./ConfidenceRing";
-import { disabledOverride, microLabel, shellButton, shellColor, shellFigures, shellFont, shellRadius } from "@/lib/shell-theme";
+import { disabledOverride, microLabel, shellButton, shellCard, shellColor, shellFigures, shellFont, shellRadius } from "@/lib/shell-theme";
 
 /**
  * Generic, presentational review UI — ported 1:1 from the client-approved
@@ -78,6 +78,11 @@ export interface ReviewSectionConfig {
   accentColor: string;
   description: string;
   showBulkApproveAll?: boolean;
+  /** Section header shows an "Approve all N" button that opens a preview
+   * modal (list + deselect) instead of approving immediately — see
+   * `bulkApprovable` handling in SectionBlock. Takes precedence over
+   * `showBulkApproveAll` when both are set on the same section. */
+  bulkApprovable?: boolean;
 }
 
 export interface ReviewBoardProps {
@@ -123,6 +128,7 @@ export default function ReviewBoard({
   const [expandedSections, setExpandedSections] = useState<Set<ReviewSectionKey>>(new Set());
   const [focusedIdx, setFocusedIdx] = useState(-1);
   const [reducedMotion, setReducedMotion] = useState(false);
+  const [bulkPreview, setBulkPreview] = useState<{ section: ReviewSectionConfig; deselected: Set<string> } | null>(null);
   const rowRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
   useEffect(() => {
@@ -188,11 +194,15 @@ export default function ReviewBoard({
     function onKeyDown(e: KeyboardEvent) {
       const tag = (e.target as HTMLElement | null)?.tagName?.toLowerCase();
       if (tag === "input" || tag === "textarea") {
-        if (e.key === "Escape") closePanel();
+        if (e.key === "Escape") {
+          if (bulkPreview) setBulkPreview(null);
+          else closePanel();
+        }
         return;
       }
       if (e.key === "Escape") {
-        closePanel();
+        if (bulkPreview) setBulkPreview(null);
+        else closePanel();
         return;
       }
       if (e.key === "ArrowDown") {
@@ -220,7 +230,7 @@ export default function ReviewBoard({
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [orderedVisibleIds, focusedIdx]);
+  }, [orderedVisibleIds, focusedIdx, bulkPreview]);
 
   const transition = (value: string) => (reducedMotion ? "none" : value);
 
@@ -323,6 +333,7 @@ export default function ReviewBoard({
               setOpenPanelId={setOpenPanelId}
               focusedId={orderedVisibleIds[focusedIdx]}
               rowRefs={rowRefs}
+              onOpenBulkPreview={() => setBulkPreview({ section: sec, deselected: new Set() })}
             />
           ))}
         </div>
@@ -377,6 +388,107 @@ export default function ReviewBoard({
           )}
         </aside>
       </div>
+
+      {bulkPreview && (
+        <BulkApprovalPreviewModal
+          section={bulkPreview.section}
+          rows={(rowsBySection.get(bulkPreview.section.key) ?? []).filter((r) => r.approvable !== false)}
+          deselected={bulkPreview.deselected}
+          onToggle={(id) =>
+            setBulkPreview((prev) => {
+              if (!prev) return prev;
+              const next = new Set(prev.deselected);
+              if (next.has(id)) next.delete(id);
+              else next.add(id);
+              return { ...prev, deselected: next };
+            })
+          }
+          onCancel={() => setBulkPreview(null)}
+          onConfirm={(ids) => {
+            approve(ids);
+            setBulkPreview(null);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function BulkApprovalPreviewModal({
+  section,
+  rows,
+  deselected,
+  onToggle,
+  onCancel,
+  onConfirm,
+}: {
+  section: ReviewSectionConfig;
+  rows: ReviewRow[];
+  deselected: Set<string>;
+  onToggle: (id: string) => void;
+  onCancel: () => void;
+  onConfirm: (ids: string[]) => void;
+}) {
+  const selectedIds = rows.filter((r) => !deselected.has(r.id)).map((r) => r.id);
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 40,
+        background: "rgba(15,23,42,.45)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+      }}
+      onClick={onCancel}
+    >
+      <div
+        style={{
+          ...shellCard(),
+          width: "100%",
+          maxWidth: 520,
+          maxHeight: "80vh",
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div style={{ padding: "18px 22px", borderBottom: `1px solid ${shellColor.cardBorder}` }}>
+          <div style={{ fontSize: 16, fontWeight: 700 }}>Approve all — {section.title}</div>
+          <div style={{ fontSize: 13, color: shellColor.inkSoft, marginTop: 4 }}>
+            Deselect any transaction you want to review separately before approving the rest.
+          </div>
+        </div>
+        <div style={{ overflowY: "auto", padding: "8px 22px" }}>
+          {rows.map((row) => (
+            <label
+              key={row.id}
+              style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 0", borderBottom: `1px solid ${shellColor.cardBorder}`, cursor: "pointer" }}
+            >
+              <input type="checkbox" checked={!deselected.has(row.id)} onChange={() => onToggle(row.id)} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13.5, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{row.title}</div>
+                <div style={{ fontSize: 12, color: shellColor.inkFaint }}>{row.date}</div>
+              </div>
+              <div style={{ fontFamily: shellFont.mono, fontSize: 13.5, fontWeight: 600 }}>{row.amountLabel}</div>
+            </label>
+          ))}
+        </div>
+        <div style={{ display: "flex", gap: 8, padding: "16px 22px", borderTop: `1px solid ${shellColor.cardBorder}` }}>
+          <button style={{ ...shellButton("outline", "md"), flex: 1 }} onClick={onCancel}>
+            Cancel
+          </button>
+          <button
+            style={{ ...shellButton("success", "md"), flex: 1 }}
+            onClick={() => onConfirm(selectedIds)}
+            disabled={selectedIds.length === 0}
+          >
+            Approve {selectedIds.length} {selectedIds.length === 1 ? "transaction" : "transactions"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -396,6 +508,7 @@ function SectionBlock({
   setOpenPanelId,
   focusedId,
   rowRefs,
+  onOpenBulkPreview,
 }: {
   sec: ReviewSectionConfig;
   rows: ReviewRow[];
@@ -411,10 +524,12 @@ function SectionBlock({
   setOpenPanelId: (id: string | null) => void;
   focusedId: string | undefined;
   rowRefs: React.MutableRefObject<Map<string, HTMLDivElement>>;
+  onOpenBulkPreview: () => void;
 }) {
   const collapsed = collapsedSet.has(sec.key);
   const visible = expandedSections.has(sec.key) ? rows : rows.slice(0, READY_VISIBLE_CAP);
   const hidden = rows.length - visible.length;
+  const approvableCount = rows.filter((r) => r.approvable !== false).length;
 
   function toggle() {
     setCollapsed((prev) => {
@@ -439,16 +554,29 @@ function SectionBlock({
           </div>
           <div style={{ fontSize: 13, color: shellColor.inkSoft, marginTop: 3 }}>{sec.description}</div>
         </div>
-        {sec.showBulkApproveAll && rows.length > 0 && (
+        {sec.bulkApprovable && approvableCount >= 2 ? (
           <button
             style={shellButton("success", "sm")}
             onClick={(e) => {
               e.stopPropagation();
-              approve(rows.map((r) => r.id));
+              onOpenBulkPreview();
             }}
           >
-            Approve all {rows.length}
+            Approve all {approvableCount}
           </button>
+        ) : (
+          sec.showBulkApproveAll &&
+          rows.length > 0 && (
+            <button
+              style={shellButton("success", "sm")}
+              onClick={(e) => {
+                e.stopPropagation();
+                approve(rows.map((r) => r.id));
+              }}
+            >
+              Approve all {rows.length}
+            </button>
+          )
         )}
       </div>
 
