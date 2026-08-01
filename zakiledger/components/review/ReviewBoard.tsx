@@ -250,7 +250,7 @@ export default function ReviewBoard({
   const transition = (value: string) => (reducedMotion ? "none" : value);
 
   return (
-    <div>
+    <div className={openPanelRow ? "review-board-panel-open" : undefined}>
       <style>{`
         @media (max-width: 980px) {
           .review-board-col-head { display: none; }
@@ -260,6 +260,22 @@ export default function ReviewBoard({
           .review-board-panel { position: fixed !important; inset: 0; z-index: 30; width: 100% !important; border-left: none; }
           .review-board-hero { flex-direction: column; align-items: flex-start; }
         }
+        /*
+         * The docked detail panel (PANEL_WIDTH, 440px) plus the app's nav
+         * sidebar can leave less room for the row list than the row grid's
+         * fixed-width columns need (~900px: date/amount/category/confidence/
+         * action columns are all px-sized) — on a laptop-width window that
+         * squeeze hid the category, confidence, and approve/reject controls
+         * behind the panel. Reusing the same compact row layout the mobile
+         * breakpoint already uses, but keyed on "a panel is docked" rather
+         * than viewport width, keeps every control visible regardless of
+         * window size.
+         */
+        .review-board-panel-open .review-board-col-head { display: none; }
+        .review-board-panel-open .review-board-row-line1 { grid-template-columns: 24px 1fr auto !important; }
+        .review-board-panel-open .review-board-row-date { display: none; }
+        .review-board-panel-open .review-board-row-line2,
+        .review-board-panel-open .review-board-dupe-pair { padding-left: 0 !important; }
       `}</style>
 
       {readyOpen.length > 0 && (
