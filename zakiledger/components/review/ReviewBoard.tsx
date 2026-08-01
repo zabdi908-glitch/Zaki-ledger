@@ -176,6 +176,21 @@ export default function ReviewBoard({
     });
   }
 
+  /** Section-scoped select-all, so an accountant can select every row in
+   * "Ready to Approve" (or any other section) in one click instead of
+   * checking rows one at a time, then use the sticky bar's "Approve
+   * selected"/"Clear" once they're happy with the set. */
+  function setSelectionForIds(ids: string[], select: boolean) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      for (const id of ids) {
+        if (select) next.add(id);
+        else next.delete(id);
+      }
+      return next;
+    });
+  }
+
   function approve(ids: string[]) {
     onApprove(ids);
     setSelected((prev) => {
@@ -334,6 +349,7 @@ export default function ReviewBoard({
               focusedId={orderedVisibleIds[focusedIdx]}
               rowRefs={rowRefs}
               onOpenBulkPreview={() => setBulkPreview({ section: sec, deselected: new Set() })}
+              onSelectAll={setSelectionForIds}
             />
           ))}
         </div>
@@ -509,6 +525,7 @@ function SectionBlock({
   focusedId,
   rowRefs,
   onOpenBulkPreview,
+  onSelectAll,
 }: {
   sec: ReviewSectionConfig;
   rows: ReviewRow[];
@@ -525,6 +542,7 @@ function SectionBlock({
   focusedId: string | undefined;
   rowRefs: React.MutableRefObject<Map<string, HTMLDivElement>>;
   onOpenBulkPreview: () => void;
+  onSelectAll: (ids: string[], select: boolean) => void;
 }) {
   const collapsed = collapsedSet.has(sec.key);
   const visible = expandedSections.has(sec.key) ? rows : rows.slice(0, READY_VISIBLE_CAP);
@@ -598,7 +616,13 @@ function SectionBlock({
                 background: shellColor.page,
               }}
             >
-              <span />
+              <input
+                type="checkbox"
+                checked={rows.length > 0 && rows.every((r) => selected.has(r.id))}
+                onChange={(e) => onSelectAll(rows.map((r) => r.id), e.target.checked)}
+                aria-label={`Select all in ${sec.title}`}
+                title="Select all in this section"
+              />
               <span>Date</span>
               <span>Description</span>
               <span style={{ textAlign: "right" }}>Amount</span>
