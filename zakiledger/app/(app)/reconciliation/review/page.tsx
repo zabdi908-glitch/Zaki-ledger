@@ -6,6 +6,7 @@ import { useShellToast } from "@/components/AppShell";
 import { formatMoney } from "@/lib/currency";
 import type { BankTransaction, QbTransaction, ReconciliationMatch } from "@/lib/reconciliation-schema";
 import { buildReviewRows, factorBreakdown } from "@/lib/reconciliation-insights";
+import { applyApprovals, applyRejection, type ReviewData } from "@/lib/review-optimistic";
 import ReviewBoard, { type ReviewRow, type ReviewSectionConfig } from "@/components/review/ReviewBoard";
 import {
   pageSubtitle,
@@ -18,14 +19,6 @@ import {
   shellColor,
   shellFigures,
 } from "@/lib/shell-theme";
-
-type ReviewData = {
-  bankTransactions: BankTransaction[];
-  qbTransactions: QbTransaction[];
-  matches: ReconciliationMatch[];
-  unmatchedBank: string[];
-  unmatchedQb: string[];
-};
 
 type ReportData = {
   totalMatched: number;
@@ -41,10 +34,11 @@ type ReportData = {
  * happened, and only then the residual pile that still needs investigating.
  */
 /**
- * This page drops approved rows by refetching rather than by tracking them
- * client-side, so the board's "already approved" set is always empty. Hoisted
- * to a constant because a fresh Set on every render would invalidate every
- * memo inside ReviewBoard that depends on it.
+ * Approved rows drop out of `board` itself (its useMemo filters matches down
+ * to `approvedAt === null` after an optimistic update), so the board's
+ * "already approved" set is always empty. Hoisted to a constant because a
+ * fresh Set on every render would invalidate every memo inside ReviewBoard
+ * that depends on it.
  */
 const NO_APPROVED_IDS: Set<string> = new Set();
 
@@ -199,17 +193,18 @@ export default function ReconciliationReviewPage() {
 
   async function rejectOne(matchId: string) {
     if (!statementId) return;
+    const snapshot = review;
+    setReview((prev) => (prev ? applyRejection(prev, matchId) : prev));
     const res = await fetch(`/api/reconciliation/${statementId}/reject`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ matchId }),
     });
-    const data = await res.json();
     if (!res.ok) {
+      const data = await res.json();
+      setReview(snapshot); // roll back — the server refused
       setError(data.error ?? "Couldn't reject the match.");
-      return;
     }
-    await load();
   }
 
   async function boardApprove(bankIds: string[], rowsById: Map<string, { matchId: string | null }>) {
@@ -230,18 +225,19 @@ export default function ReconciliationReviewPage() {
     if (matchIds.length < bankIds.length) {
       showToast(`${bankIds.length - matchIds.length} skipped — no accounting entry to match yet.`);
     }
+    const snapshot = review;
+    setReview((prev) => (prev ? applyApprovals(prev, matchIds, new Date().toISOString()) : prev));
+    showToast(`${matchIds.length} ${matchIds.length === 1 ? "match" : "matches"} approved`);
     const res = await fetch(`/api/reconciliation/${statementId}/approve`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ matchesToApprove: matchIds }),
     });
-    const data = await res.json();
     if (!res.ok) {
+      const data = await res.json();
+      setReview(snapshot); // roll back — the server refused
       setError(data.error ?? "Approve failed.");
-      return;
     }
-    await load();
-    showToast(`${matchIds.length} ${matchIds.length === 1 ? "match" : "matches"} approved`);
   }
 
   async function generateReport() {
