@@ -193,17 +193,26 @@ export default function ReconciliationReviewPage() {
 
   async function rejectOne(matchId: string) {
     if (!statementId) return;
-    const snapshot = review;
     setReview((prev) => (prev ? applyRejection(prev, matchId) : prev));
-    const res = await fetch(`/api/reconciliation/${statementId}/reject`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ matchId }),
-    });
-    if (!res.ok) {
-      const data = await res.json();
-      setReview(snapshot); // roll back — the server refused
-      setError(data.error ?? "Couldn't reject the match.");
+    try {
+      const res = await fetch(`/api/reconciliation/${statementId}/reject`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ matchId }),
+      });
+      if (!res.ok) {
+        // Resync from the server rather than restoring a snapshot — a second
+        // write may have landed while this one was in flight, and a snapshot
+        // rollback would silently discard that one too.
+        const data = await res.json().catch(() => ({}));
+        showToast(data.error ?? "Couldn't reject the match — restored.");
+        await load();
+      }
+    } catch {
+      // Network failure (offline, DNS, aborted) — fetch/json rejected instead
+      // of resolving with !res.ok, so the resync has to happen here too.
+      showToast("Couldn't reject the match — restored.");
+      await load();
     }
   }
 
@@ -225,18 +234,28 @@ export default function ReconciliationReviewPage() {
     if (matchIds.length < bankIds.length) {
       showToast(`${bankIds.length - matchIds.length} skipped — no accounting entry to match yet.`);
     }
-    const snapshot = review;
     setReview((prev) => (prev ? applyApprovals(prev, matchIds, new Date().toISOString()) : prev));
     showToast(`${matchIds.length} ${matchIds.length === 1 ? "match" : "matches"} approved`);
-    const res = await fetch(`/api/reconciliation/${statementId}/approve`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ matchesToApprove: matchIds }),
-    });
-    if (!res.ok) {
-      const data = await res.json();
-      setReview(snapshot); // roll back — the server refused
-      setError(data.error ?? "Approve failed.");
+    try {
+      const res = await fetch(`/api/reconciliation/${statementId}/approve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ matchesToApprove: matchIds }),
+      });
+      if (!res.ok) {
+        // Resync from the server rather than restoring a snapshot — a second
+        // write may have landed while this one was in flight, and a snapshot
+        // rollback would silently discard that one too (and never reconcile
+        // the optimistic approvedAt guess with the server's real value).
+        const data = await res.json().catch(() => ({}));
+        showToast(data.error ?? "Approve failed — restored.");
+        await load();
+      }
+    } catch {
+      // Network failure (offline, DNS, aborted) — fetch/json rejected instead
+      // of resolving with !res.ok, so the resync has to happen here too.
+      showToast("Approve failed — restored.");
+      await load();
     }
   }
 
