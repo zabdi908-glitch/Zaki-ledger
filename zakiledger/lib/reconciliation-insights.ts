@@ -11,6 +11,8 @@ import {
   type ReversalPair,
   type SplitGroup,
 } from "./reconciliation-detectors";
+import { suggestMerchantCategory } from "./merchant-categories";
+import type { MerchantPreference } from "./decision-store";
 import type { BankTransaction, QbTransaction, ReconciliationMatch } from "./reconciliation-schema";
 import { shellColor } from "./shell-theme";
 import type { ReviewDetection, ReviewRow, ReviewSectionKey } from "@/components/review/ReviewBoard";
@@ -109,10 +111,12 @@ function countMerchants(bank: BankTransaction[]): Map<string, number> {
   return counts;
 }
 
-/** Matched -> the QB account name. Unmatched -> the most common account name
- * this merchant has been matched to elsewhere in this statement. Otherwise
- * "Uncategorised" — a real cross-statement lookup is a follow-up, not needed
- * to ship this screen. */
+/** Resolution order: a learned merchant preference (3+ approvals) beats
+ * everything, since it is the accountant's own past decision. Below that:
+ * the matched QB account name -> the most common account name this merchant
+ * has been matched to elsewhere in this statement -> the hardcoded UK
+ * merchant table -> "Uncategorised". A real cross-statement lookup is a
+ * follow-up, not needed to ship this screen. */
 export function suggestCategory(
   bank: BankTransaction,
   qb: QbTransaction | null,
@@ -121,9 +125,15 @@ export function suggestCategory(
   /** Accounting entries indexed by id. Callers categorising a whole statement
    * pass theirs so it is built once rather than per row. */
   qbById?: Map<string, QbTransaction>,
+  /** Merchant key (normalised) -> the learned preference. Callers
+   * categorising a whole statement pass theirs so it is built once. */
+  preferences?: Map<string, MerchantPreference>,
 ): string {
-  if (qb?.accountName) return qb.accountName;
   const key = normalizeMerchant(bank);
+  const pref = key ? preferences?.get(key) : undefined;
+  if (pref && pref.approvalCount >= 3) return `${pref.category} (learned from ${pref.approvalCount} approvals)`;
+
+  if (qb?.accountName) return qb.accountName;
   if (!key) return "Uncategorised";
   const index = qbById ?? new Map(qbTxns.map((q) => [q.id, q]));
   const counts = new Map<string, number>();
@@ -134,7 +144,12 @@ export function suggestCategory(
     counts.set(matchedQb.accountName, (counts.get(matchedQb.accountName) ?? 0) + 1);
   }
   const top = [...counts.entries()].sort((a, b) => b[1] - a[1])[0];
-  return top?.[0] ?? "Uncategorised";
+  if (top) return top[0];
+
+  const hardcoded = suggestMerchantCategory(bank.merchant ?? bank.description);
+  if (hardcoded) return `${hardcoded.category} (${hardcoded.confidencePct}% suggested)`;
+
+  return "Uncategorised";
 }
 
 const FACTOR_WEIGHTS: { key: string[]; label: string; max: number }[] = [
@@ -386,6 +401,7 @@ export function buildReviewRows(data: {
   bankTransactions: BankTransaction[];
   qbTransactions: QbTransaction[];
   matches: ReconciliationMatch[];
+  preferences?: MerchantPreference[];
 }): { id: string; row: ReviewRow; matchId: string | null }[] {
   const dupes = detectDuplicates(data.bankTransactions);
   const detections = buildDetections(data.bankTransactions);
@@ -396,6 +412,7 @@ export function buildReviewRows(data: {
   const bankById = new Map(data.bankTransactions.map((b) => [b.id, b]));
   const qbById = new Map(data.qbTransactions.map((q) => [q.id, q]));
   const merchantCounts = countMerchants(data.bankTransactions);
+  const preferencesByMerchant = new Map((data.preferences ?? []).map((p) => [p.merchantName, p]));
   const matchByBankId = new Map<string, ReconciliationMatch>();
   // Only matches whose bank transaction shares a merchant are relevant to that
   // merchant's category, and suggestCategory can't do that filtering itself —
@@ -419,7 +436,7 @@ export function buildReviewRows(data: {
     const found = detections.get(bank.id) ?? null;
     const key = normalizeMerchant(bank);
     const sameMerchantMatches = key ? matchesByMerchant.get(key) ?? [] : [];
-    const category = suggestCategory(bank, qb, sameMerchantMatches, data.qbTransactions, qbById);
+    const category = suggestCategory(bank, qb, sameMerchantMatches, data.qbTransactions, qbById, preferencesByMerchant);
     const badges = detectBadges(bank, data.bankTransactions, merchantCounts);
     if (isDuplicate) badges.unshift("Duplicate");
     if (found) badges.unshift(found.badge);

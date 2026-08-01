@@ -142,6 +142,23 @@ describe("suggestCategory", () => {
   });
 });
 
+describe("learned and hardcoded category suggestions", () => {
+  it("prefers a learned preference with 3+ approvals over the hardcoded table", () => {
+    const rows = buildReviewRows({
+      bankTransactions: [bank({ id: "b1", merchant: "SHELL 4471" })], qbTransactions: [], matches: [],
+      preferences: [{ merchantName: "shell 4471", category: "Fuel", approvalCount: 4, lastApproved: "2026-07-01" }],
+    });
+    expect(rows[0].row.categoryLabel).toBe("Fuel (learned from 4 approvals)");
+  });
+  it("falls back to the hardcoded UK table below 3 approvals", () => {
+    const rows = buildReviewRows({
+      bankTransactions: [bank({ id: "b1", merchant: "SHELL 4471" })], qbTransactions: [], matches: [],
+      preferences: [{ merchantName: "shell 4471", category: "Fuel", approvalCount: 2, lastApproved: "2026-07-01" }],
+    });
+    expect(rows[0].row.categoryLabel).toBe("Motor Expenses (94% suggested)");
+  });
+});
+
 describe("factorBreakdown", () => {
   it("splits a full match reason into Amount/40, Date/35, Merchant/25", () => {
     const bd = factorBreakdown(match({ matchReason: "amount + date + merchant", confidence: 1 }));

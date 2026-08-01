@@ -9,6 +9,8 @@ import { formatMoney } from "@/lib/currency";
 import type { BankTransaction, QbTransaction, ReconciliationMatch } from "@/lib/reconciliation-schema";
 import { buildReviewRows, factorBreakdown } from "@/lib/reconciliation-insights";
 import { applyApprovals, applyRejection, type ReviewData } from "@/lib/review-optimistic";
+import { GL_CATEGORIES } from "@/lib/merchant-categories";
+import type { MerchantPreference } from "@/lib/decision-store";
 import ReviewBoard, { type ReviewRow, type ReviewSectionConfig } from "@/components/review/ReviewBoard";
 import {
   pageSubtitle,
@@ -119,6 +121,7 @@ export default function ReconciliationReviewPage() {
   const showToast = useShellToast();
 
   const [review, setReview] = useState<ReviewData | null>(null);
+  const [preferences, setPreferences] = useState<MerchantPreference[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [initialOpenCount, setInitialOpenCount] = useState<number | null>(null);
@@ -143,7 +146,10 @@ export default function ReconciliationReviewPage() {
     }
     setError(null);
     try {
-      const res = await fetch(`/api/reconciliation/${statementId}/transactions`);
+      const [res, prefsRes] = await Promise.all([
+        fetch(`/api/reconciliation/${statementId}/transactions`),
+        fetch("/api/reconciliation/preferences"),
+      ]);
       const data = await res.json();
       if (!res.ok) {
         setError(data.error ?? "Couldn't load matches.");
@@ -151,6 +157,10 @@ export default function ReconciliationReviewPage() {
       }
       setReview(data);
       setInitialOpenCount((prev) => prev ?? openCount(data));
+      if (prefsRes.ok) {
+        const prefsData = await prefsRes.json();
+        setPreferences(prefsData.preferences ?? []);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Couldn't load matches.");
     } finally {
@@ -180,13 +190,14 @@ export default function ReconciliationReviewPage() {
       bankTransactions: openBanks,
       qbTransactions: review.qbTransactions,
       matches: review.matches.filter((m) => m.approvedAt === null),
+      preferences,
     });
     return {
       openBanks,
       rows: built.map((b) => b.row),
       rowsById: new Map(built.map((b) => [b.id, b])),
     };
-  }, [review]);
+  }, [review, preferences]);
 
   function openCount(data: ReviewData): number {
     const unapproved = data.matches.filter((m) => m.approvedAt === null).length;
@@ -258,6 +269,25 @@ export default function ReconciliationReviewPage() {
       // of resolving with !res.ok, so the resync has to happen here too.
       showToast("Approve failed — restored.");
       await load();
+    }
+  }
+
+  async function setDefaultCategory(merchantName: string, category: string) {
+    try {
+      const res = await fetch("/api/reconciliation/preferences", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ merchantName, category }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        showToast(data.error ?? "Couldn't save the default category.");
+        return;
+      }
+      showToast("Default category saved for this merchant");
+      await load();
+    } catch {
+      showToast("Couldn't save the default category.");
     }
   }
 
@@ -351,6 +381,7 @@ export default function ReconciliationReviewPage() {
                 qb={qb}
                 match={match}
                 row={row}
+                onSetDefaultCategory={(category) => setDefaultCategory(bank.merchant ?? bank.description ?? "", category)}
                 onApprove={() => boardApprove([row.id], rowsById)}
                 onReject={() => match && rejectOne(match.id)}
               />
@@ -400,6 +431,13 @@ function ReportStat({ label, value }: { label: string; value: string }) {
   );
 }
 
+/** Strips a category label's parenthetical tag, e.g. "Fuel (learned from 4
+ * approvals)" -> "Fuel" — the dropdown shows the plain GL category, not the
+ * explanation of how it was suggested. */
+function bareCategory(categoryLabel: string): string {
+  return categoryLabel.replace(/\s*\(.*\)$/, "");
+}
+
 function ReconciliationPanelBody({
   bank,
   qb,
@@ -407,6 +445,7 @@ function ReconciliationPanelBody({
   row,
   onApprove,
   onReject,
+  onSetDefaultCategory,
 }: {
   bank: BankTransaction;
   qb: QbTransaction | null;
@@ -414,8 +453,11 @@ function ReconciliationPanelBody({
   row: ReviewRow;
   onApprove: () => void;
   onReject: () => void;
+  onSetDefaultCategory: (category: string) => void;
 }) {
   const factors = match ? factorBreakdown(match) : [];
+  const currentCategory = bareCategory(row.categoryLabel);
+  const categoryOptions = GL_CATEGORIES.includes(currentCategory) ? GL_CATEGORIES : [currentCategory, ...GL_CATEGORIES];
   return (
     <>
       <div style={{ marginBottom: 24 }}>
@@ -426,7 +468,20 @@ function ReconciliationPanelBody({
         <KV label="Description" value={bank.merchant || bank.description || "(no description)"} />
         <KV label="Amount" value={row.amountLabel} />
         <KV label="Direction" value={row.amountSubLabel} />
-        <KV label="Suggested category" value={row.categoryLabel} />
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13.5, padding: "6px 0", borderBottom: `1px dashed ${shellColor.cardBorder}` }}>
+          <span style={{ color: shellColor.inkSoft }}>Suggested category</span>
+          <select
+            value={currentCategory}
+            onChange={(e) => onSetDefaultCategory(e.target.value)}
+            style={{ fontWeight: 600, fontSize: 13.5, border: `1px solid ${shellColor.cardBorder}`, borderRadius: 6, padding: "3px 6px" }}
+          >
+            {categoryOptions.map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
 
       {row.detection && (
