@@ -2,6 +2,7 @@
 
 import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useShellToast } from "@/components/AppShell";
 import ConnectionChip from "@/components/ConnectionChip";
 import { formatMoney } from "@/lib/currency";
@@ -314,6 +315,20 @@ export default function ReconciliationReviewPage() {
       <div style={{ ...progressTrack(), marginBottom: 20 }}>
         <div style={progressFill(reviewedPct)} />
       </div>
+
+      {review.qbTransactions.length === 0 && (
+        <div style={shellCard({ padding: "16px 20px", marginBottom: 20, borderLeft: `3px solid ${shellColor.medium}` })}>
+          <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>
+            No accounting entries to match against
+          </div>
+          <p style={{ margin: 0, fontSize: 13.5, color: shellColor.inkSoft }}>
+            Every transaction will sit in &ldquo;Potential Issues&rdquo; until there is something to reconcile it with.{" "}
+            <Link href="/reconciliation" style={{ color: shellColor.ink, fontWeight: 600 }}>
+              Sync from Xero/QuickBooks or import a CSV →
+            </Link>
+          </p>
+        </div>
+      )}
 
       {openBanks.length > 0 && (
         <ReviewBoard
