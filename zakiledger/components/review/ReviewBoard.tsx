@@ -230,7 +230,7 @@ export default function ReviewBoard({
           .review-board-row-line1 { grid-template-columns: 24px 1fr auto !important; }
           .review-board-row-date { display: none; }
           .review-board-row-line2, .review-board-dupe-pair { padding-left: 0 !important; }
-          .review-board-panel { position: fixed; inset: 0; z-index: 30; width: 100% !important; border-left: none; }
+          .review-board-panel { position: fixed !important; inset: 0; z-index: 30; width: 100% !important; border-left: none; }
           .review-board-hero { flex-direction: column; align-items: flex-start; }
         }
       `}</style>
@@ -334,6 +334,10 @@ export default function ReviewBoard({
             background: shellColor.paper,
             borderLeft: openPanelRow ? `1px solid ${shellColor.cardBorder}` : "none",
             transition: transition("width .22s ease"),
+            position: "sticky",
+            top: 0,
+            alignSelf: "flex-start",
+            maxHeight: "100vh",
           }}
         >
           {openPanelRow && (
