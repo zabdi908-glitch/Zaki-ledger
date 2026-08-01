@@ -601,53 +601,67 @@ function SectionBlock({
       {!collapsed && (
         <div style={{ borderTop: `1px solid ${shellColor.cardBorder}` }}>
           {rows.length === 0 && <div style={{ padding: 40, textAlign: "center", color: shellColor.inkFainter, fontSize: 14 }}>Nothing here.</div>}
-          {visible.length > 0 && (
-            <div
-              className="review-board-col-head"
-              style={{
-                display: "grid",
-                gridTemplateColumns: "30px 84px minmax(200px,1.4fr) 118px 156px 148px 92px",
-                gap: 12,
-                padding: "10px 22px",
-                fontSize: 11,
-                textTransform: "uppercase",
-                letterSpacing: "0.04em",
-                color: shellColor.inkFaint,
-                background: shellColor.page,
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={rows.length > 0 && rows.every((r) => selected.has(r.id))}
-                onChange={(e) => onSelectAll(rows.map((r) => r.id), e.target.checked)}
-                aria-label={`Select all in ${sec.title}`}
-                title="Select all in this section"
-              />
-              <span>Date</span>
-              <span>Description</span>
-              <span style={{ textAlign: "right" }}>Amount</span>
-              <span>Category</span>
-              <span>Confidence</span>
-              <span />
-            </div>
-          )}
-          <div>
-            {visible.map((row) => (
-              <RowView
-                key={row.id}
-                row={row}
-                selected={selected.has(row.id)}
-                toggleSelected={() => toggleSelected(row.id)}
-                onApprove={() => approve([row.id])}
-                onFlag={() => onFlag(row.id)}
-                onOpen={() => setOpenPanelId(row.id)}
-                focused={focusedId === row.id || openPanelId === row.id}
-                setRef={(el) => {
-                  if (el) rowRefs.current.set(row.id, el);
-                  else rowRefs.current.delete(row.id);
+          {/*
+           * The row grid below has a fixed-width minimum (~900px: the date/
+           * amount/category/confidence/action columns are all px-sized).
+           * With the detail panel docked open (440px) plus the nav sidebar,
+           * the space left for this column can drop well under that on a
+           * laptop-width screen. Without this wrapper, the overflow used to
+           * render past its box with no scrollbar — invisibly painted behind
+           * the docked panel, which is exactly what made the category,
+           * confidence, and approve/reject controls disappear for rows on
+           * narrower windows. Scrolling this one wrapper (instead of the
+           * page) keeps the header cells and row cells lined up.
+           */}
+          <div style={{ overflowX: "auto" }}>
+            {visible.length > 0 && (
+              <div
+                className="review-board-col-head"
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "30px 84px minmax(200px,1.4fr) 118px 156px 148px 92px",
+                  gap: 12,
+                  padding: "10px 22px",
+                  fontSize: 11,
+                  textTransform: "uppercase",
+                  letterSpacing: "0.04em",
+                  color: shellColor.inkFaint,
+                  background: shellColor.page,
                 }}
-              />
-            ))}
+              >
+                <input
+                  type="checkbox"
+                  checked={rows.length > 0 && rows.every((r) => selected.has(r.id))}
+                  onChange={(e) => onSelectAll(rows.map((r) => r.id), e.target.checked)}
+                  aria-label={`Select all in ${sec.title}`}
+                  title="Select all in this section"
+                />
+                <span>Date</span>
+                <span>Description</span>
+                <span style={{ textAlign: "right" }}>Amount</span>
+                <span>Category</span>
+                <span>Confidence</span>
+                <span />
+              </div>
+            )}
+            <div>
+              {visible.map((row) => (
+                <RowView
+                  key={row.id}
+                  row={row}
+                  selected={selected.has(row.id)}
+                  toggleSelected={() => toggleSelected(row.id)}
+                  onApprove={() => approve([row.id])}
+                  onFlag={() => onFlag(row.id)}
+                  onOpen={() => setOpenPanelId(row.id)}
+                  focused={focusedId === row.id || openPanelId === row.id}
+                  setRef={(el) => {
+                    if (el) rowRefs.current.set(row.id, el);
+                    else rowRefs.current.delete(row.id);
+                  }}
+                />
+              ))}
+            </div>
           </div>
           {hidden > 0 && (
             <div style={{ padding: "16px 22px", display: "flex", alignItems: "center", justifyContent: "space-between", background: shellColor.page, borderTop: `1px solid ${shellColor.cardBorder}`, fontSize: 13, color: shellColor.inkSoft }}>
