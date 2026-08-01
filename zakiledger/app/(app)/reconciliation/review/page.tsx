@@ -588,7 +588,19 @@ function ReconciliationPanelBody({
         </div>
       )}
 
-      <div style={{ display: "flex", gap: 8, marginTop: 28 }}>
+      <div
+        style={{
+          display: "flex",
+          gap: 8,
+          marginTop: 28,
+          position: "sticky",
+          bottom: 0,
+          background: shellColor.paper,
+          paddingTop: 14,
+          paddingBottom: 14,
+          borderTop: `1px solid ${shellColor.cardBorder}`,
+        }}
+      >
         <button style={{ ...shellButton("dangerOutline", "lg"), flex: 1 }} onClick={onReject} disabled={!match}>
           Reject
         </button>
