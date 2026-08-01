@@ -399,3 +399,39 @@ create index if not exists reconciliation_audit_log_match_idx
 
 -- Third reload: covers every Phase 3 table added above.
 notify pgrst, 'reload schema';
+
+-- ============================= Phase 3, Group B =============================
+-- Decision automation: every approve/reject/categorise the user makes, and
+-- the per-user merchant -> category preferences learned from them.
+
+create table if not exists reconciliation_decisions (
+  id                    uuid primary key default gen_random_uuid(),
+  user_id               uuid not null references auth.users(id),
+  statement_id          uuid not null,
+  match_id              uuid,          -- null when the decision is about an unmatched line
+  bank_transaction_id   uuid not null,
+  decision_type         text not null, -- 'approve' | 'reject' | 'accept_suggestion' | 'category_set'
+  merchant_name         text,
+  suggested_category    text,
+  user_choice_category  text,
+  created_at            timestamptz not null default now()
+);
+
+create index if not exists reconciliation_decisions_user_idx
+  on reconciliation_decisions (user_id, statement_id);
+
+create table if not exists user_merchant_preferences (
+  id              uuid primary key default gen_random_uuid(),
+  user_id         uuid not null references auth.users(id),
+  merchant_name   text not null,     -- normalised: trimmed, lowercased
+  category        text not null,
+  approval_count  int  not null default 0,
+  last_approved   timestamptz,
+  unique (user_id, merchant_name)
+);
+
+create index if not exists user_merchant_preferences_user_idx
+  on user_merchant_preferences (user_id, merchant_name);
+
+-- Fourth reload: covers the Group B decision-automation tables above.
+notify pgrst, 'reload schema';
