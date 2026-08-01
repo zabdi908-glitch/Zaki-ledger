@@ -1,5 +1,6 @@
 import { body, display, mono, shellBody } from "@/lib/fonts";
 import "./globals.css";
+import WebVitals from "@/components/WebVitals";
 
 export const metadata = {
   title: "Zaki Ledger",
@@ -16,7 +17,10 @@ export const metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className={`${display.variable} ${body.variable} ${mono.variable} ${shellBody.variable}`}>
-      <body style={{ fontFamily: "var(--font-body)" }}>{children}</body>
+      <body style={{ fontFamily: "var(--font-body)" }}>
+        <WebVitals />
+        {children}
+      </body>
     </html>
   );
 }
