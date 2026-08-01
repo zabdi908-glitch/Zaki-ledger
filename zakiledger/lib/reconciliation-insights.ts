@@ -221,6 +221,7 @@ function reversalDetection(pair: ReversalPair, self: BankTransaction): Transacti
       footer: { label: "Net effect", value: formatMoney(0, self.currency) },
       evidence,
       confidencePct: pair.confidencePct,
+      suggestedAction: { text: "Approve both — they cancel out, net effect on the books is nil.", kind: "approve" },
     },
   };
 }
@@ -247,6 +248,7 @@ function refundDetection(pair: RefundPair, self: BankTransaction): TransactionDe
         `Transactions occurred ${dayGapPhrase(pair.charge, pair.refund)}.`,
       ],
       confidencePct: pair.confidencePct,
+      suggestedAction: { text: "Confirm the pair, then approve both charge and refund.", kind: "approve" },
     },
   };
 }
@@ -283,6 +285,12 @@ function splitDetection(group: SplitGroup): TransactionDetection {
         `${group.transactions.length} transactions add up to ${total}.`,
       ],
       confidencePct: group.confidencePct,
+      suggestedAction: {
+        text: incoming
+          ? "Approve all parts as one invoice settled in instalments."
+          : "Approve all parts as one bill paid in instalments.",
+        kind: "approve",
+      },
     },
   };
 }
@@ -306,6 +314,7 @@ function merchantDetection(link: MerchantLink): TransactionDetection {
       footer: { label: "Similarity", value: `${pct}%` },
       evidence: [nameEvidence(link.similarity), "Both appear on this statement."],
       confidencePct: link.confidencePct,
+      suggestedAction: { text: "Confirm these are the same business before categorising.", kind: "review" },
     },
   };
 }
@@ -474,6 +483,10 @@ function duplicateDetection(self: BankTransaction, other: BankTransaction): Revi
       `Transactions occurred ${dayGapPhrase(self, other)}.`,
     ],
     confidencePct: 99,
+    suggestedAction: {
+      text: "Reject the second transaction — it looks like the same charge processed twice.",
+      kind: "reject",
+    },
   };
 }
 

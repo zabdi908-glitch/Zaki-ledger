@@ -216,6 +216,22 @@ describe("buildReviewRows detections", () => {
     expect(rows[0].row.detection?.footer).toEqual({ label: "Total received", value: "£1500.00" });
   });
 
+  it("duplicate detection suggests rejecting the second transaction", () => {
+    const dupeA = bank({ id: "b1", merchant: "UBER TRIP", amount: 18.4, transactionDate: "2026-06-14" });
+    const dupeB = bank({ id: "b2", merchant: "UBER TRIP", amount: 18.4, transactionDate: "2026-06-14" });
+    const rows = buildReviewRows({ bankTransactions: [dupeA, dupeB], qbTransactions: [], matches: [] });
+    const det = rows[0].row.detection;
+    expect(det?.suggestedAction?.kind).toBe("reject");
+    expect(det?.suggestedAction?.text).toMatch(/second transaction|likely.*duplicate/i);
+  });
+
+  it("reversal detection suggests approving both as nil net effect", () => {
+    const revA = bank({ id: "b1", merchant: "CLIENT PAYMENT INV-1003", amount: -1750, transactionDate: "2026-06-02" });
+    const revB = bank({ id: "b2", merchant: "CLIENT PAYMENT INV-1003", amount: 1750, transactionDate: "2026-06-04" });
+    const rows = buildReviewRows({ bankTransactions: [revA, revB], qbTransactions: [], matches: [] });
+    expect(rows[0].row.detection?.suggestedAction?.kind).toBe("approve");
+  });
+
   it("never shows an accountant how the resemblance was measured", () => {
     const a = bank({ id: "b1", merchant: "MICROSOFT 365", amount: 12, transactionDate: "2026-06-02" });
     const b = bank({ id: "b2", merchant: "MICROSOFT*365", amount: 40, transactionDate: "2026-06-20" });

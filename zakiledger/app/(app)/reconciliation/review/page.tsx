@@ -449,6 +449,23 @@ function ReconciliationPanelBody({
               </div>
             )}
           </div>
+          {row.detection.suggestedAction && (
+            <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px dashed ${shellColor.cardBorder}` }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: shellColor.inkFaint, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 6 }}>
+                Suggested action
+              </div>
+              <div style={{ fontSize: 13.5, marginBottom: 10 }}>{row.detection.suggestedAction.text}</div>
+              {row.detection.suggestedAction.kind !== "review" && (
+                <button
+                  style={shellButton(row.detection.suggestedAction.kind === "approve" ? "success" : "dangerOutline", "sm")}
+                  onClick={row.detection.suggestedAction.kind === "approve" ? onApprove : onReject}
+                  disabled={!match}
+                >
+                  Accept suggestion
+                </button>
+              )}
+            </div>
+          )}
         </div>
       )}
 

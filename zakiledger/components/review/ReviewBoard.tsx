@@ -42,6 +42,8 @@ export interface ReviewDetection {
   /** Short factual statements backing the finding. */
   evidence: string[];
   confidencePct: number;
+  /** What the accountant should DO about this finding, not just what it is. */
+  suggestedAction?: { text: string; kind: "approve" | "reject" | "review" };
 }
 
 export interface ReviewRow {
