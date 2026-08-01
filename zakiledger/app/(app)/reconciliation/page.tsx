@@ -1,8 +1,9 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useShellToast } from "@/components/AppShell";
+import ConnectionChip, { useConnectedProvider } from "@/components/ConnectionChip";
 import {
   disabledOverride,
   pageSubtitle,
@@ -47,23 +48,10 @@ export default function ReconciliationUploadPage() {
   const [qbBusy, setQbBusy] = useState(false);
   const [qbError, setQbError] = useState<string | null>(null);
 
-  const [connectedProvider, setConnectedProvider] = useState<"xero" | "quickbooks" | null>(null);
+  const connectedProviderRaw = useConnectedProvider();
+  const connectedProvider = connectedProviderRaw === "loading" ? null : connectedProviderRaw;
   const [syncBusy, setSyncBusy] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
-
-  useEffect(() => {
-    Promise.all([
-      fetch("/api/auth/xero/status").then((r) => (r.ok ? r.json() : { connected: false })),
-      fetch("/api/auth/quickbooks/status").then((r) => (r.ok ? r.json() : { connected: false })),
-    ])
-      .then(([xero, qbo]) => {
-        if (xero.connected) setConnectedProvider("xero");
-        else if (qbo.connected) setConnectedProvider("quickbooks");
-      })
-      .catch(() => {
-        /* live sync just won't be offered; CSV import still works */
-      });
-  }, []);
 
   async function refreshMatchCounts(id: string) {
     const res = await fetch(`/api/reconciliation/${id}/transactions`);
@@ -156,6 +144,7 @@ export default function ReconciliationUploadPage() {
     <div>
       <h1 style={pageTitle}>Bank Reconciliation</h1>
       <p style={pageSubtitle}>Match bank transactions against your QuickBooks ledger</p>
+      <ConnectionChip />
 
       {stage === "idle" && (
         <div>

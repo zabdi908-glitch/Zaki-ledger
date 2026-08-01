@@ -3,6 +3,7 @@
 import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useShellToast } from "@/components/AppShell";
+import ConnectionChip from "@/components/ConnectionChip";
 import { formatMoney } from "@/lib/currency";
 import type { BankTransaction, QbTransaction, ReconciliationMatch } from "@/lib/reconciliation-schema";
 import { buildReviewRows, factorBreakdown } from "@/lib/reconciliation-insights";
@@ -284,6 +285,7 @@ export default function ReconciliationReviewPage() {
       <div>
         <h1 style={pageTitle}>Review Matches</h1>
         <p style={pageSubtitle}>No statement uploaded yet — upload a bank statement first.</p>
+        <ConnectionChip />
       </div>
     );
   }
@@ -308,6 +310,7 @@ export default function ReconciliationReviewPage() {
       <p style={{ fontSize: 14, color: shellColor.inkSoft, margin: "0 0 16px" }}>
         {reviewed} of {initialOpenCount ?? openBanks.length} flagged matches reviewed
       </p>
+      <ConnectionChip />
       <div style={{ ...progressTrack(), marginBottom: 20 }}>
         <div style={progressFill(reviewedPct)} />
       </div>
