@@ -386,7 +386,20 @@ export default function ReviewBoard({
           }}
         >
           {openPanelRow && (
-            <div style={{ width: PANEL_WIDTH, height: "100%", overflowY: "auto", padding: "22px 26px 60px" }}>
+            /*
+             * maxHeight (not height: "100%") is deliberate: the aside only
+             * constrains its own box via maxHeight: 100vh, not a definite
+             * height, so a percentage height here resolved against the
+             * panel's natural (unclamped) content height instead of the
+             * viewport — this div never actually overflowed itself, so its
+             * overflowY: auto never had anything to scroll, and everything
+             * past the fold (including the Approve/Reject footer) was
+             * simply clipped by the aside's own overflow: hidden with no
+             * way for a mouse wheel to reach it. A vh-based maxHeight
+             * doesn't depend on the parent's ambiguous height and forces
+             * real, scrollable overflow.
+             */
+            <div style={{ width: PANEL_WIDTH, maxHeight: "100vh", overflowY: "auto", padding: "22px 26px 60px" }}>
               <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 18 }}>
                 <div>
                   <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.05em", color: shellColor.inkFaint, marginBottom: 5 }}>
