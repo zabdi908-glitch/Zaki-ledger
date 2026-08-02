@@ -435,3 +435,24 @@ create index if not exists user_merchant_preferences_user_idx
 
 -- Fourth reload: covers the Group B decision-automation tables above.
 notify pgrst, 'reload schema';
+
+-- ============================= Phase 3, Group C =============================
+-- Confirmed bank-line -> extracted-invoice matches.
+
+create table if not exists invoice_matches (
+  id                    uuid primary key default gen_random_uuid(),
+  user_id               uuid not null references auth.users(id),
+  bank_transaction_id   uuid not null,
+  invoice_id            uuid not null,
+  confidence_pct        int not null,
+  matched_by            text not null, -- 'reference' | 'amount_date'
+  status                text not null default 'matched', -- 'matched' | 'rejected'
+  created_at            timestamptz not null default now(),
+  unique (user_id, bank_transaction_id)
+);
+
+create index if not exists invoice_matches_user_idx
+  on invoice_matches (user_id, bank_transaction_id);
+
+-- Fifth reload: covers the Group C invoice-match table above.
+notify pgrst, 'reload schema';
