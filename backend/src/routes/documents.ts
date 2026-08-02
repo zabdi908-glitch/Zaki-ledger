@@ -3,6 +3,7 @@ import multer from 'multer';
 import { supabase } from '../lib/supabase.js';
 import { extractDocument, extractFromText } from '../lib/openai.js';
 import { validateLowConfidence } from '../lib/claude.js';
+import { computeReviewStatus } from '../lib/confidenceGate.js';
 import { requireAuth, AuthRequest } from '../middleware/auth.js';
 
 const router = Router();
@@ -46,6 +47,12 @@ router.post('/upload', requireAuth, upload.array('files', 20), async (req: AuthR
       }
 
       // Store extracted item
+      const { needsReview, status } = computeReviewStatus({
+        merchant: finalExtraction.merchant_confidence,
+        date: finalExtraction.date_confidence,
+        amount: finalExtraction.amount_confidence
+      });
+
       const { data: item, error: itemErr } = await supabase
         .from('extracted_items')
         .insert({
@@ -53,19 +60,26 @@ router.post('/upload', requireAuth, upload.array('files', 20), async (req: AuthR
           document_id: doc.id,
           merchant: finalExtraction.merchant,
           merchant_confidence: finalExtraction.merchant_confidence,
+          merchant_confidence_reason: finalExtraction.merchant_confidence_reason,
           invoice_number: finalExtraction.invoice_number,
           invoice_number_confidence: finalExtraction.invoice_number_confidence,
+          invoice_number_confidence_reason: finalExtraction.invoice_number_confidence_reason,
           transaction_date: finalExtraction.transaction_date,
           date_confidence: finalExtraction.date_confidence,
+          date_confidence_reason: finalExtraction.date_confidence_reason,
           amount: finalExtraction.amount,
           amount_confidence: finalExtraction.amount_confidence,
+          amount_confidence_reason: finalExtraction.amount_confidence_reason,
           tax_amount: finalExtraction.tax_amount,
           tax_confidence: finalExtraction.tax_confidence,
+          tax_confidence_reason: finalExtraction.tax_confidence_reason,
           category: finalExtraction.category,
           category_confidence: finalExtraction.category_confidence,
+          category_confidence_reason: finalExtraction.category_confidence_reason,
           overall_confidence: finalExtraction.overall_confidence,
           reason: finalExtraction.reason,
-          status: finalExtraction.overall_confidence >= 95 ? 'approved' : 'pending'
+          needs_review: needsReview,
+          status
         })
         .select()
         .single();
