@@ -129,16 +129,16 @@ describe("detectDuplicates", () => {
 
 describe("suggestCategory", () => {
   it("uses the matched QB transaction's account name when there is a match", () => {
-    expect(suggestCategory(bank(), qb({ accountName: "Software & Hosting" }), [], [])).toBe("Software & Hosting");
+    expect(suggestCategory(bank(), qb({ accountName: "Software & Hosting" }), [], []).label).toBe("Software & Hosting");
   });
   it("falls back to the most common category this merchant has been matched to before", () => {
     const priorMatch = match({ bankTransactionId: "b-other", qbTransactionId: "q-other" });
     const priorQb = qb({ id: "q-other", accountName: "Office Supplies" });
     const result = suggestCategory(bank({ id: "b2", merchant: "AWS EMEA" }), null, [priorMatch], [priorQb]);
-    expect(result).toBe("Office Supplies");
+    expect(result.label).toBe("Office Supplies");
   });
   it("falls back to Uncategorised when there is nothing to go on", () => {
-    expect(suggestCategory(bank({ merchant: "Totally New Merchant" }), null, [], [])).toBe("Uncategorised");
+    expect(suggestCategory(bank({ merchant: "Totally New Merchant" }), null, [], []).label).toBe("Uncategorised");
   });
 });
 
@@ -156,6 +156,45 @@ describe("learned and hardcoded category suggestions", () => {
       preferences: [{ merchantName: "shell 4471", category: "Fuel", approvalCount: 2, lastApproved: "2026-07-01" }],
     });
     expect(rows[0].row.categoryLabel).toBe("Motor Expenses (94% suggested)");
+  });
+});
+
+describe("AI merchant-category fallback", () => {
+  it("uses the AI cache when the hardcoded table has nothing", () => {
+    const ai = new Map([["totally new merchant", { category: "Software & SaaS", confidencePct: 88, reason: "Recurring SaaS billing name." }]]);
+    const rows = buildReviewRows({
+      bankTransactions: [bank({ id: "b1", merchant: "Totally New Merchant" })], qbTransactions: [], matches: [],
+      aiCategories: ai,
+    });
+    expect(rows[0].row.categoryLabel).toBe("Software & SaaS (88% AI suggested)");
+    expect(rows[0].row.categoryReason).toBe("Recurring SaaS billing name.");
+  });
+
+  it("prefers the hardcoded table over an AI suggestion when both exist", () => {
+    const shellAi = new Map([["shell 4471", { category: "Software & SaaS", confidencePct: 60, reason: "Ambiguous name." }]]);
+    const rows = buildReviewRows({
+      bankTransactions: [bank({ id: "b1", merchant: "SHELL 4471" })], qbTransactions: [], matches: [],
+      aiCategories: shellAi,
+    });
+    expect(rows[0].row.categoryLabel).toBe("Motor Expenses (94% suggested)");
+    expect(rows[0].row.categoryReason).toBeUndefined();
+  });
+
+  it("falls through to plain Uncategorised when the AI itself couldn't tell", () => {
+    const unknownAi = new Map([["totally new merchant", { category: "Uncategorised", confidencePct: 0, reason: "No signal in the name." }]]);
+    const rows = buildReviewRows({
+      bankTransactions: [bank({ id: "b1", merchant: "Totally New Merchant" })], qbTransactions: [], matches: [],
+      aiCategories: unknownAi,
+    });
+    expect(rows[0].row.categoryLabel).toBe("Uncategorised");
+    expect(rows[0].row.categoryReason).toBeUndefined();
+  });
+
+  it("leaves categoryReason unset for rows resolved by any other tier", () => {
+    const rows = buildReviewRows({
+      bankTransactions: [bank({ id: "b1", merchant: "SHELL 4471" })], qbTransactions: [], matches: [],
+    });
+    expect(rows[0].row.categoryReason).toBeUndefined();
   });
 });
 

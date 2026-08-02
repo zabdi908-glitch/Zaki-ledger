@@ -59,6 +59,10 @@ export interface ReviewRow {
   amountLabel: string;
   amountSubLabel: string;
   categoryLabel: string;
+  /** Why an AI-tier suggestion picked this category — set only when
+   * categoryLabel came from the AI fallback (see suggestCategory in
+   * lib/reconciliation-insights.ts). Unset for every other resolution tier. */
+  categoryReason?: string;
   confidencePct: number;
   confidenceLabel: string;
   confidenceColor: string;
