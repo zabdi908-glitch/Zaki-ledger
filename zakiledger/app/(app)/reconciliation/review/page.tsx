@@ -8,8 +8,10 @@ import ConnectionChip from "@/components/ConnectionChip";
 import { formatMoney } from "@/lib/currency";
 import type { BankTransaction, QbTransaction, ReconciliationMatch } from "@/lib/reconciliation-schema";
 import { buildReviewRows, factorBreakdown } from "@/lib/reconciliation-insights";
-import { applyApprovals, applyRejection, type ReviewData } from "@/lib/review-optimistic";
+import { applyApprovals, applyRejection, type ReviewData as BaseReviewData } from "@/lib/review-optimistic";
 import { GL_CATEGORIES } from "@/lib/merchant-categories";
+import type { InvoiceSuggestion } from "@/lib/invoice-matching";
+import type { StoredInvoiceMatch } from "@/lib/invoice-match-store";
 import type { MerchantPreference } from "@/lib/decision-store";
 import ReviewBoard, { type ReviewRow, type ReviewSectionConfig } from "@/components/review/ReviewBoard";
 import {
@@ -23,6 +25,14 @@ import {
   shellColor,
   shellFigures,
 } from "@/lib/shell-theme";
+
+/** The transactions endpoint's payload widened with Group C's invoice-match
+ * fields — the base ReviewData type stays narrow because review-optimistic's
+ * applyApprovals/applyRejection only ever touch matches/unmatchedBank. */
+type ReviewData = BaseReviewData & {
+  invoiceSuggestions: InvoiceSuggestion[];
+  invoiceMatches: StoredInvoiceMatch[];
+};
 
 type ReportData = {
   totalMatched: number;
@@ -197,10 +207,21 @@ export default function ReconciliationReviewPage() {
       matches: review.matches.filter((m) => m.approvedAt === null),
       preferences,
     });
+    const suggestionsByBankId = new Map(review.invoiceSuggestions.map((s) => [s.bankTransactionId, s]));
+    const confirmedByBankId = new Map(review.invoiceMatches.map((m) => [m.bankTransactionId, m]));
+    // A row already carries a badge (Duplicate, Refund, ...) from its own
+    // detection; an invoice match is additive information about the same row,
+    // not a competing classification, so it's appended rather than unshifted.
+    const rows = built.map((b) => {
+      if (!suggestionsByBankId.has(b.id) && !confirmedByBankId.has(b.id)) return b.row;
+      return { ...b.row, badges: [...b.row.badges, "Invoice match"] };
+    });
     return {
       openBanks,
-      rows: built.map((b) => b.row),
+      rows,
       rowsById: new Map(built.map((b) => [b.id, b])),
+      suggestionsByBankId,
+      confirmedByBankId,
     };
   }, [review, preferences]);
 
@@ -211,7 +232,10 @@ export default function ReconciliationReviewPage() {
 
   async function rejectOne(matchId: string) {
     if (!statementId) return;
-    setReview((prev) => (prev ? applyRejection(prev, matchId) : prev));
+    // applyRejection's return type is the base ReviewData shape (it only
+    // touches matches/unmatchedBank); the spread it does internally preserves
+    // invoiceSuggestions/invoiceMatches at runtime, so this cast is safe.
+    setReview((prev) => (prev ? (applyRejection(prev, matchId) as ReviewData) : prev));
     try {
       const res = await fetch(`/api/reconciliation/${statementId}/reject`, {
         method: "POST",
@@ -252,7 +276,7 @@ export default function ReconciliationReviewPage() {
     if (matchIds.length < bankIds.length) {
       showToast(`${bankIds.length - matchIds.length} skipped — no accounting entry to match yet.`);
     }
-    setReview((prev) => (prev ? applyApprovals(prev, matchIds, new Date().toISOString()) : prev));
+    setReview((prev) => (prev ? (applyApprovals(prev, matchIds, new Date().toISOString()) as ReviewData) : prev));
     showToast(`${matchIds.length} ${matchIds.length === 1 ? "match" : "matches"} approved`);
     try {
       const res = await fetch(`/api/reconciliation/${statementId}/approve`, {
@@ -274,6 +298,53 @@ export default function ReconciliationReviewPage() {
       // of resolving with !res.ok, so the resync has to happen here too.
       showToast("Approve failed — restored.");
       await load();
+    }
+  }
+
+  async function matchInvoice(suggestion: InvoiceSuggestion) {
+    if (!statementId) return;
+    try {
+      const res = await fetch(`/api/reconciliation/${statementId}/invoice-match`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          bankTransactionId: suggestion.bankTransactionId,
+          invoiceId: suggestion.invoiceId,
+          confidencePct: suggestion.confidencePct,
+          matchedBy: suggestion.matchedBy,
+        }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        showToast(data.error ?? "Couldn't confirm the invoice match.");
+        return;
+      }
+      const { id } = await res.json();
+      // Optimistic: move the suggestion into invoiceMatches so the card
+      // switches from "Match invoice" to "Matched" without a refetch.
+      setReview((prev) =>
+        prev
+          ? {
+              ...prev,
+              invoiceSuggestions: prev.invoiceSuggestions.filter((s) => s.bankTransactionId !== suggestion.bankTransactionId),
+              invoiceMatches: [
+                ...prev.invoiceMatches,
+                {
+                  id,
+                  bankTransactionId: suggestion.bankTransactionId,
+                  invoiceId: suggestion.invoiceId,
+                  confidencePct: suggestion.confidencePct,
+                  matchedBy: suggestion.matchedBy,
+                  status: "matched",
+                  createdAt: new Date().toISOString(),
+                },
+              ],
+            }
+          : prev,
+      );
+      showToast(`Invoice ${suggestion.invoiceNumber} matched`);
+    } catch {
+      showToast("Couldn't confirm the invoice match.");
     }
   }
 
@@ -335,7 +406,7 @@ export default function ReconciliationReviewPage() {
   }
 
   if (!board) return null;
-  const { openBanks, rows, rowsById } = board;
+  const { openBanks, rows, rowsById, suggestionsByBankId, confirmedByBankId } = board;
   const reviewed = (initialOpenCount ?? openBanks.length) - openBanks.length;
   const reviewedPct = initialOpenCount ? Math.round((reviewed / initialOpenCount) * 100) : 0;
   const reportCurrency = review.bankTransactions[0]?.currency ?? null;
@@ -386,9 +457,12 @@ export default function ReconciliationReviewPage() {
                 qb={qb}
                 match={match}
                 row={row}
+                suggestion={suggestionsByBankId.get(bank.id)}
+                confirmedInvoiceMatch={confirmedByBankId.get(bank.id)}
                 onSetDefaultCategory={(category) => setDefaultCategory(bank.merchant ?? bank.description ?? "", category)}
                 onApprove={() => boardApprove([row.id], rowsById)}
                 onReject={() => match && rejectOne(match.id)}
+                onMatchInvoice={(s) => matchInvoice(s)}
               />
             );
           }}
@@ -448,23 +522,54 @@ function ReconciliationPanelBody({
   qb,
   match,
   row,
+  suggestion,
+  confirmedInvoiceMatch,
   onApprove,
   onReject,
   onSetDefaultCategory,
+  onMatchInvoice,
 }: {
   bank: BankTransaction;
   qb: QbTransaction | null;
   match: ReconciliationMatch | null;
   row: ReviewRow;
+  suggestion?: InvoiceSuggestion;
+  confirmedInvoiceMatch?: StoredInvoiceMatch;
   onApprove: () => void;
   onReject: () => void;
   onSetDefaultCategory: (category: string) => void;
+  onMatchInvoice: (suggestion: InvoiceSuggestion) => void;
 }) {
   const factors = match ? factorBreakdown(match) : [];
   const currentCategory = bareCategory(row.categoryLabel);
   const categoryOptions = GL_CATEGORIES.includes(currentCategory) ? GL_CATEGORIES : [currentCategory, ...GL_CATEGORIES];
   return (
     <>
+      {(suggestion || confirmedInvoiceMatch) && (
+        <div style={{ marginBottom: 24 }}>
+          <SectionLabel>Possible invoice match</SectionLabel>
+          <div style={{ background: shellColor.page, borderRadius: 10, padding: "14px 16px" }}>
+            {suggestion ? (
+              <>
+                <KV label="Invoice" value={suggestion.invoiceNumber} />
+                <KV label="Customer" value={suggestion.supplierName} />
+                <KV label="Amount" value={formatMoney(suggestion.total ?? 0, bank.currency)} />
+                <KV label="Confidence" value={`${suggestion.confidencePct}%`} />
+                <div style={{ fontSize: 12.5, color: shellColor.inkSoft, padding: "8px 0" }}>{suggestion.reason}</div>
+                <button style={{ ...shellButton("success", "sm"), marginTop: 6 }} onClick={() => onMatchInvoice(suggestion)}>
+                  Match invoice
+                </button>
+              </>
+            ) : (
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span style={{ fontSize: 13.5, color: shellColor.inkSoft }}>Matched to an invoice</span>
+                <span style={pill(shellColor.high, shellColor.highBg)}>Matched</span>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       <div style={{ marginBottom: 24 }}>
         <div style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.04em", color: shellColor.inkFaint, marginBottom: 10 }}>
           Transaction details
