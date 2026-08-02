@@ -15,6 +15,7 @@ import type { StoredInvoiceMatch } from "@/lib/invoice-match-store";
 import { ledgerImpact } from "@/lib/ledger-impact";
 import { summarizeSections } from "@/lib/review-summary";
 import type { MerchantPreference } from "@/lib/decision-store";
+import type { MerchantAiCategory } from "@/lib/merchant-ai";
 import ReviewBoard, { type ReviewRow, type ReviewSectionKey } from "@/components/review/ReviewBoard";
 import { SECTIONS } from "@/lib/review-sections";
 import {
@@ -79,6 +80,7 @@ export default function ReconciliationReviewPage() {
 
   const [review, setReview] = useState<ReviewData | null>(null);
   const [preferences, setPreferences] = useState<MerchantPreference[]>([]);
+  const [aiCategories, setAiCategories] = useState<Map<string, MerchantAiCategory>>(new Map());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [initialOpenCount, setInitialOpenCount] = useState<number | null>(null);
@@ -150,6 +152,7 @@ export default function ReconciliationReviewPage() {
       qbTransactions: review.qbTransactions,
       matches: review.matches.filter((m) => m.approvedAt === null),
       preferences,
+      aiCategories,
     });
     const suggestionsByBankId = new Map(review.invoiceSuggestions.map((s) => [s.bankTransactionId, s]));
     const confirmedByBankId = new Map(review.invoiceMatches.map((m) => [m.bankTransactionId, m]));
@@ -167,7 +170,45 @@ export default function ReconciliationReviewPage() {
       suggestionsByBankId,
       confirmedByBankId,
     };
-  }, [review, preferences]);
+  }, [review, preferences, aiCategories]);
+
+  /**
+   * Progressive AI fallback: once the board is built, any row still showing
+   * "Uncategorised" gets its merchant name sent for classification. This
+   * runs after the initial render, not before, so Anthropic's latency or
+   * downtime never delays the page's first paint — rows simply update in
+   * place if and when a suggestion comes back.
+   */
+  useEffect(() => {
+    if (!board) return;
+    const candidates = board.rows
+      .filter((r) => r.categoryLabel === "Uncategorised")
+      .map((r) => r.title)
+      .filter((name) => name && name !== "(no description)");
+    const names = [...new Set(candidates)].filter((name) => !aiCategories.has(name.trim().toLowerCase()));
+    if (names.length === 0) return;
+
+    let cancelled = false;
+    fetch("/api/reconciliation/classify-merchants", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ merchantNames: names }),
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (cancelled || !data?.categories) return;
+        const entries = Object.entries(data.categories) as [string, MerchantAiCategory][];
+        if (entries.length === 0) return;
+        setAiCategories((prev) => new Map([...prev, ...entries]));
+      })
+      .catch(() => {
+        // Best-effort — a network failure here just leaves these rows
+        // Uncategorised, same as before this feature existed.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [board, aiCategories]);
 
   function openCount(data: ReviewData): number {
     const unapproved = data.matches.filter((m) => m.approvedAt === null).length;
@@ -636,6 +677,11 @@ function ReconciliationPanelBody({
             ))}
           </select>
         </div>
+        {row.categoryReason && (
+          <div style={{ fontSize: 12.5, fontStyle: "italic", color: shellColor.inkSoft, padding: "8px 0 0" }}>
+            {row.categoryReason}
+          </div>
+        )}
       </div>
 
       {row.detection && (
