@@ -59,7 +59,7 @@ export default function ReconciliationUploadPage() {
 
   async function refreshMatchCounts(id: string) {
     const res = await fetch(`/api/reconciliation/${id}/transactions`);
-    const data = await res.json();
+    const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error ?? "Couldn't load matches.");
     const matches = data.matches as ReconciliationMatch[];
     const approved = matches.filter((m) => m.approvedAt !== null).length;
@@ -92,7 +92,7 @@ export default function ReconciliationUploadPage() {
       const form = new FormData();
       form.append("file", file);
       const res = await fetch("/api/reconciliation/upload", { method: "POST", body: form });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         setError(data.error ?? "Upload failed.");
         setStage("idle");
@@ -118,7 +118,7 @@ export default function ReconciliationUploadPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ statementId }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         setSyncError(data.error ?? "Sync failed.");
         return;
@@ -143,7 +143,7 @@ export default function ReconciliationUploadPage() {
       const form = new FormData();
       form.append("file", file);
       const res = await fetch("/api/reconciliation/qb-transactions/upload", { method: "POST", body: form });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         setQbError(data.error ?? "Import failed.");
         return;

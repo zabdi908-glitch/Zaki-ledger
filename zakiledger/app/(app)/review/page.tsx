@@ -66,7 +66,7 @@ export default function ReviewPage() {
     setError(null);
     try {
       const res = await fetch("/api/pending");
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         setError(data.error ?? "Couldn't load the queue.");
         return;
@@ -99,7 +99,7 @@ export default function ReviewPage() {
   const ensureDetail = useCallback(
     async (id: string): Promise<InvoiceExtraction | null> => {
       const res = await fetch(`/api/pending/${id}`);
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) return null;
       setDetail((prev) => ({ ...prev, [id]: data.extraction }));
       return data.extraction as InvoiceExtraction;
@@ -118,7 +118,7 @@ export default function ReviewPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ extraction, edited: {}, documentType: item.documentType, documentId: id }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (res.ok && data.status === "approved") {
         setApprovedIds((prev) => new Set([...prev, id]));
         approvedCount += 1;
@@ -148,7 +148,7 @@ export default function ReviewPage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ extraction, edited: { [field]: newValue }, documentType: item.documentType, documentId: id }),
     });
-    const data = await res.json();
+    const data = await res.json().catch(() => ({}));
     if (res.ok && data.status === "approved") {
       showToast(`${fieldLabels(item.documentType)[field]} corrected — saved for next time`);
       setApprovedIds((prev) => new Set([...prev, id]));

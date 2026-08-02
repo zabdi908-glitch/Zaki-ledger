@@ -71,7 +71,7 @@ export default function ReconciliationBatchPage() {
     setError(null);
     try {
       const res = await fetch(`/api/reconciliation/${statementId}/transactions`);
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         setError(data.error ?? "Couldn't load matches.");
         return;
@@ -134,7 +134,7 @@ export default function ReconciliationBatchPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ matchesToApprove: rows.map((r) => r.match.id) }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) return setError(data.error ?? "Approve failed.");
       showToast(`${rows.length} matches approved`);
       setSelected(new Set());

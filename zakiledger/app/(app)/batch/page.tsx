@@ -47,7 +47,7 @@ export default function BatchReviewPage() {
     setError(null);
     try {
       const res = await fetch("/api/pending");
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         setError(data.error ?? "Couldn't load the queue.");
         return;
@@ -81,7 +81,7 @@ export default function BatchReviewPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ documentIds: [...selected] }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         setError(data.error ?? "Approve failed.");
         return;

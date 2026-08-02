@@ -111,7 +111,7 @@ export default function ReconciliationReviewPage() {
         fetch(`/api/reconciliation/${statementId}/transactions`),
         fetch("/api/reconciliation/preferences"),
       ]);
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         setError(data.error ?? "Couldn't load matches.");
         return;
@@ -409,7 +409,7 @@ export default function ReconciliationReviewPage() {
     setGeneratingReport(true);
     try {
       const res = await fetch(`/api/reconciliation/${statementId}/report`);
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (res.ok) setReport(data);
     } finally {
       setGeneratingReport(false);
