@@ -14,7 +14,7 @@ import type { InvoiceSuggestion } from "@/lib/invoice-matching";
 import type { StoredInvoiceMatch } from "@/lib/invoice-match-store";
 import { ledgerImpact } from "@/lib/ledger-impact";
 import type { MerchantPreference } from "@/lib/decision-store";
-import ReviewBoard, { type ReviewRow } from "@/components/review/ReviewBoard";
+import ReviewBoard, { type ReviewRow, type ReviewSectionKey } from "@/components/review/ReviewBoard";
 import { SECTIONS } from "@/lib/review-sections";
 import {
   pageSubtitle,
@@ -62,7 +62,9 @@ const NO_APPROVED_IDS: Set<string> = new Set();
  * section's bulk button is what makes that fast for the green ones.
  */
 export default function ReconciliationReviewPage() {
-  const queryStatementId = useSearchParams().get("statementId");
+  const searchParams = useSearchParams();
+  const queryStatementId = searchParams.get("statementId");
+  const focusSection = (searchParams.get("section") as ReviewSectionKey | null) ?? undefined;
   const [statementId, setStatementId] = useState<string | null>(queryStatementId);
   // True once we know the statement id we're loading (or that there isn't
   // one) — separate from `loading`, which covers the transactions fetch.
@@ -379,6 +381,7 @@ export default function ReconciliationReviewPage() {
           onFlag={(id) => showToast(`${rowsById.get(id)?.row.title ?? "Transaction"} flagged for a second look`)}
           heroTitle="High-confidence matches"
           heroDescription="Every one scored 95%+ on amount, date, and merchant against your accounting records."
+          initialFocusSection={focusSection}
           renderPanel={(row) => {
             const entry = rowsById.get(row.id);
             const match = entry?.matchId ? review.matches.find((m) => m.id === entry.matchId) ?? null : null;

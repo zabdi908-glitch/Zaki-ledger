@@ -98,6 +98,10 @@ export interface ReviewBoardProps {
   renderPanel: (row: ReviewRow) => ReactNode;
   heroTitle: string;
   heroDescription: string;
+  /** Deep-link support: when set, every section except this one starts
+   * collapsed — arriving from the upload screen's breakdown ("Refunds: 3")
+   * should land on just that section, not the whole board expanded. */
+  initialFocusSection?: ReviewSectionKey;
 }
 
 const READY_VISIBLE_CAP = 8;
@@ -125,9 +129,12 @@ export default function ReviewBoard({
   renderPanel,
   heroTitle,
   heroDescription,
+  initialFocusSection,
 }: ReviewBoardProps) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [collapsed, setCollapsed] = useState<Set<ReviewSectionKey>>(new Set());
+  const [collapsed, setCollapsed] = useState<Set<ReviewSectionKey>>(() =>
+    initialFocusSection ? new Set(sections.map((s) => s.key).filter((k) => k !== initialFocusSection)) : new Set(),
+  );
   const [openPanelId, setOpenPanelId] = useState<string | null>(null);
   const [expandedSections, setExpandedSections] = useState<Set<ReviewSectionKey>>(new Set());
   const [focusedIdx, setFocusedIdx] = useState(-1);
