@@ -456,3 +456,20 @@ create index if not exists invoice_matches_user_idx
 
 -- Fifth reload: covers the Group C invoice-match table above.
 notify pgrst, 'reload schema';
+
+-- ============================= AI merchant-category fallback =============================
+-- Global cache (not scoped to user_id): merchant name -> AI-classified GL
+-- category. GL_CATEGORIES is a fixed shared enum, not a per-user chart of
+-- accounts, so one user's classification of a merchant benefits everyone --
+-- fewer Anthropic calls, faster cache warm-up.
+
+create table if not exists merchant_ai_categories (
+  merchant_name   text primary key,     -- normalised: trimmed, lowercased
+  category        text not null,
+  confidence_pct  int not null,
+  reason          text not null,
+  created_at      timestamptz not null default now()
+);
+
+-- Sixth reload: covers the AI merchant-category cache table above.
+notify pgrst, 'reload schema';
