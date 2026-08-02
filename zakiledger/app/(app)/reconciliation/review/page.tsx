@@ -12,6 +12,7 @@ import { applyApprovals, applyRejection, type ReviewData as BaseReviewData } fro
 import { GL_CATEGORIES } from "@/lib/merchant-categories";
 import type { InvoiceSuggestion } from "@/lib/invoice-matching";
 import type { StoredInvoiceMatch } from "@/lib/invoice-match-store";
+import { ledgerImpact } from "@/lib/ledger-impact";
 import type { MerchantPreference } from "@/lib/decision-store";
 import ReviewBoard, { type ReviewRow, type ReviewSectionConfig } from "@/components/review/ReviewBoard";
 import {
@@ -649,6 +650,22 @@ function ReconciliationPanelBody({
             No matching accounting entry found yet.
           </div>
         )}
+      </div>
+
+      <div style={{ marginBottom: 24 }}>
+        <SectionLabel>Ledger impact</SectionLabel>
+        <div style={{ fontSize: 13.5, lineHeight: 1.6, background: shellColor.page, borderRadius: 10, padding: "14px 16px" }}>
+          {ledgerImpact({
+            amount: bank.amount,
+            currency: bank.currency,
+            category: currentCategory,
+            invoiceNumber: suggestion?.invoiceNumber,
+            supplierName: suggestion?.supplierName,
+            detectionKind: row.detection?.kind ?? null,
+          }).map((line) => (
+            <div key={line}>{line}</div>
+          ))}
+        </div>
       </div>
 
       {match && (

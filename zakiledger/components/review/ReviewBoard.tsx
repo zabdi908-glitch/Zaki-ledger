@@ -44,6 +44,10 @@ export interface ReviewDetection {
   confidencePct: number;
   /** What the accountant should DO about this finding, not just what it is. */
   suggestedAction?: { text: string; kind: "approve" | "reject" | "review" };
+  /** Which pattern this is, when it's one of the pure-detector findings —
+   * lets a caller's ledger-impact preview branch on it without this
+   * component knowing what a reversal or a refund is. */
+  kind?: "reversal" | "refund" | "split" | "merchant";
 }
 
 export interface ReviewRow {

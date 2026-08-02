@@ -237,6 +237,7 @@ function reversalDetection(pair: ReversalPair, self: BankTransaction): Transacti
       evidence,
       confidencePct: pair.confidencePct,
       suggestedAction: { text: "Approve both — they cancel out, net effect on the books is nil.", kind: "approve" },
+      kind: "reversal",
     },
   };
 }
@@ -264,6 +265,7 @@ function refundDetection(pair: RefundPair, self: BankTransaction): TransactionDe
       ],
       confidencePct: pair.confidencePct,
       suggestedAction: { text: "Confirm the pair, then approve both charge and refund.", kind: "approve" },
+      kind: "refund",
     },
   };
 }
@@ -306,6 +308,7 @@ function splitDetection(group: SplitGroup): TransactionDetection {
           : "Approve all parts as one bill paid in instalments.",
         kind: "approve",
       },
+      kind: "split",
     },
   };
 }
@@ -330,6 +333,7 @@ function merchantDetection(link: MerchantLink): TransactionDetection {
       evidence: [nameEvidence(link.similarity), "Both appear on this statement."],
       confidencePct: link.confidencePct,
       suggestedAction: { text: "Confirm these are the same business before categorising.", kind: "review" },
+      kind: "merchant",
     },
   };
 }
