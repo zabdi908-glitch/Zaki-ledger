@@ -40,9 +40,9 @@ export default function Upload() {
     if (e.target.files?.length) uploadMutation.mutate(e.target.files);
   };
 
-  const highCount = result?.items?.filter((i: any) => i.overall_confidence >= 95).length || 0;
-  const mediumCount = result?.items?.filter((i: any) => i.overall_confidence >= 70 && i.overall_confidence < 95).length || 0;
-  const lowCount = result?.items?.filter((i: any) => i.overall_confidence < 70).length || 0;
+  const highCount = result?.items?.filter((i: any) => i.status === 'approved').length || 0;
+  const mediumCount = result?.items?.filter((i: any) => i.status !== 'approved' && !i.needs_review).length || 0;
+  const lowCount = result?.items?.filter((i: any) => i.needs_review).length || 0;
 
   return (
     <div>

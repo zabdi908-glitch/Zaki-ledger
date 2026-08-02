@@ -2,18 +2,25 @@ export interface ExtractedItem {
   id: string;
   merchant: string;
   merchant_confidence: number;
+  merchant_confidence_reason: string;
   invoice_number: string;
   invoice_number_confidence: number;
+  invoice_number_confidence_reason: string;
   transaction_date: string;
   date_confidence: number;
+  date_confidence_reason: string;
   amount: number;
   amount_confidence: number;
+  amount_confidence_reason: string;
   tax_amount: number;
   tax_confidence: number;
+  tax_confidence_reason: string;
   category: string;
   category_confidence: number;
+  category_confidence_reason: string;
   overall_confidence: number;
   reason: string | null;
+  needs_review: boolean;
   status: 'pending' | 'approved' | 'rejected' | 'posted';
   created_at: string;
 }
