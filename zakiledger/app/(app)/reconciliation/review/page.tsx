@@ -13,6 +13,7 @@ import { GL_CATEGORIES } from "@/lib/merchant-categories";
 import type { InvoiceSuggestion } from "@/lib/invoice-matching";
 import type { StoredInvoiceMatch } from "@/lib/invoice-match-store";
 import { ledgerImpact } from "@/lib/ledger-impact";
+import { summarizeSections } from "@/lib/review-summary";
 import type { MerchantPreference } from "@/lib/decision-store";
 import ReviewBoard, { type ReviewRow, type ReviewSectionKey } from "@/components/review/ReviewBoard";
 import { SECTIONS } from "@/lib/review-sections";
@@ -43,6 +44,11 @@ type ReportData = {
   variance: number;
   isReconciled: boolean;
 };
+
+/** One line of this session's activity — client-side only, for the summary
+ * card's "what did I just do" list. Not the audit trail (the server's
+ * reconciliation_audit_log is that); this resets on page reload. */
+type SessionAction = { at: string; kind: "approve" | "reject"; matchIds: string[]; label: string };
 
 /**
  * Approved rows drop out of `board` itself (its useMemo filters matches down
@@ -78,6 +84,8 @@ export default function ReconciliationReviewPage() {
   const [initialOpenCount, setInitialOpenCount] = useState<number | null>(null);
   const [report, setReport] = useState<ReportData | null>(null);
   const [generatingReport, setGeneratingReport] = useState(false);
+  const [sessionActions, setSessionActions] = useState<SessionAction[]>([]);
+  const [undoingMatchIds, setUndoingMatchIds] = useState<Set<string>>(new Set());
 
   // Reached from the sidebar (no ?statementId=) — fall back to the user's
   // most recently uploaded statement instead of a dead end.
@@ -167,11 +175,18 @@ export default function ReconciliationReviewPage() {
   }
 
   async function rejectOne(matchId: string) {
-    if (!statementId) return;
+    if (!statementId || !review) return;
+    const rejectedMatch = review.matches.find((m) => m.id === matchId);
+    const rejectedBank = rejectedMatch ? review.bankTransactions.find((b) => b.id === rejectedMatch.bankTransactionId) : null;
+    const rowLabel = rejectedBank?.merchant ?? rejectedBank?.description ?? "transaction";
     // applyRejection's return type is the base ReviewData shape (it only
     // touches matches/unmatchedBank); the spread it does internally preserves
     // invoiceSuggestions/invoiceMatches at runtime, so this cast is safe.
     setReview((prev) => (prev ? (applyRejection(prev, matchId) as ReviewData) : prev));
+    setSessionActions((prev) => [
+      { at: new Date().toISOString(), kind: "reject", matchIds: [matchId], label: `Rejected ${rowLabel}` },
+      ...prev,
+    ]);
     try {
       const res = await fetch(`/api/reconciliation/${statementId}/reject`, {
         method: "POST",
@@ -214,6 +229,10 @@ export default function ReconciliationReviewPage() {
     }
     setReview((prev) => (prev ? (applyApprovals(prev, matchIds, new Date().toISOString()) as ReviewData) : prev));
     showToast(`${matchIds.length} ${matchIds.length === 1 ? "match" : "matches"} approved`);
+    setSessionActions((prev) => [
+      { at: new Date().toISOString(), kind: "approve", matchIds, label: `Approved ${matchIds.length} match${matchIds.length === 1 ? "" : "es"}` },
+      ...prev,
+    ]);
     try {
       const res = await fetch(`/api/reconciliation/${statementId}/approve`, {
         method: "POST",
@@ -284,6 +303,47 @@ export default function ReconciliationReviewPage() {
     }
   }
 
+  async function undoApproval(action: SessionAction) {
+    if (!statementId) return;
+    setUndoingMatchIds((prev) => new Set([...prev, ...action.matchIds]));
+    try {
+      const res = await fetch(`/api/reconciliation/${statementId}/unapprove`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ matchIds: action.matchIds }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        showToast(data.error ?? "Couldn't undo the approval.");
+        return;
+      }
+      setSessionActions((prev) => prev.filter((a) => a !== action));
+      // Undo is rare and must reflect server truth, so a full refetch is
+      // correct here — unlike approve/reject, which optimistically patch.
+      await load();
+      showToast("Approval undone");
+    } catch {
+      showToast("Couldn't undo the approval.");
+    } finally {
+      setUndoingMatchIds((prev) => {
+        const next = new Set(prev);
+        for (const id of action.matchIds) next.delete(id);
+        return next;
+      });
+    }
+  }
+
+  function exportSessionCsv() {
+    const rows = [["time", "action", "detail"], ...sessionActions.map((a) => [a.at, a.kind, a.label])];
+    const csv = rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\n");
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `reconciliation-session-${statementId}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
   async function setDefaultCategory(merchantName: string, category: string) {
     try {
       const res = await fetch("/api/reconciliation/preferences", {
@@ -346,6 +406,12 @@ export default function ReconciliationReviewPage() {
   const reviewed = (initialOpenCount ?? openBanks.length) - openBanks.length;
   const reviewedPct = initialOpenCount ? Math.round((reviewed / initialOpenCount) * 100) : 0;
   const reportCurrency = review.bankTransactions[0]?.currency ?? null;
+  const readySummary = summarizeSections(rows.map((r) => ({ row: r })));
+  const approvedThisSession = sessionActions
+    .filter((a) => a.kind === "approve")
+    .reduce((sum, a) => sum + a.matchIds.length, 0);
+  const rejectedThisSession = sessionActions.filter((a) => a.kind === "reject").length;
+  const recentActions = sessionActions.slice(0, 5);
 
   return (
     <div>
@@ -357,6 +423,42 @@ export default function ReconciliationReviewPage() {
       <div style={{ ...progressTrack(), marginBottom: 20 }}>
         <div style={progressFill(reviewedPct)} />
       </div>
+
+      {sessionActions.length > 0 && (
+        <div style={shellCard({ padding: 20, marginBottom: 20 })}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+            <div style={{ fontSize: 15, fontWeight: 600 }}>This session</div>
+            <button style={shellButton("outline", "sm")} onClick={exportSessionCsv}>
+              Export session (CSV)
+            </button>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 16, marginBottom: 16 }}>
+            <ReportStat label="Approved" value={String(approvedThisSession)} />
+            <ReportStat label="Rejected" value={String(rejectedThisSession)} />
+            <ReportStat label="Still open" value={String(openBanks.length)} />
+            <ReportStat label="Ready to approve" value={String(readySummary.ready)} />
+          </div>
+          {recentActions.map((action) => (
+            <div
+              key={`${action.at}-${action.matchIds.join(",")}`}
+              style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13, padding: "6px 0", borderTop: `1px dashed ${shellColor.cardBorder}` }}
+            >
+              <span style={{ color: shellColor.inkSoft }}>
+                {new Date(action.at).toLocaleTimeString("en-GB")} — {action.label}
+              </span>
+              {action.kind === "approve" && (
+                <button
+                  style={shellButton("outline", "sm")}
+                  onClick={() => undoApproval(action)}
+                  disabled={action.matchIds.some((id) => undoingMatchIds.has(id))}
+                >
+                  Undo
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
 
       {review.qbTransactions.length === 0 && (
         <div style={shellCard({ padding: "16px 20px", marginBottom: 20, borderLeft: `3px solid ${shellColor.medium}` })}>
@@ -413,9 +515,14 @@ export default function ReconciliationReviewPage() {
       )}
 
       {openBanks.length === 0 && (
-        <button style={{ ...shellButton("primary", "lg"), marginTop: 20 }} onClick={generateReport} disabled={generatingReport}>
-          {generatingReport ? "Generating…" : "Generate reconciliation report"}
-        </button>
+        <>
+          <p style={{ margin: "12px 0 0" }}>
+            <span style={pill(shellColor.high, shellColor.highBg)}>Ready to post — all transactions reviewed</span>
+          </p>
+          <button style={{ ...shellButton("primary", "lg"), marginTop: 12 }} onClick={generateReport} disabled={generatingReport}>
+            {generatingReport ? "Generating…" : "Generate reconciliation report"}
+          </button>
+        </>
       )}
 
       {report && (
