@@ -5,12 +5,12 @@ dotenv.config();
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 export interface ExtractionResult {
-  merchant: string; merchant_confidence: number;
-  invoice_number: string; invoice_number_confidence: number;
-  transaction_date: string; date_confidence: number;
-  amount: number; amount_confidence: number;
-  tax_amount: number; tax_confidence: number;
-  category: string; category_confidence: number;
+  merchant: string; merchant_confidence: number; merchant_confidence_reason: string;
+  invoice_number: string; invoice_number_confidence: number; invoice_number_confidence_reason: string;
+  transaction_date: string; date_confidence: number; date_confidence_reason: string;
+  amount: number; amount_confidence: number; amount_confidence_reason: string;
+  tax_amount: number; tax_confidence: number; tax_confidence_reason: string;
+  category: string; category_confidence: number; category_confidence_reason: string;
   overall_confidence: number;
   reason: string | null;
 }
@@ -23,21 +23,22 @@ const SYSTEM_PROMPT = `You are an expert accounting document parser. Extract the
 - tax_amount: tax/VAT amount as number (0 if not visible)
 - category: best GL category from [Software & SaaS, Travel, Meals, Office Supplies, Materials, Rent, Utilities, Fuel, Merchandise, Professional Services, Uncategorized]
 
-Return ONLY valid JSON with these exact keys and confidence scores (0-100):
+For every field, also give a confidence score (0-100) AND a one-sentence reason for that score — always populated, even at high confidence (e.g. "Standard date format, clearly printed" or "Handwritten, difficult to read").
+
+Return ONLY valid JSON with these exact keys:
 {
-  "merchant": "...", "merchant_confidence": 95,
-  "invoice_number": "...", "invoice_number_confidence": 88,
-  "transaction_date": "2026-07-24", "date_confidence": 99,
-  "amount": 184.32, "amount_confidence": 97,
-  "tax_amount": 0, "tax_confidence": 60,
-  "category": "Office Supplies", "category_confidence": 82,
+  "merchant": "...", "merchant_confidence": 95, "merchant_confidence_reason": "...",
+  "invoice_number": "...", "invoice_number_confidence": 88, "invoice_number_confidence_reason": "...",
+  "transaction_date": "2026-07-24", "date_confidence": 99, "date_confidence_reason": "...",
+  "amount": 184.32, "amount_confidence": 97, "amount_confidence_reason": "...",
+  "tax_amount": 0, "tax_confidence": 60, "tax_confidence_reason": "...",
+  "category": "Office Supplies", "category_confidence": 82, "category_confidence_reason": "...",
   "overall_confidence": 92,
   "reason": null
 }
 
 Set overall_confidence as the average of all field confidences.
-If any field is unclear, set its confidence below 70 and provide a reason string explaining the ambiguity.
-Be precise. Do not guess dates or amounts.`;
+Be precise. Do not guess dates or amounts. Do not guess text on damaged or illegible documents — lower the confidence and say so in the reason instead.`;
 
 export async function extractDocument(base64Image: string, mimeType: string): Promise<ExtractionResult> {
   const response = await openai.chat.completions.create({
