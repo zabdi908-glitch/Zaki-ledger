@@ -700,6 +700,64 @@ export async function approveMatches(
 }
 
 /**
+ * Undo: clears approval on a set of matches, restoring them to the open
+ * (unapproved) pool, with the same audit-log entry approveMatches writes —
+ * "undo" is a real, logged action, not a silent state rewind. Only matches
+ * that belong to this statement/user and are currently approved are
+ * touched; the returned count is how many actually were.
+ */
+export async function unapproveMatches(userId: string, statementId: string, matchIds: string[]): Promise<number> {
+  const allMatches = await listMatchesForStatement(userId, statementId);
+  const toRevert = allMatches.filter((m) => matchIds.includes(m.id) && m.approvedAt !== null);
+  if (toRevert.length === 0) return 0;
+
+  const nowIso = new Date().toISOString();
+  const db = getSupabase();
+
+  if (!db) {
+    for (const m of toRevert) {
+      const idx = mem.matches.findIndex((row) => row.id === m.id);
+      if (idx >= 0) {
+        mem.matches[idx] = { ...mem.matches[idx], approvedBy: null, approvedAt: null };
+      }
+      mem.auditLog.push({
+        id: newId(),
+        reconciliationMatchId: m.id,
+        action: "match_unapproved",
+        actionBy: userId,
+        actionAt: nowIso,
+        oldConfidence: m.confidence,
+        newConfidence: m.confidence,
+      });
+    }
+  } else {
+    const { error: updateError } = await db
+      .from("reconciliation_matches")
+      .update({ approved_by: null, approved_at: null })
+      .in(
+        "id",
+        toRevert.map((m) => m.id),
+      );
+    if (updateError) throw new Error(`Failed to unapprove matches: ${updateError.message}`);
+
+    const { error: auditError } = await db.from("reconciliation_audit_log").insert(
+      toRevert.map((m) => ({
+        id: newId(),
+        reconciliation_match_id: m.id,
+        action: "match_unapproved",
+        action_by: userId,
+        action_at: nowIso,
+        old_confidence: m.confidence,
+        new_confidence: m.confidence,
+      })),
+    );
+    if (auditError) throw new Error(`Failed to write audit log: ${auditError.message}`);
+  }
+
+  return toRevert.length;
+}
+
+/**
  * Variance here is `sum(unmatched bank amounts) - sum(unmatched QB amounts)`
  * — a working proxy for how far apart the two ledgers currently are, not a
  * true bank-vs-book balance difference. A real balance-based variance needs

@@ -20,6 +20,8 @@ const {
   computeAndPersistMatches,
   createManualMatch,
   approveMatches,
+  unapproveMatches,
+  listMatchesForStatement,
   getReconciliationReport,
   getBankStatement,
   listQbTransactionsForPeriod,
@@ -164,5 +166,42 @@ describe("bank reconciliation store (in-memory)", () => {
 
     const bobsView = await getBankStatement(bob, aliceStatement.id);
     expect(bobsView).toBeNull();
+  });
+
+  it("unapproveMatches clears approval and returns the count", async () => {
+    const userId = freshUser();
+
+    const statement = await saveBankStatement(userId, "statement.csv", "csv", {
+      transactions: [
+        {
+          transactionDate: "2026-07-15",
+          postedDate: null,
+          merchant: "Vendor X",
+          description: "Vendor X",
+          amount: 100,
+          currency: "GBP",
+          transactionId: null,
+          memo: null,
+        },
+      ],
+      openingBalance: null,
+      closingBalance: null,
+      periodStart: "2026-07-01",
+      periodEnd: "2026-07-31",
+      currency: "GBP",
+    });
+
+    await saveQbTransactions(userId, [{ postedDate: "2026-07-15", amount: 100, description: "Vendor X" }]);
+    const computed = await computeAndPersistMatches(userId, statement.id);
+    const matchId = computed.matches[0].id;
+    await approveMatches(userId, statement.id, [matchId], userId);
+
+    const reverted = await unapproveMatches(userId, statement.id, [matchId]);
+    expect(reverted).toBe(1);
+
+    const matches = await listMatchesForStatement(userId, statement.id);
+    const reopened = matches.find((m) => m.id === matchId);
+    expect(reopened?.approvedAt).toBeNull();
+    expect(reopened?.approvedBy).toBeNull();
   });
 });

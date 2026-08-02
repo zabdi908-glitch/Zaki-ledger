@@ -385,7 +385,7 @@ create unique index if not exists reconciliation_reports_statement_idx
 create table if not exists reconciliation_audit_log (
   id                        uuid primary key default gen_random_uuid(),
   reconciliation_match_id   uuid not null references reconciliation_matches(id),
-  action                    text not null,   -- 'match_created' | 'match_approved' | 'match_rejected'
+  action                    text not null,   -- 'match_created' | 'match_approved' | 'match_rejected' | 'match_unapproved'
   action_by                 uuid references auth.users(id),
   action_at                 timestamptz not null default now(),
   old_confidence            numeric(4,3),
