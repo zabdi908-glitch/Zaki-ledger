@@ -19,6 +19,7 @@ import { requireUser } from "@/lib/auth";
  *   {"type":"start","total":5}
  *   {"type":"result","index":1,"filename":"receipt-2.png","status":"success",...}
  *   {"type":"result","index":0,"filename":"receipt-1.png","status":"success",...}
+ *   {"type":"duplicate","index":1,"matchIndex":0}
  *   {"type":"summary","total":5,"succeeded":4,"failed":1,"queued":4}
  *
  * Streaming rather than one JSON array at the end is a deliberate choice, and the
@@ -48,8 +49,49 @@ interface BatchFileResult {
   warning?: string;
   /** Set when the read succeeded but the document couldn't be queued. */
   queueError?: string | null;
+  /**
+   * Set when this document matches one already approved (or already queued
+   * from an earlier upload) — the same check extractOneDocument runs for the
+   * single-file route. Two copies of the same document arriving in THIS batch
+   * together are a separate case (see the "duplicate" stream event below),
+   * since files are read in parallel and neither has a queue row yet for the
+   * other to match against.
+   */
+  duplicate?: {
+    documentType: string;
+    supplierName: string;
+    invoiceNumber: string;
+    processedOn: string;
+    existingId: string;
+  } | null;
   /** Why the file failed outright. Only on status "error". */
   reason?: string;
+}
+
+/**
+ * Same identity rule as lib/store.ts's findDuplicateInvoice/findDuplicateReceipt
+ * (supplier + invoice number for an invoice; supplier + date + total for a
+ * receipt, which usually has no number), applied between two reads in the same
+ * batch rather than against the database.
+ */
+function sameDocumentIdentity(a: InvoiceExtraction, b: InvoiceExtraction): boolean {
+  const supplierA = a.supplierName.value.trim().toLowerCase();
+  const supplierB = b.supplierName.value.trim().toLowerCase();
+  if (!supplierA || supplierA !== supplierB) return false;
+
+  const typeA = a.documentType?.value ?? "invoice";
+  const typeB = b.documentType?.value ?? "invoice";
+  if (typeA !== typeB) return false;
+
+  if (typeA === "invoice") {
+    const numberA = a.invoiceNumber.value.trim();
+    const numberB = b.invoiceNumber.value.trim();
+    return numberA !== "" && numberA === numberB;
+  }
+
+  const dateA = a.invoiceDate.value.trim();
+  const dateB = b.invoiceDate.value.trim();
+  return dateA !== "" && dateA === dateB && Math.abs(a.total.value - b.total.value) < 0.005;
 }
 
 /** Confidence per field, for the gate. No human edits exist at upload time. */
@@ -94,7 +136,7 @@ export async function POST(req: NextRequest) {
       let queued = 0;
 
       try {
-        await mapWithConcurrency(
+        const results = await mapWithConcurrency(
           files,
           EXTRACT_CONCURRENCY,
           async (file, index): Promise<BatchFileResult> => {
@@ -125,6 +167,7 @@ export async function POST(req: NextRequest) {
                     ? undefined
                     : gateReasonSummary(gate, doc.extraction.documentType?.value ?? "invoice"),
                 queueError: doc.queueError,
+                duplicate: doc.duplicate,
               };
             } catch (err) {
               // One unreadable file is one failed row. The rest of the batch is
@@ -148,6 +191,24 @@ export async function POST(req: NextRequest) {
             write(result);
           },
         );
+
+        // Same-batch duplicates: extractOneDocument's own check can't see these —
+        // files are read in parallel, so nothing is in `invoices` yet for a
+        // sibling upload to match against. Now that every file in the batch has
+        // landed, compare them against each other directly. Emitted as separate
+        // "duplicate" lines (rather than folded into the "result" lines already
+        // sent) because a result line for the first copy in a pair may already
+        // be on the wire before its duplicate is read.
+        for (let i = 0; i < results.length; i++) {
+          for (let j = i + 1; j < results.length; j++) {
+            const a = results[i];
+            const b = results[j];
+            if (a.status !== "success" || b.status !== "success" || !a.extraction || !b.extraction) continue;
+            if (sameDocumentIdentity(a.extraction, b.extraction)) {
+              write({ type: "duplicate", index: b.index, matchIndex: a.index });
+            }
+          }
+        }
 
         write({
           type: "summary",

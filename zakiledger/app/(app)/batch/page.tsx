@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useShellToast } from "@/components/AppShell";
 import { formatMoney } from "@/lib/currency";
+import { detectQueueDuplicates, type QueueItem } from "@/lib/extraction-insights";
 import {
   disabledOverride,
   microLabel,
@@ -18,18 +19,9 @@ import {
   tierFor,
 } from "@/lib/shell-theme";
 
-type PendingItem = {
-  id: string;
-  documentType: "invoice" | "receipt";
-  merchantName: string;
-  invoiceNumber: string;
-  invoiceDate: string;
-  currency: string;
-  total: number;
-  overallConfidence: number;
-};
+type PendingItem = QueueItem;
 
-type FilterTier = "all" | "medium" | "low";
+type FilterTier = "all" | "medium" | "low" | "duplicate";
 
 /** Batch Review (extraction) — table version of /review, same real data source. */
 export default function BatchReviewPage() {
@@ -65,29 +57,80 @@ export default function BatchReviewPage() {
     load();
   }, [load]);
 
+  const duplicates = useMemo(() => detectQueueDuplicates(items), [items]);
+
   const rows = useMemo(() => {
-    let list = items.map((it) => ({ item: it, tier: tierFor(Math.round(it.overallConfidence * 100)) }));
-    if (filter !== "all") list = list.filter((r) => r.tier.tier === filter);
+    let list = items.map((it) => ({
+      item: it,
+      tier: tierFor(Math.round(it.overallConfidence * 100)),
+      isDuplicate: duplicates.has(it.id),
+    }));
+    if (filter === "duplicate") list = list.filter((r) => r.isDuplicate);
+    else if (filter !== "all") list = list.filter((r) => r.tier.tier === filter);
     list = list.slice().sort((a, b) => (sortDesc ? b.item.overallConfidence - a.item.overallConfidence : a.item.overallConfidence - b.item.overallConfidence));
     return list;
-  }, [items, filter, sortDesc]);
+  }, [items, filter, sortDesc, duplicates]);
 
-  async function bulkApprove() {
-    if (selected.size === 0) return;
+  /** Approve one or more queue items and report exactly what actually happened —
+   * the endpoint returns HTTP 200 even for items the gate blocks, so the caller
+   * has to read each item's own result rather than trusting `res.ok` alone. */
+  async function approveIds(ids: string[]) {
+    if (ids.length === 0) return;
     setBusy(true);
+    setError(null);
     try {
       const res = await fetch("/api/approve/bulk", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ documentIds: [...selected] }),
+        body: JSON.stringify({ documentIds: ids }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         setError(data.error ?? "Approve failed.");
         return;
       }
-      const n = selected.size;
-      showToast(`${n} ${n === 1 ? "item" : "items"} approved`);
+      const results = (data.results ?? []) as Array<{ status: string; reason?: string; merchantName: string }>;
+      const approved = results.filter((r) => r.status === "approved").length;
+      const notApproved = results.filter((r) => r.status !== "approved");
+      if (approved > 0) showToast(`${approved} ${approved === 1 ? "item" : "items"} approved`);
+      if (notApproved.length > 0) {
+        const reasons = [...new Set(notApproved.map((r) => r.reason).filter(Boolean))];
+        setError(
+          `${notApproved.length} item${notApproved.length === 1 ? "" : "s"} couldn't be approved: ${reasons.join("; ")}`,
+        );
+      }
+      setSelected(new Set());
+      await load();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function bulkApprove() {
+    await approveIds([...selected]);
+  }
+
+  /** Delete one or more queue items and only report the ones that actually went —
+   * a 404/409 (already resolved elsewhere) must not be reported as "rejected". */
+  async function rejectIds(ids: string[]) {
+    if (ids.length === 0) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const results = await Promise.all(
+        ids.map(async (id) => {
+          const res = await fetch(`/api/pending/${id}`, { method: "DELETE" });
+          if (res.ok) return { id, ok: true as const };
+          const data = await res.json().catch(() => ({}));
+          return { id, ok: false as const, error: data.error ?? "Couldn't discard." };
+        }),
+      );
+      const succeeded = results.filter((r) => r.ok).length;
+      const failed = results.filter((r) => !r.ok);
+      if (succeeded > 0) showToast(`${succeeded} ${succeeded === 1 ? "item" : "items"} rejected`);
+      if (failed.length > 0) {
+        setError(`${failed.length} item${failed.length === 1 ? "" : "s"} couldn't be rejected: ${failed[0].error}`);
+      }
       setSelected(new Set());
       await load();
     } finally {
@@ -96,17 +139,7 @@ export default function BatchReviewPage() {
   }
 
   async function bulkReject() {
-    if (selected.size === 0) return;
-    setBusy(true);
-    try {
-      await Promise.all([...selected].map((id) => fetch(`/api/pending/${id}`, { method: "DELETE" })));
-      const n = selected.size;
-      showToast(`${n} ${n === 1 ? "item" : "items"} rejected`);
-      setSelected(new Set());
-      await load();
-    } finally {
-      setBusy(false);
-    }
+    await rejectIds([...selected]);
   }
 
   if (loading) {
@@ -143,6 +176,7 @@ export default function BatchReviewPage() {
             <option value="all">All confidence</option>
             <option value="medium">Medium (70–95%)</option>
             <option value="low">Low (&lt;70%)</option>
+            <option value="duplicate">Possible duplicates</option>
           </select>
           <button style={shellButton("outline")} onClick={() => setSortDesc((d) => !d)}>
             Sort: {sortDesc ? "Lowest confidence first" : "Highest confidence first"}
@@ -191,7 +225,7 @@ export default function BatchReviewPage() {
           <div>Confidence</div>
           <div>Actions</div>
         </div>
-        {rows.map(({ item, tier }) => (
+        {rows.map(({ item, tier, isDuplicate }) => (
           <div
             key={item.id}
             style={{
@@ -216,7 +250,14 @@ export default function BatchReviewPage() {
                 })
               }
             />
-            <div style={{ fontWeight: 600 }}>{item.merchantName || "(no merchant)"}</div>
+            <div style={{ fontWeight: 600 }}>
+              {item.merchantName || "(no merchant)"}
+              {isDuplicate && (
+                <span style={{ ...pill(shellColor.dupe, shellColor.dupeBg, "sm"), marginLeft: 8 }}>
+                  ⧉ Possible duplicate
+                </span>
+              )}
+            </div>
             <div style={{ ...shellFigures, color: shellColor.inkSoft }}>{item.invoiceNumber || "N/A"}</div>
             <div style={{ ...shellFigures, color: shellColor.inkSoft }}>{item.invoiceDate}</div>
             <div style={{ ...shellFigures, fontWeight: 600 }}>{formatMoney(item.total, item.currency)}</div>
@@ -227,28 +268,16 @@ export default function BatchReviewPage() {
             </div>
             <div style={{ display: "flex", gap: 6 }}>
               <button
-                style={shellButton("success", "sm")}
-                onClick={async () => {
-                  const res = await fetch("/api/approve/bulk", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ documentIds: [item.id] }),
-                  });
-                  if (res.ok) {
-                    showToast("Approved");
-                    await load();
-                  }
-                }}
+                style={busy ? { ...shellButton("success", "sm"), ...disabledOverride() } : shellButton("success", "sm")}
+                disabled={busy}
+                onClick={() => approveIds([item.id])}
               >
                 Approve
               </button>
               <button
-                style={shellButton("dangerOutline", "sm")}
-                onClick={async () => {
-                  await fetch(`/api/pending/${item.id}`, { method: "DELETE" });
-                  showToast("Rejected");
-                  await load();
-                }}
+                style={busy ? { ...shellButton("dangerOutline", "sm"), ...disabledOverride() } : shellButton("dangerOutline", "sm")}
+                disabled={busy}
+                onClick={() => rejectIds([item.id])}
               >
                 Reject
               </button>

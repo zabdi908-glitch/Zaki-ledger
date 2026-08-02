@@ -46,6 +46,7 @@ async function uploadBatch(filenames: string[]) {
     messages,
     start: messages.find((m) => m.type === "start"),
     results: messages.filter((m) => m.type === "result"),
+    duplicates: messages.filter((m) => m.type === "duplicate"),
     summary: messages.find((m) => m.type === "summary"),
   };
 }
@@ -112,6 +113,28 @@ describe("uploading five files at once", () => {
 
     expect(summary.queued).toBe(2);
     expect(after - before).toBe(2);
+  });
+
+  it("flags two copies of the same document uploaded together, even though neither is in the ledger yet", async () => {
+    // Neither filename matches a demo keyword, so both fall through to the same
+    // fixed invoice sample — same supplier, same invoice number. Upload-time
+    // duplicate detection against the database can't catch this (nothing is
+    // approved yet); this is the same-batch cross-check catching it instead.
+    const { results, duplicates, summary } = await uploadBatch(["alpha.pdf", "bravo.pdf"]);
+
+    expect(results).toHaveLength(2);
+    expect(results.every((r: any) => r.status === "success")).toBe(true);
+    expect(duplicates).toHaveLength(1);
+    expect(duplicates[0].index).toBe(1);
+    expect(duplicates[0].matchIndex).toBe(0);
+    // Still a normal successful, queued extraction — duplicate is a warning, not a block.
+    expect(summary.succeeded).toBe(2);
+    expect(summary.queued).toBe(2);
+  });
+
+  it("does not flag two different documents in the same batch", async () => {
+    const { duplicates } = await uploadBatch(["invoice-alpha.pdf", "messy-till-receipt.png"]);
+    expect(duplicates).toHaveLength(0);
   });
 
   it("rejects a request with no files at all", async () => {

@@ -153,6 +153,10 @@ export default function ReviewPage() {
       showToast(`${fieldLabels(item.documentType)[field]} corrected — saved for next time`);
       setApprovedIds((prev) => new Set([...prev, id]));
       await load();
+    } else if (data.status === "duplicate") {
+      setError(`${item.merchantName || "This document"} looks like a duplicate — resolve it before approving.`);
+    } else if (!res.ok) {
+      setError(data.error ?? "Couldn't save that edit — try again.");
     } else {
       // Not ready to fully approve yet (other fields still gating) — update
       // the local copy so the panel's gate recomputes with the corrected value.
