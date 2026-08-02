@@ -502,6 +502,34 @@ export async function listRecentApprovedInvoices(
 }
 
 /**
+ * All approved invoices for a user, with the full identity fields the
+ * bank-to-invoice matcher (lib/invoice-matching.ts) needs — unlike
+ * listRecentApprovedInvoices above, which only returns the two fields the
+ * Dashboard's activity feed uses. Capped at `limit` (newest first) since a
+ * matching pass compares every bank line against every candidate.
+ */
+export async function listApprovedInvoicesForMatching(userId: string, limit = 500): Promise<StoredInvoiceSummary[]> {
+  const db = getSupabase();
+  if (!db) {
+    return memInvoices
+      .filter((i) => i.userId === userId && i.status === "approved")
+      .slice(-limit)
+      .reverse()
+      .map(({ userId: _u, ...rest }) => rest);
+  }
+
+  const { data, error } = await db
+    .from("invoices")
+    .select(DUP_COLUMNS)
+    .eq("user_id", userId)
+    .eq("status", "approved")
+    .order("created_at", { ascending: false })
+    .limit(limit);
+  if (error) throw new Error(`Failed to load approved invoices: ${error.message}`);
+  return (data ?? []).map((r) => mapSummaryRow(r as Record<string, unknown>));
+}
+
+/**
  * Find an existing invoice with the same supplier + invoice number (approved or
  * pending), for duplicate detection. Returns the most recent match, or null.
  * Scope is deliberately just supplier + invoice number — a supplier re-sending a
