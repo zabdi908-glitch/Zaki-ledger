@@ -4,6 +4,10 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { useShellToast } from "@/components/AppShell";
 import ConnectionChip, { useConnectedProvider } from "@/components/ConnectionChip";
+import { buildReviewRows } from "@/lib/reconciliation-insights";
+import { estimateReviewSeconds, formatEstimate, summarizeSections } from "@/lib/review-summary";
+import { SECTIONS } from "@/lib/review-sections";
+import type { ReconciliationMatch } from "@/lib/reconciliation-schema";
 import {
   disabledOverride,
   pageSubtitle,
@@ -41,9 +45,9 @@ export default function ReconciliationUploadPage() {
   const [statementId, setStatementId] = useState<string | null>(null);
   const [transactionCount, setTransactionCount] = useState(0);
   const [matchedCount, setMatchedCount] = useState(0);
-  const [pendingCount, setPendingCount] = useState(0);
   const [qbCount, setQbCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [summary, setSummary] = useState<ReturnType<typeof summarizeSections> | null>(null);
 
   const [qbBusy, setQbBusy] = useState(false);
   const [qbError, setQbError] = useState<string | null>(null);
@@ -57,10 +61,23 @@ export default function ReconciliationUploadPage() {
     const res = await fetch(`/api/reconciliation/${id}/transactions`);
     const data = await res.json();
     if (!res.ok) throw new Error(data.error ?? "Couldn't load matches.");
-    const approved = (data.matches as { approvedAt: string | null }[]).filter((m) => m.approvedAt !== null).length;
+    const matches = data.matches as ReconciliationMatch[];
+    const approved = matches.filter((m) => m.approvedAt !== null).length;
     setMatchedCount(approved);
-    setPendingCount(data.matches.length - approved + data.unmatchedBank.length);
     setQbCount(data.qbTransactions.length);
+
+    // Same open-rows filtering the review page's board memo does, so the
+    // breakdown shown here always agrees with what the review screen shows.
+    const openMatches = matches.filter((m) => m.approvedAt === null);
+    const openBankIds = new Set([...openMatches.map((m) => m.bankTransactionId), ...(data.unmatchedBank as string[])]);
+    const openBanks = data.bankTransactions.filter((b: { id: string }) => openBankIds.has(b.id));
+    const built = buildReviewRows({
+      bankTransactions: openBanks,
+      qbTransactions: data.qbTransactions,
+      matches: openMatches,
+    });
+    setSummary(summarizeSections(built));
+
     return data;
   }
 
@@ -184,11 +201,46 @@ export default function ReconciliationUploadPage() {
       {stage === "matched" && statementId && (
         <div>
           <div style={shellCard({ padding: 32, marginBottom: 20 })}>
-            <div style={{ fontSize: 17, fontWeight: 600, marginBottom: 20 }}>
-              {matchedCount} matched ✓ · {pendingCount} need review ⚠
+            <div style={{ fontSize: 17, fontWeight: 600, marginBottom: 6 }}>
+              {transactionCount} transactions imported
             </div>
+            {matchedCount > 0 && (
+              <p style={{ margin: "0 0 12px", fontSize: 13.5, color: shellColor.inkSoft }}>{matchedCount} already approved</p>
+            )}
+            {summary && (
+              <>
+                <div style={{ ...progressTrack(), marginBottom: 6 }}>
+                  <div style={progressFill(summary.readyPct)} />
+                </div>
+                <div style={{ fontSize: 13, color: shellColor.inkSoft, marginBottom: 16 }}>
+                  {summary.readyPct}% ready to approve · {formatEstimate(estimateReviewSeconds(summary))}
+                </div>
+                {SECTIONS.filter((s) => (summary.counts.get(s.key) ?? 0) > 0).map((s) => (
+                  <button
+                    key={s.key}
+                    onClick={() => router.push(`/reconciliation/review?statementId=${statementId}&section=${s.key}`)}
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      width: "100%",
+                      padding: "10px 12px",
+                      background: "transparent",
+                      border: "none",
+                      borderLeft: `3px solid ${s.accentColor}`,
+                      marginBottom: 6,
+                      cursor: "pointer",
+                      fontSize: 14,
+                      textAlign: "left",
+                    }}
+                  >
+                    <span>{s.title}</span>
+                    <b style={shellFigures}>{summary.counts.get(s.key)}</b>
+                  </button>
+                ))}
+              </>
+            )}
             <button
-              style={shellButton("primary", "lg")}
+              style={{ ...shellButton("primary", "lg"), marginTop: 14 }}
               onClick={() => router.push(`/reconciliation/review?statementId=${statementId}`)}
             >
               Review matches

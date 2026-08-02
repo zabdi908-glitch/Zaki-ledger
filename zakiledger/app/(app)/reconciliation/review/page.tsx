@@ -14,7 +14,8 @@ import type { InvoiceSuggestion } from "@/lib/invoice-matching";
 import type { StoredInvoiceMatch } from "@/lib/invoice-match-store";
 import { ledgerImpact } from "@/lib/ledger-impact";
 import type { MerchantPreference } from "@/lib/decision-store";
-import ReviewBoard, { type ReviewRow, type ReviewSectionConfig } from "@/components/review/ReviewBoard";
+import ReviewBoard, { type ReviewRow } from "@/components/review/ReviewBoard";
+import { SECTIONS } from "@/lib/review-sections";
 import {
   pageSubtitle,
   pageTitle,
@@ -44,11 +45,6 @@ type ReportData = {
 };
 
 /**
- * Order matters: the accountant works top to bottom, so the sections that can
- * be cleared fastest come first, then the ones where we can say exactly what
- * happened, and only then the residual pile that still needs investigating.
- */
-/**
  * Approved rows drop out of `board` itself (its useMemo filters matches down
  * to `approvedAt === null` after an optimistic update), so the board's
  * "already approved" set is always empty. Hoisted to a constant because a
@@ -56,69 +52,6 @@ type ReportData = {
  * that depends on it.
  */
 const NO_APPROVED_IDS: Set<string> = new Set();
-
-const SECTIONS: ReviewSectionConfig[] = [
-  {
-    key: "ready",
-    title: "Ready to Approve",
-    accentColor: shellColor.high,
-    description: "95%+ confidence — amount, date, and merchant all match. Safe to approve as a batch.",
-    showBulkApproveAll: true,
-    bulkApprovable: true,
-  },
-  {
-    key: "review",
-    title: "Needs Review",
-    accentColor: shellColor.medium,
-    description: "Below 95% confidence, or missing an accounting match. Worth a quick look before approving.",
-  },
-  {
-    key: "duplicate",
-    title: "Possible Duplicates",
-    accentColor: shellColor.dupe,
-    description: "Two entries that look like the same transaction. Decide whether to keep both or reject one.",
-  },
-  {
-    key: "refund",
-    title: "Refunds",
-    accentColor: shellColor.refund,
-    description: "Money back from a supplier that matches an earlier charge. Confirm the pair, then approve both.",
-    bulkApprovable: true,
-  },
-  {
-    key: "reversal",
-    title: "Reversals",
-    accentColor: shellColor.reversal,
-    description: "Equal and opposite transactions that cancel each other out. Net effect on the books is nil.",
-    bulkApprovable: true,
-  },
-  {
-    key: "split",
-    title: "Split Payments",
-    accentColor: shellColor.split,
-    description: "Several transactions quoting one invoice reference — one bill or payment settled in parts.",
-    bulkApprovable: true,
-  },
-  {
-    key: "transfer",
-    title: "Transfers",
-    accentColor: shellColor.transfer,
-    description: "Money moving between your own accounts rather than in or out of the business.",
-  },
-  {
-    key: "recurring",
-    title: "Recurring Transactions",
-    accentColor: shellColor.recurring,
-    description: "Charges from a supplier that appears more than once on this statement.",
-    bulkApprovable: true,
-  },
-  {
-    key: "issue",
-    title: "Potential Issues",
-    accentColor: shellColor.low,
-    description: "No match found, a currency mismatch, or an amount large enough to flag for manual review.",
-  },
-];
 
 /**
  * Bank reconciliation, screen 2 of 3 — "Review Matches". Grouped-sections +
