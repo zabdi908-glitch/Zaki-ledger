@@ -53,7 +53,7 @@ export async function extractDocument(base64Image: string, mimeType: string): Pr
         ]
       }
     ],
-    max_tokens: 800,
+    max_tokens: 1200,
     temperature: 0.1,
     response_format: { type: 'json_object' }
   });
@@ -71,7 +71,7 @@ export async function extractFromText(text: string): Promise<ExtractionResult> {
       { role: 'user', content: `Extract all fields from this text:
 ${text}` }
     ],
-    max_tokens: 800,
+    max_tokens: 1200,
     temperature: 0.1,
     response_format: { type: 'json_object' }
   });

@@ -90,15 +90,15 @@ export default function Upload() {
             <div className="grid grid-cols-3 gap-3">
               <div className="bg-emerald-50 rounded-xl p-4">
                 <div className="text-2xl font-bold text-emerald-700">{highCount}</div>
-                <div className="text-sm text-emerald-800">Auto-approved (95%+)</div>
+                <div className="text-sm text-emerald-800">Auto-approved</div>
               </div>
               <div className="bg-amber-50 rounded-xl p-4">
                 <div className="text-2xl font-bold text-amber-700">{mediumCount}</div>
-                <div className="text-sm text-amber-800">Needs review (70–95%)</div>
+                <div className="text-sm text-amber-800">Needs review</div>
               </div>
               <div className="bg-red-50 rounded-xl p-4">
                 <div className="text-2xl font-bold text-red-700">{lowCount}</div>
-                <div className="text-sm text-red-800">Flagged (below 70%)</div>
+                <div className="text-sm text-red-800">Flagged for review (critical field below 70%)</div>
               </div>
             </div>
           </div>

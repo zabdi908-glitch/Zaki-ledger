@@ -1,10 +1,23 @@
 import { Router } from 'express';
 import multer from 'multer';
 import { supabase } from '../lib/supabase.js';
-import { extractDocument, extractFromText } from '../lib/openai.js';
+import { extractDocument, extractFromText, ExtractionResult } from '../lib/openai.js';
 import { validateLowConfidence } from '../lib/claude.js';
 import { computeReviewStatus } from '../lib/confidenceGate.js';
 import { requireAuth, AuthRequest } from '../middleware/auth.js';
+
+// Maps a Claude-fallback correction field name to the ExtractionResult confidence/reason
+// keys that need to be refreshed alongside the corrected value. Field names on the left
+// match validateLowConfidence's `corrections` keys (e.g. `transaction_date`, `tax_amount`),
+// which don't always match the confidence field's own prefix (e.g. `date_confidence`).
+const CORRECTION_FIELD_MAP: Record<string, { confidence: keyof ExtractionResult; reason: keyof ExtractionResult }> = {
+  merchant: { confidence: 'merchant_confidence', reason: 'merchant_confidence_reason' },
+  invoice_number: { confidence: 'invoice_number_confidence', reason: 'invoice_number_confidence_reason' },
+  transaction_date: { confidence: 'date_confidence', reason: 'date_confidence_reason' },
+  amount: { confidence: 'amount_confidence', reason: 'amount_confidence_reason' },
+  tax_amount: { confidence: 'tax_confidence', reason: 'tax_confidence_reason' },
+  category: { confidence: 'category_confidence', reason: 'category_confidence_reason' }
+};
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
@@ -29,20 +42,30 @@ router.post('/upload', requireAuth, upload.array('files', 20), async (req: AuthR
       const base64 = file.buffer.toString('base64');
       const extraction = await extractDocument(base64, file.mimetype);
 
-      // Fallback to Claude for low confidence
+      // Fallback to Claude for low confidence — trigger per-field, not on the stale average,
+      // so a single weak critical field (e.g. merchant at 40%) isn't masked by strong fields.
       let finalExtraction = extraction;
-      if (extraction.overall_confidence < 70) {
-        const fields = {
-          merchant: { value: extraction.merchant, confidence: extraction.merchant_confidence },
-          invoice_number: { value: extraction.invoice_number, confidence: extraction.invoice_number_confidence },
-          transaction_date: { value: extraction.transaction_date, confidence: extraction.date_confidence },
-          amount: { value: extraction.amount, confidence: extraction.amount_confidence },
-          tax_amount: { value: extraction.tax_amount, confidence: extraction.tax_confidence },
-          category: { value: extraction.category, confidence: extraction.category_confidence }
-        };
+      const fields = {
+        merchant: { value: extraction.merchant, confidence: extraction.merchant_confidence },
+        invoice_number: { value: extraction.invoice_number, confidence: extraction.invoice_number_confidence },
+        transaction_date: { value: extraction.transaction_date, confidence: extraction.date_confidence },
+        amount: { value: extraction.amount, confidence: extraction.amount_confidence },
+        tax_amount: { value: extraction.tax_amount, confidence: extraction.tax_confidence },
+        category: { value: extraction.category, confidence: extraction.category_confidence }
+      };
+      if (Object.values(fields).some((f) => f.confidence < 70)) {
         const validated = await validateLowConfidence(fields);
         if (validated.validated && Object.keys(validated.corrections).length > 0) {
           finalExtraction = { ...extraction, ...validated.corrections };
+          // The correction only carries a new value, not a new confidence/reason — refresh
+          // those too so the item isn't stuck needs_review/pending against a stale low score,
+          // and the reason text doesn't keep describing a value that no longer exists.
+          for (const field of Object.keys(validated.corrections)) {
+            const mapping = CORRECTION_FIELD_MAP[field];
+            if (!mapping) continue;
+            (finalExtraction[mapping.confidence] as number) = 75;
+            (finalExtraction[mapping.reason] as string) = 'Value corrected by Claude fallback review';
+          }
         }
       }
 

@@ -32,4 +32,9 @@ describe('computeReviewStatus', () => {
     expect(result.status).toBe('pending');
     expect(result.needsReview).toBe(false);
   });
+
+  it('fails closed into needs_review when a confidence value is missing/non-numeric', () => {
+    const result = computeReviewStatus({ merchant: undefined as any, date: 99, amount: 99 });
+    expect(result.needsReview).toBe(true);
+  });
 });
