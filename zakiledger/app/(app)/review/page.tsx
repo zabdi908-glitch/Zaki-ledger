@@ -29,6 +29,12 @@ const SECTIONS: ReviewSectionConfig[] = [
     description: "Looks like the same document was captured more than once.",
   },
   {
+    key: "flagged",
+    title: "Flagged for Review",
+    accentColor: shellColor.medium,
+    description: "Set aside for a second look — approve, reject, or unflag from here.",
+  },
+  {
     key: "issue",
     title: "Potential Issues",
     accentColor: shellColor.low,
@@ -44,6 +50,11 @@ type PendingListItem = {
   invoiceDate: string;
   currency: string;
   total: number;
+  subtotal?: number | null;
+  tax?: number | null;
+  taxItemized?: boolean;
+  documentTypeConfidence?: number;
+  perFieldConfidence?: Partial<Record<ReviewableField, number>>;
   overallConfidence: number;
 };
 
@@ -60,6 +71,7 @@ export default function ReviewPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [approvedIds, setApprovedIds] = useState<Set<string>>(new Set());
+  const [flaggedIds, setFlaggedIds] = useState<Set<string>>(new Set());
   const [detail, setDetail] = useState<Record<string, InvoiceExtraction>>({});
 
   const load = useCallback(async () => {
@@ -82,6 +94,11 @@ export default function ReviewPage() {
             currency: d.currency,
             total: d.total,
             overallConfidence: d.overallConfidence,
+            perFieldConfidence: d.perFieldConfidence,
+            taxItemized: d.taxItemized,
+            documentTypeConfidence: d.documentTypeConfidence,
+            subtotal: d.subtotal,
+            tax: d.tax,
           }),
         ),
       );
@@ -124,6 +141,13 @@ export default function ReviewPage() {
         approvedCount += 1;
       } else if (data.status === "duplicate") {
         setError(`${item.merchantName || "This document"} looks like a duplicate — resolve it before approving.`);
+      } else if (data.status === "blocked") {
+        // The server re-ran the gate on the final values and the document isn't
+        // postable yet — tell the human which field(s) still block rather than
+        // pretending the approve went through.
+        setError(
+          `${item.merchantName || "This document"} can't be approved yet: ${data.reason ?? "fix the flagged fields first."}`,
+        );
       } else {
         setError(data.error ?? "Couldn't approve — needs a closer look.");
       }
@@ -134,9 +158,55 @@ export default function ReviewPage() {
     await load();
   }
 
+  /** Flagging is a review-session action (no API — it's a local "set aside for
+   * a second look" marker): toggling moves the row into/out of the Flagged
+   * section without touching the queue entry. The row keeps its real approve /
+   * reject actions either way. */
   function flag(id: string) {
     const item = items.find((i) => i.id === id);
-    showToast(`${item?.merchantName || "Document"} flagged for a second look`);
+    const name = item?.merchantName || "Document";
+    const wasFlagged = flaggedIds.has(id);
+    setFlaggedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+    showToast(wasFlagged ? `${name} removed from flagged` : `${name} flagged for a second look`);
+  }
+
+  /** Reject one or more queue items — DELETE /api/pending/[id], mirroring the
+   * batch screen's reject UX. Only the ones that actually went are reported:
+   * a 404/409 (already resolved elsewhere) must not read as "rejected". */
+  async function reject(ids: string[]) {
+    if (ids.length === 0) return;
+    const results = await Promise.all(
+      ids.map(async (id) => {
+        const res = await fetch(`/api/pending/${id}`, { method: "DELETE" });
+        if (res.ok) return { id, ok: true as const };
+        const data = await res.json().catch(() => ({}));
+        return { id, ok: false as const, error: data.error ?? "Couldn't discard." };
+      }),
+    );
+    const succeeded = results.filter((r) => r.ok).length;
+    const failed = results.filter((r) => !r.ok);
+    if (succeeded > 0) showToast(`${succeeded} ${succeeded === 1 ? "document" : "documents"} rejected`);
+    if (failed.length > 0) {
+      setError(
+        `${failed.length} ${failed.length === 1 ? "document" : "documents"} couldn't be rejected: ${failed[0].error}`,
+      );
+    }
+    setApprovedIds((prev) => {
+      const next = new Set(prev);
+      ids.forEach((id) => next.delete(id));
+      return next;
+    });
+    setFlaggedIds((prev) => {
+      const next = new Set(prev);
+      ids.forEach((id) => next.delete(id));
+      return next;
+    });
+    await load();
   }
 
   async function editField(id: string, field: ReviewableField, newValue: string) {
@@ -155,6 +225,16 @@ export default function ReviewPage() {
       await load();
     } else if (data.status === "duplicate") {
       setError(`${item.merchantName || "This document"} looks like a duplicate — resolve it before approving.`);
+    } else if (data.status === "blocked") {
+      // The server re-ran the gate on the edited values and other fields still
+      // block — keep the local copy updated (so this field's bar shows 100%)
+      // and say what still needs attention rather than pretending the edit
+      // approved the document (Bug 4: editing one field used to clear the lot).
+      setDetail((prev) => ({
+        ...prev,
+        [id]: { ...extraction, [field]: { value: newValue, confidence: 1 } } as InvoiceExtraction,
+      }));
+      showToast(data.reason ?? "Still blocked — check the remaining fields");
     } else if (!res.ok) {
       setError(data.error ?? "Couldn't save that edit — try again.");
     } else {
@@ -178,7 +258,14 @@ export default function ReviewPage() {
 
   const openItems = items.filter((i) => !approvedIds.has(i.id));
   const dupes = detectQueueDuplicates(openItems);
-  const built = openItems.map((item) => ({ item, ...buildQueueRow(item, dupes.has(item.id)) }));
+  const built = openItems.map((item) => {
+    const { row, gate } = buildQueueRow(item, dupes.has(item.id));
+    // Flagging moves the row out of its gate-derived section into "Flagged"
+    // (and back, when unflagged) — a review-session action, not a change to
+    // the underlying queue entry.
+    if (flaggedIds.has(item.id)) row.section = "flagged";
+    return { item, row, gate };
+  });
 
   return (
     <div>
@@ -195,6 +282,7 @@ export default function ReviewPage() {
           approvedIds={new Set()}
           onApprove={approve}
           onFlag={flag}
+          onReject={reject}
           heroTitle="Ready to approve"
           heroDescription="Every critical field cleared 80%+ confidence and the numbers add up."
           renderPanel={(row) => {

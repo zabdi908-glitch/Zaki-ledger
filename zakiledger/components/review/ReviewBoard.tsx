@@ -18,6 +18,7 @@ export type ReviewSectionKey =
   | "ready"
   | "review"
   | "duplicate"
+  | "flagged"
   | "refund"
   | "reversal"
   | "split"
@@ -99,6 +100,10 @@ export interface ReviewBoardProps {
   approvedIds: Set<string>;
   onApprove: (ids: string[]) => void;
   onFlag: (id: string) => void;
+  /** Wire to DELETE /api/pending/[id]. When omitted, the row and bulk-bar
+   * reject controls are hidden (the reconciliation board rejects from its
+   * panel instead). */
+  onReject?: (ids: string[]) => void;
   renderPanel: (row: ReviewRow) => ReactNode;
   heroTitle: string;
   heroDescription: string;
@@ -130,6 +135,7 @@ export default function ReviewBoard({
   approvedIds,
   onApprove,
   onFlag,
+  onReject,
   renderPanel,
   heroTitle,
   heroDescription,
@@ -208,6 +214,18 @@ export default function ReviewBoard({
 
   function approve(ids: string[]) {
     onApprove(ids);
+    setSelected((prev) => {
+      const next = new Set(prev);
+      ids.forEach((id) => next.delete(id));
+      return next;
+    });
+    if (openPanelId && ids.includes(openPanelId)) setOpenPanelId(null);
+  }
+
+  /** Same shape as approve: the page owns the DELETE call; the board owns
+   * clearing its selection and closing a panel on a rejected row. */
+  function reject(ids: string[]) {
+    onReject?.(ids);
     setSelected((prev) => {
       const next = new Set(prev);
       ids.forEach((id) => next.delete(id));
@@ -348,6 +366,19 @@ export default function ReviewBoard({
           >
             Clear
           </button>
+          {onReject && (
+            <button
+              style={{
+                ...shellButton("dangerOutline", "sm"),
+                background: "transparent",
+                color: shellColor.low,
+                borderColor: shellColor.sidebarBorder,
+              }}
+              onClick={() => reject([...selected])}
+            >
+              Reject selected
+            </button>
+          )}
           <button style={shellButton("success", "sm")} onClick={() => approve([...selected])}>
             Approve selected
           </button>
@@ -374,6 +405,7 @@ export default function ReviewBoard({
               toggleSelected={toggleSelected}
               approve={approve}
               onFlag={onFlag}
+              onReject={onReject}
               openPanelId={openPanelId}
               setOpenPanelId={setOpenPanelId}
               focusedId={orderedVisibleIds[focusedIdx]}
@@ -564,6 +596,7 @@ function SectionBlock({
   toggleSelected,
   approve,
   onFlag,
+  onReject,
   openPanelId,
   setOpenPanelId,
   focusedId,
@@ -582,6 +615,7 @@ function SectionBlock({
   toggleSelected: (id: string) => void;
   approve: (ids: string[]) => void;
   onFlag: (id: string) => void;
+  onReject: ((ids: string[]) => void) | undefined;
   openPanelId: string | null;
   setOpenPanelId: (id: string | null) => void;
   focusedId: string | undefined;
@@ -716,6 +750,7 @@ function SectionBlock({
                   toggleSelected={() => toggleSelected(row.id)}
                   onApprove={() => approve([row.id])}
                   onFlag={() => onFlag(row.id)}
+                  onReject={onReject ? () => onReject([row.id]) : undefined}
                   onOpen={() => setOpenPanelId(row.id)}
                   focused={focusedId === row.id || openPanelId === row.id}
                   compact={compact}
@@ -756,6 +791,7 @@ function RowView({
   toggleSelected,
   onApprove,
   onFlag,
+  onReject,
   onOpen,
   focused,
   compact,
@@ -766,6 +802,7 @@ function RowView({
   toggleSelected: () => void;
   onApprove: () => void;
   onFlag: () => void;
+  onReject: (() => void) | undefined;
   onOpen: () => void;
   focused: boolean;
   /** Two-line layout instead of the fixed-width grid — see the `compactRows`
@@ -862,6 +899,19 @@ function RowView({
               >
                 {"⚑"}
               </button>
+              {onReject && (
+                <button
+                  title="Reject — remove from the queue"
+                  aria-label="Reject"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onReject();
+                  }}
+                  style={iconButtonStyle(false, "danger")}
+                >
+                  🗑
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -942,6 +992,19 @@ function RowView({
           >
             ⚑
           </button>
+          {onReject && (
+            <button
+              title="Reject — remove from the queue"
+              aria-label="Reject"
+              onClick={(e) => {
+                e.stopPropagation();
+                onReject();
+              }}
+              style={iconButtonStyle(false, "danger")}
+            >
+              🗑
+            </button>
+          )}
         </div>
       </div>
       )}
@@ -988,7 +1051,7 @@ function RowView({
   );
 }
 
-function iconButtonStyle(disabled = false): CSSProperties {
+function iconButtonStyle(disabled = false, tone: "default" | "danger" = "default"): CSSProperties {
   return {
     width: 28,
     height: 28,
@@ -1000,7 +1063,7 @@ function iconButtonStyle(disabled = false): CSSProperties {
     justifyContent: "center",
     cursor: disabled ? "not-allowed" : "pointer",
     fontSize: 13,
-    color: disabled ? shellColor.inkFainter : shellColor.inkSoft,
+    color: disabled ? shellColor.inkFainter : tone === "danger" ? shellColor.low : shellColor.inkSoft,
     opacity: disabled ? 0.5 : 1,
   };
 }

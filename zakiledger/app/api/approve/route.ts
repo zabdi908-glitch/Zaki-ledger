@@ -7,7 +7,9 @@ import {
   resolvePendingDocument,
   saveApprovedInvoice,
 } from "@/lib/store";
-import { REVIEWABLE_FIELDS, type DocumentType, type InvoiceExtraction } from "@/lib/schema";
+import { REVIEWABLE_FIELDS, type DocumentType, type InvoiceExtraction, type ReviewableField } from "@/lib/schema";
+import { isSupportedCurrency, unsupportedCurrencyReason } from "@/lib/currency";
+import { effectiveConfidence, gateApproval, gateReasonSummary } from "@/lib/validation";
 import { postApprovedBill, type PostedBill } from "@/lib/accounting";
 import { requireUser } from "@/lib/auth";
 
@@ -95,7 +97,7 @@ export async function POST(req: NextRequest) {
           `invoiceNumber="${invoiceNumber}" date="${invoiceDate ?? ""}" total=${total} ` +
           `match=${dup ? `${dup.id} (processed ${dup.createdAt})` : "none"}`,
       );
-      if (dup) {
+            if (dup) {
         return NextResponse.json({
           status: "duplicate",
           duplicate: {
@@ -107,6 +109,54 @@ export async function POST(req: NextRequest) {
           },
         });
       }
+    }
+
+    // --- Re-run the real gate on the FINAL values (Fix 4) ---------------------
+    // The review screen used to approve whatever the client sent; editing one
+    // low-confidence field cleared the whole document even when other critical
+    // fields were still below threshold. Approval must re-judge the document
+    // from the human-edited values, so a half-fixed document comes back blocked
+    // with the fields that still need attention instead of silently posting.
+
+        // Hard precondition first, same as bulk approve: a currency the platform
+    // can't post in cannot be waved through by confidence scores — the list
+    // already shows such documents in "Potential Issues" (Fix 3), and this is
+    // the server-side backstop for the panel's always-enabled Approve button.
+    // (Arithmetic is deliberately NOT a hard stop here: a human who corrects the
+    // total to its real value may leave the AI-read subtotal/tax behind, and
+    // that edit must still approve — the list flags such rows instead.)
+    const finalCurrency = finalOf("currency").trim().toUpperCase();
+    if (!isSupportedCurrency(finalCurrency)) {
+      return NextResponse.json({
+        status: "blocked",
+        reason: unsupportedCurrencyReason(finalCurrency),
+      });
+    }
+
+    // Then the confidence gate. Edited (or explicitly confirmed) fields count as
+    // human-verified → 1.0; untouched fields keep the model's raw confidence.
+    const confidenceByField = {} as Record<ReviewableField, number>;
+    for (const field of REVIEWABLE_FIELDS) {
+      const node = (extraction as any)[field] as { value: string | number; confidence: number };
+      confidenceByField[field] = effectiveConfidence(
+        node.confidence,
+        String(node.value),
+        edited[field],
+        edited[field] !== undefined,
+      );
+    }
+    const gate = gateApproval(confidenceByField, {
+      documentType,
+      taxItemized: extraction.taxItemized,
+      documentTypeConfidence: extraction.documentType?.confidence,
+      documentTypeConfirmed: overriddenType !== undefined,
+    });
+    if (gate.status !== "ready") {
+      return NextResponse.json({
+        status: "blocked",
+        reason: gateReasonSummary(gate, documentType),
+        reasons: gate.reasons,
+      });
     }
 
     // Persist the human-approved document first, so corrections can link to it.

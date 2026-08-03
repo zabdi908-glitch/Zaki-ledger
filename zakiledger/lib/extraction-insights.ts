@@ -1,6 +1,6 @@
-import { formatMoney } from "./currency";
-import type { DocumentType } from "./schema";
-import { gateApproval, reasonText, type ApprovalGate } from "./validation";
+import { formatMoney, isSupportedCurrency, unsupportedCurrencyReason } from "./currency";
+import type { DocumentType, ReviewableField } from "./schema";
+import { checkTotals, gateApproval, reasonText, type ApprovalGate } from "./validation";
 import { shellColor } from "./shell-theme";
 import type { ReviewRow, ReviewSectionKey } from "@/components/review/ReviewBoard";
 
@@ -31,6 +31,21 @@ export interface QueueItem {
   currency: string;
   total: number;
   overallConfidence: number;
+  /**
+   * Real per-field confidence, when the list endpoint ships it (Fix 3). Absent
+   * for legacy callers, which fall back to overallConfidence per field — the
+   * fabrication Bug 3 was about, so the list endpoint now always provides it.
+   */
+  perFieldConfidence?: Partial<Record<ReviewableField, number>>;
+  /** Whether the document breaks out tax — drops tax from the gate and skips
+   * the arithmetic check when false. */
+  taxItemized?: boolean;
+  /** Confidence in the invoice-vs-receipt classification (gated like a critical
+   * field — see gateApproval). */
+  documentTypeConfidence?: number;
+  /** Raw subtotal/tax values, so the list row can run the totals check. */
+  subtotal?: number | null;
+  tax?: number | null;
 }
 
 /** Same supplier + invoice number + total already elsewhere in the queue —
@@ -68,26 +83,62 @@ function confidenceColor(pct: number): string {
   return shellColor.low;
 }
 
+/** Whether a queue item's arithmetic reconciles, when we have the numbers to
+ * check. Mirrors bulk-approve's precondition: a doc whose subtotal + tax don't
+ * add up must not sit in "Ready to Approve" as if posting were safe. */
+function totalsReconcile(item: QueueItem): boolean {
+  if (!item.taxItemized) return true; // no tax split to reconcile (common on receipts)
+  if (item.subtotal === undefined || item.tax === undefined) return true; // not shipped — can't verify, don't invent a failure
+  const check = checkTotals(item.subtotal, item.tax, item.total);
+  return check === null || check.ok;
+}
+
 export function buildQueueRow(item: QueueItem, isDuplicate: boolean): { row: ReviewRow; gate: ApprovalGate } {
   const pct = Math.round(item.overallConfidence * 100);
-  // The list endpoint only returns overallConfidence, not per-field — treat
-  // every field as at that same confidence for the *list* row's gate/section;
-  // the side panel re-fetches the full per-field breakdown from
-  // GET /api/pending/[id] and is the source of truth once opened.
-  const perField = {
-    supplierName: item.overallConfidence,
-    invoiceNumber: item.overallConfidence,
-    invoiceDate: item.overallConfidence,
-    currency: item.overallConfidence,
-    subtotal: item.overallConfidence,
-    tax: item.overallConfidence,
-    total: item.overallConfidence,
+  // Real per-field confidence when the list endpoint ships it (GET /api/pending
+  // now does, Fix 3). Legacy callers — and the unit tests' minimal QueueItem —
+  // fall back to the overall score, which is exactly the fabrication Bug 3 was
+  // about: overall 78% ≠ a 61% merchant read, and gating on the average hid the
+  // real blocker. The side panel still re-fetches the full per-field breakdown
+  // from GET /api/pending/[id] and is the source of truth once opened.
+  const fallback = (f: ReviewableField) => item.perFieldConfidence?.[f] ?? item.overallConfidence;
+  const perField: Record<ReviewableField, number> = {
+    supplierName: fallback("supplierName"),
+    invoiceNumber: fallback("invoiceNumber"),
+    invoiceDate: fallback("invoiceDate"),
+    currency: fallback("currency"),
+    subtotal: fallback("subtotal"),
+    tax: fallback("tax"),
+    total: fallback("total"),
   };
-  const gate = gateApproval(perField, { documentType: item.documentType });
+  const gate = gateApproval(perField, {
+    documentType: item.documentType,
+    taxItemized: item.taxItemized,
+    documentTypeConfidence: item.documentTypeConfidence,
+  });
+
+  // Approve-time preconditions the confidence gate can't see (mirrored from
+  // bulk-approve and now enforced by /api/approve too): an unsupported currency
+  // and inconsistent arithmetic are hard stops no matter how confidently the
+  // fields were read. A doc failing one of these must not be listed as ready.
+  const postable = isSupportedCurrency(item.currency);
+  const totalsOk = totalsReconcile(item);
+
+  let section = sectionForGate(gate, isDuplicate);
+  if (section === "ready" && (!postable || !totalsOk)) section = "issue";
+
+  const reason =
+    [
+      postable ? null : unsupportedCurrencyReason(item.currency),
+      totalsOk ? null : "Totals don't add up — subtotal + tax doesn't reconcile to the printed total.",
+      gate.status === "ready" ? null : plainEnglishGateReason(gate, item.documentType),
+    ]
+      .filter((s): s is string => !!s)
+      .join(" ") || "Every field read with enough confidence to post automatically.";
 
   const row: ReviewRow = {
     id: item.id,
-    section: sectionForGate(gate, isDuplicate),
+    section,
     date: formatShortDate(item.invoiceDate),
     title: item.merchantName || "(supplier unclear)",
     subtitle: [item.invoiceNumber || null].filter(Boolean).join(" · "),
@@ -97,8 +148,12 @@ export function buildQueueRow(item: QueueItem, isDuplicate: boolean): { row: Rev
     confidencePct: pct,
     confidenceLabel: confidenceLabel(pct),
     confidenceColor: confidenceColor(pct),
-    reason: plainEnglishGateReason(gate, item.documentType),
+    reason,
     badges: [],
+    // Nothing to review or edit makes this postable — the row's approve control
+    // is disabled with the reason on hover, and bulk-approve previews skip it.
+    approvable: postable,
+    notApprovableReason: postable ? undefined : unsupportedCurrencyReason(item.currency),
   };
   return { row, gate };
 }
