@@ -11,6 +11,11 @@ vi.mock("@/lib/auth", () => ({
   requireUser: async () => ({ id: "test-user" }),
 }));
 
+vi.mock("@/lib/supabase", () => ({
+  getSupabase: () => null,
+  isSupabaseConfigured: () => false,
+}));
+
 const { POST: classifyRoute } = await import("@/app/api/reconciliation/classify-merchants/route");
 const { __clearMerchantAiCacheForTests } = await import("@/lib/merchant-ai-cache");
 

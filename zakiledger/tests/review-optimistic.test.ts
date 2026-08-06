@@ -7,6 +7,7 @@ function match(id: string, bankId: string): ReconciliationMatch {
     id, statementId: "s1", bankTransactionId: bankId, qbTransactionId: `qb-${id}`,
     confidence: 0.98, matchReason: "amount + date + merchant", flaggedLevel: "green",
     matchedBy: "auto", matchedAt: "2026-08-01T00:00:00Z", approvedBy: null, approvedAt: null,
+    auditMemo: null,
   };
 }
 

@@ -1,5 +1,15 @@
 import type { InvoiceExtraction } from "./schema";
 
+function s(value: string, confidence: number, reason = "demo fixture"): { value: string; confidence: number; reason: string } {
+  return { value, confidence, reason };
+}
+function n(value: number, confidence: number, reason = "demo fixture"): { value: number; confidence: number; reason: string } {
+  return { value, confidence, reason };
+}
+function dt(value: "invoice" | "receipt", confidence: number, reason = "demo fixture"): { value: "invoice" | "receipt"; confidence: number; reason: string } {
+  return { value, confidence, reason };
+}
+
 /**
  * Realistic sample extractions, returned when ANTHROPIC_API_KEY isn't set so the
  * full flow (review → edit → approve → correction recorded) can be demoed with
@@ -11,14 +21,14 @@ import type { InvoiceExtraction } from "./schema";
  */
 export function sampleExtraction(): InvoiceExtraction {
   return {
-    documentType: { value: "invoice", confidence: 0.98 },
-    supplierName: { value: "Riverside Office Supplies Ltd", confidence: 0.97 },
-    invoiceNumber: { value: "INV-20487", confidence: 0.72 }, // low → flagged for review
-    invoiceDate: { value: "2026-06-30", confidence: 0.94 },
-    currency: { value: "GBP", confidence: 0.99 },
-    subtotal: { value: 240.0, confidence: 0.96 },
-    tax: { value: 48.0, confidence: 0.9 },
-    total: { value: 288.0, confidence: 0.98 },
+    documentType: dt("invoice", 0.98),
+    supplierName: s("Riverside Office Supplies Ltd", 0.97),
+    invoiceNumber: s("INV-20487", 0.72, "deliberately low for demo"), // low → flagged for review
+    invoiceDate: s("2026-06-30", 0.94),
+    currency: s("GBP", 0.99),
+    subtotal: n(240.0, 0.96),
+    tax: n(48.0, 0.9),
+    total: n(288.0, 0.98),
     taxItemized: true,
     lineItems: [
       { description: "A4 paper (box of 5 reams)", quantity: 4, unitPrice: 24.0, amount: 96.0 },
@@ -35,14 +45,14 @@ export function sampleExtraction(): InvoiceExtraction {
  */
 export function sampleReceiptExtraction(): InvoiceExtraction {
   return {
-    documentType: { value: "receipt", confidence: 0.96 },
-    supplierName: { value: "Greenway Fuel & Services", confidence: 0.95 },
-    invoiceNumber: { value: "R-88213", confidence: 0.88 },
-    invoiceDate: { value: "2026-07-18", confidence: 0.93 },
-    currency: { value: "GBP", confidence: 0.99 },
-    subtotal: { value: 52.5, confidence: 0.94 },
-    tax: { value: 10.5, confidence: 0.91 },
-    total: { value: 63.0, confidence: 0.97 },
+    documentType: dt("receipt", 0.96),
+    supplierName: s("Greenway Fuel & Services", 0.95),
+    invoiceNumber: s("R-88213", 0.88),
+    invoiceDate: s("2026-07-18", 0.93),
+    currency: s("GBP", 0.99),
+    subtotal: n(52.5, 0.94),
+    tax: n(10.5, 0.91),
+    total: n(63.0, 0.97),
     taxItemized: true,
     lineItems: [{ description: "Unleaded petrol 35.2L", quantity: 1, unitPrice: 52.5, amount: 52.5 }],
     overallConfidence: 0.94,
@@ -62,14 +72,14 @@ export function sampleReceiptExtraction(): InvoiceExtraction {
  */
 export function sampleMessyReceiptExtraction(): InvoiceExtraction {
   return {
-    documentType: { value: "receipt", confidence: 0.89 },
-    supplierName: { value: "The Corner Cafe", confidence: 0.61 }, // smudged → gates
-    invoiceNumber: { value: "", confidence: 0 }, // no number on the receipt at all
-    invoiceDate: { value: "2026-07-22", confidence: 0.86 },
-    currency: { value: "GBP", confidence: 0.97 },
-    subtotal: { value: 0, confidence: 0 }, // no subtotal line
-    tax: { value: 0, confidence: 0 }, // VAT not broken out
-    total: { value: 12.4, confidence: 0.95 },
+    documentType: dt("receipt", 0.89),
+    supplierName: s("The Corner Cafe", 0.61, "smudged → gates"), // smudged → gates
+    invoiceNumber: s("", 0, "no number on the receipt at all"), // no number on the receipt at all
+    invoiceDate: s("2026-07-22", 0.86),
+    currency: s("GBP", 0.97),
+    subtotal: n(0, 0, "no subtotal line"), // no subtotal line
+    tax: n(0, 0, "VAT not broken out"), // VAT not broken out
+    total: n(12.4, 0.95),
     taxItemized: false,
     lineItems: [
       { description: "Flat white x2", quantity: 2, unitPrice: 3.2, amount: 6.4 },
@@ -88,14 +98,14 @@ export function sampleMessyReceiptExtraction(): InvoiceExtraction {
  */
 export function sampleAmbiguousExtraction(): InvoiceExtraction {
   return {
-    documentType: { value: "invoice", confidence: 0.54 }, // coin-flip → gates
-    supplierName: { value: "Harbour Print Co", confidence: 0.95 },
-    invoiceNumber: { value: "HP-4471", confidence: 0.92 },
-    invoiceDate: { value: "2026-07-14", confidence: 0.93 },
-    currency: { value: "GBP", confidence: 0.98 },
-    subtotal: { value: 180.0, confidence: 0.94 },
-    tax: { value: 36.0, confidence: 0.92 },
-    total: { value: 216.0, confidence: 0.96 },
+    documentType: dt("invoice", 0.54, "coin-flip → gates"), // coin-flip → gates
+    supplierName: s("Harbour Print Co", 0.95),
+    invoiceNumber: s("HP-4471", 0.92),
+    invoiceDate: s("2026-07-14", 0.93),
+    currency: s("GBP", 0.98),
+    subtotal: n(180.0, 0.94),
+    tax: n(36.0, 0.92),
+    total: n(216.0, 0.96),
     taxItemized: true,
     lineItems: [{ description: "Business cards (500)", quantity: 1, unitPrice: 180.0, amount: 180.0 }],
     overallConfidence: 0.86,
@@ -111,14 +121,14 @@ export function sampleAmbiguousExtraction(): InvoiceExtraction {
  */
 export function sampleForeignCurrencyReceiptExtraction(): InvoiceExtraction {
   return {
-    documentType: { value: "receipt", confidence: 0.95 },
-    supplierName: { value: "Shinjuku Station Kiosk", confidence: 0.93 },
-    invoiceNumber: { value: "T-5521", confidence: 0.87 },
-    invoiceDate: { value: "2026-07-19", confidence: 0.94 },
-    currency: { value: "JPY", confidence: 0.96 }, // read correctly — we just can't post it
-    subtotal: { value: 3400, confidence: 0.93 },
-    tax: { value: 340, confidence: 0.9 },
-    total: { value: 3740, confidence: 0.95 },
+    documentType: dt("receipt", 0.95),
+    supplierName: s("Shinjuku Station Kiosk", 0.93),
+    invoiceNumber: s("T-5521", 0.87),
+    invoiceDate: s("2026-07-19", 0.94),
+    currency: s("JPY", 0.96, "read correctly — we just can't post it"), // read correctly — we just can't post it
+    subtotal: n(3400, 0.93),
+    tax: n(340, 0.9),
+    total: n(3740, 0.95),
     taxItemized: true,
     lineItems: [{ description: "Rail pass top-up", quantity: 1, unitPrice: 3400, amount: 3400 }],
     overallConfidence: 0.93,
@@ -145,12 +155,12 @@ export function sampleBulkBatch(): Array<{ filename: string; extraction: Invoice
       filename: "receipt-northgate-hardware.png",
       extraction: {
         ...sampleReceiptExtraction(),
-        supplierName: { value: "Northgate Hardware", confidence: 0.96 },
-        invoiceNumber: { value: "NH-10442", confidence: 0.91 },
-        invoiceDate: { value: "2026-07-20", confidence: 0.95 },
-        subtotal: { value: 128.0, confidence: 0.95 },
-        tax: { value: 25.6, confidence: 0.92 },
-        total: { value: 153.6, confidence: 0.97 },
+        supplierName: s("Northgate Hardware", 0.96),
+        invoiceNumber: s("NH-10442", 0.91),
+        invoiceDate: s("2026-07-20", 0.95),
+        subtotal: n(128.0, 0.95),
+        tax: n(25.6, 0.92),
+        total: n(153.6, 0.97),
         lineItems: [
           { description: "Cordless drill bits (set)", quantity: 2, unitPrice: 44.0, amount: 88.0 },
           { description: "Safety goggles", quantity: 4, unitPrice: 10.0, amount: 40.0 },
@@ -161,12 +171,12 @@ export function sampleBulkBatch(): Array<{ filename: string; extraction: Invoice
       filename: "receipt-mereside-catering.png",
       extraction: {
         ...sampleReceiptExtraction(),
-        supplierName: { value: "Mereside Catering", confidence: 0.94 },
-        invoiceNumber: { value: "MC-3390", confidence: 0.89 },
-        invoiceDate: { value: "2026-07-21", confidence: 0.92 },
-        subtotal: { value: 82.5, confidence: 0.93 },
-        tax: { value: 16.5, confidence: 0.9 },
-        total: { value: 99.0, confidence: 0.96 },
+        supplierName: s("Mereside Catering", 0.94),
+        invoiceNumber: s("MC-3390", 0.89),
+        invoiceDate: s("2026-07-21", 0.92),
+        subtotal: n(82.5, 0.93),
+        tax: n(16.5, 0.9),
+        total: n(99.0, 0.96),
         lineItems: [{ description: "Team lunch (11 covers)", quantity: 11, unitPrice: 7.5, amount: 82.5 }],
       },
     },

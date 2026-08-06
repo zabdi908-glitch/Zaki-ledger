@@ -1,4 +1,10 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("@/lib/supabase", () => ({
+  getSupabase: () => null,
+  isSupabaseConfigured: () => false,
+}));
+
 import {
   bumpMerchantPreference, getMerchantPreferences, listDecisionsForStatement,
   recordDecision, setMerchantDefault, __clearDecisionMemForTests,

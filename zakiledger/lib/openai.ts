@@ -1,12 +1,47 @@
-import Anthropic from "@anthropic-ai/sdk";
-import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
+import OpenAI from "openai";
+import { toJSONSchema, type ZodType } from "zod/v4";
 import { InvoiceExtractionSchema, type InvoiceExtraction } from "./schema";
 import { ParsedStatementSchema, type ParsedStatement } from "./reconciliation-schema";
 
-const client = new Anthropic(); // reads ANTHROPIC_API_KEY from the environment
+let client: OpenAI | null = null;
+function getClient(): OpenAI {
+  if (!client) client = new OpenAI();
+  return client;
+}
 
-/** Escalation model — runs only when GPT-4o-mini flags low confidence (see lib/extract-pipeline.ts). */
-const MODEL = "claude-sonnet-4-5";
+/**
+ * gpt-4o-mini is the primary extraction model — cheap enough to run on every
+ * upload, good enough on clean-to-typical invoices/receipts/statements. A
+ * document it reads with low confidence escalates to Claude Sonnet (see
+ * lib/anthropic.ts's extractDocumentEscalation/extractBankStatementEscalation),
+ * so the expensive model only runs on the minority of documents that actually
+ * need it, not on every read.
+ */
+const MODEL = "gpt-4o-mini";
+
+/**
+ * Build a Structured Outputs `text.format` from a zod/v4 schema.
+ *
+ * The OpenAI SDK ships its own `zodTextFormat`/`zodResponseFormat` helpers,
+ * but they call zod-to-json-schema internally in a way that only recognises
+ * plain `"zod"` schema instances — every schema in this codebase (schema.ts,
+ * reconciliation-schema.ts) is built against the `"zod/v4"` subpath instead,
+ * for compatibility with the Anthropic SDK's own zodOutputFormat helper (see
+ * schema.ts's top comment). Handing one of those schemas to the OpenAI
+ * helper silently produces an empty `{}` schema — no error, just an
+ * unconstrained JSON response — so this builds the format directly with
+ * zod/v4's own `toJSONSchema`, which does understand these schemas, and
+ * validates the raw response against the same schema afterwards. One schema
+ * definition, no duplication, no silent empty-schema failure mode.
+ */
+function jsonSchemaFormat(schema: ZodType, name: string) {
+  return {
+    type: "json_schema" as const,
+    name,
+    strict: true,
+    schema: toJSONSchema(schema, { target: "draft-7" }) as Record<string, unknown>,
+  };
+}
 
 const SYSTEM_PROMPT = `You extract structured data from UK invoices and receipts for an accounting tool.
 Rules:
@@ -25,6 +60,11 @@ Rules:
 - Do not let one field's difficulty pull down another field's score. Confidence is
   per field, independently — a smudged tax line does not make a crisp merchant
   name any less certain.
+- Every field also carries a short "reason": one plain-English clause naming what
+  on the document you based the read on, e.g. "printed clearly under 'Invoice No.'"
+  or "smudged, could be 5 or 6". This is what a human reviewer sees next to the
+  confidence score, so make it concrete and specific to this document — never a
+  generic restatement like "extracted from the document".
 - Dates as ISO 8601 (YYYY-MM-DD) when you can read them unambiguously.
 - Amounts as plain numbers (no currency symbols or thousands separators).
 - A human reviews everything you produce, so flag what's genuinely uncertain —
@@ -56,26 +96,26 @@ set tax to 0 with confidence 0 and put the gross amount in total; do not derive,
 back-calculate, or estimate the tax. When there is no separate subtotal line either,
 set subtotal to 0 with confidence 0 rather than copying the total into it.`;
 
-function documentBlock(base64: string, mediaType: string): Anthropic.ContentBlockParam {
+function fileContentPart(base64: string, mediaType: string): OpenAI.Responses.ResponseInputContent {
   if (mediaType === "application/pdf") {
-    return { type: "document", source: { type: "base64", media_type: "application/pdf", data: base64 } };
+    return {
+      type: "input_file",
+      filename: "document.pdf",
+      file_data: `data:application/pdf;base64,${base64}`,
+    };
   }
-  // Anthropic accepts png/jpeg/gif/webp for images; the cast narrows the dynamic
-  // upload media type to the SDK's expected literal union.
   return {
-    type: "image",
-    source: {
-      type: "base64",
-      media_type: mediaType as "image/png" | "image/jpeg" | "image/gif" | "image/webp",
-      data: base64,
-    },
+    type: "input_image",
+    detail: "high",
+    image_url: `data:${mediaType};base64,${base64}`,
   };
 }
 
 /**
  * Extract fields from a document — invoice or receipt. One pass does both the
  * classification and the extraction; there is no separate detection call and no
- * second pipeline for receipts.
+ * second pipeline for receipts. Primary (cheap) read — see lib/anthropic.ts's
+ * extractDocumentEscalation for the second-opinion pass on flagged documents.
  *
  * @param base64      the document bytes, base64-encoded (no data: prefix, no newlines)
  * @param mediaType   e.g. "application/pdf", "image/png", "image/jpeg"
@@ -92,59 +132,22 @@ export async function extractDocument(
     ? `Classify the document type and extract its fields.\n\nWhat we've learned from this user's past corrections (use as guidance, the document is still the source of truth):\n${priorHints}`
     : "Classify the document type and extract its fields.";
 
-  const response = await client.messages.parse({
+  const response = await getClient().responses.create({
     model: MODEL,
-    max_tokens: 16000,
-    thinking: { type: "adaptive" },
-    system: SYSTEM_PROMPT,
-    messages: [
+    input: [
+      { role: "system", content: SYSTEM_PROMPT },
       {
         role: "user",
-        content: [documentBlock(base64, mediaType), { type: "text", text: instruction }],
+        content: [fileContentPart(base64, mediaType), { type: "input_text", text: instruction }],
       },
     ],
-    output_config: { format: zodOutputFormat(InvoiceExtractionSchema) },
+    text: { format: jsonSchemaFormat(InvoiceExtractionSchema, "invoice_extraction") },
   });
 
-  if (!response.parsed_output) {
+  if (!response.output_text) {
     throw new Error("Extraction failed: the model did not return a valid structured result.");
   }
-  return response.parsed_output;
-}
-
-const ESCALATION_SYSTEM_PROMPT = `You are the escalation reviewer. The primary model flagged this document as low-confidence. Re-read it and produce a fresh extraction — do not copy the primary model's output.`;
-
-/**
- * Escalation re-extraction for invoices/receipts — called by the pipeline
- * when the primary model returns low-confidence fields.
- */
-export async function extractDocumentEscalation(
-  base64: string,
-  mediaType: string,
-  priorHints?: string,
-): Promise<InvoiceExtraction> {
-  const instruction = priorHints
-    ? `Re-read this document carefully and produce a fresh extraction.\n\nWhat we've learned from this user's past corrections (use as guidance, the document is still the source of truth):\n${priorHints}`
-    : "Re-read this document carefully and produce a fresh extraction.";
-
-  const response = await client.messages.parse({
-    model: MODEL,
-    max_tokens: 16000,
-    thinking: { type: "adaptive" },
-    system: ESCALATION_SYSTEM_PROMPT,
-    messages: [
-      {
-        role: "user",
-        content: [documentBlock(base64, mediaType), { type: "text", text: instruction }],
-      },
-    ],
-    output_config: { format: zodOutputFormat(InvoiceExtractionSchema) },
-  });
-
-  if (!response.parsed_output) {
-    throw new Error("Escalation extraction failed: the model did not return a valid structured result.");
-  }
-  return response.parsed_output;
+  return InvoiceExtractionSchema.parse(JSON.parse(response.output_text));
 }
 
 const BANK_STATEMENT_SYSTEM_PROMPT = `You extract structured transaction data from bank/credit-card statements
@@ -177,51 +180,27 @@ Rules:
  * Extract every transaction from a bank/credit-card statement PDF — the
  * reconciliation-side counterpart to extractDocument() above. Same
  * one-call-does-everything shape: no separate "detect the format" pass.
+ * Primary (cheap) read — see lib/anthropic.ts's extractBankStatementEscalation
+ * for the second-opinion pass on a statement the confidence gate flags.
  */
 export async function extractBankStatement(base64: string, mediaType: string): Promise<ParsedStatement> {
-  const response = await client.messages.parse({
+  const response = await getClient().responses.create({
     model: MODEL,
-    max_tokens: 16000,
-    thinking: { type: "adaptive" },
-    system: BANK_STATEMENT_SYSTEM_PROMPT,
-    messages: [
+    input: [
+      { role: "system", content: BANK_STATEMENT_SYSTEM_PROMPT },
       {
         role: "user",
-        content: [documentBlock(base64, mediaType), { type: "text", text: "Extract every transaction from this bank statement." }],
+        content: [
+          fileContentPart(base64, mediaType),
+          { type: "input_text", text: "Extract every transaction from this bank statement." },
+        ],
       },
     ],
-    output_config: { format: zodOutputFormat(ParsedStatementSchema) },
+    text: { format: jsonSchemaFormat(ParsedStatementSchema, "parsed_statement") },
   });
 
-  if (!response.parsed_output) {
+  if (!response.output_text) {
     throw new Error("Statement extraction failed: the model did not return a valid structured result.");
   }
-  return response.parsed_output;
-}
-
-const BANK_STATEMENT_ESCALATION_SYSTEM_PROMPT = `You are the escalation reviewer for bank statement extraction. The primary model produced a low-quality read. Re-extract every transaction from this statement.`;
-
-/**
- * Escalation re-extraction for bank/credit-card statements — called by the
- * pipeline when the primary model returns a low-quality read.
- */
-export async function extractBankStatementEscalation(base64: string, mediaType: string): Promise<ParsedStatement> {
-  const response = await client.messages.parse({
-    model: MODEL,
-    max_tokens: 16000,
-    thinking: { type: "adaptive" },
-    system: BANK_STATEMENT_ESCALATION_SYSTEM_PROMPT,
-    messages: [
-      {
-        role: "user",
-        content: [documentBlock(base64, mediaType), { type: "text", text: "Re-extract every transaction from this bank statement." }],
-      },
-    ],
-    output_config: { format: zodOutputFormat(ParsedStatementSchema) },
-  });
-
-  if (!response.parsed_output) {
-    throw new Error("Statement escalation extraction failed: the model did not return a valid structured result.");
-  }
-  return response.parsed_output;
+  return ParsedStatementSchema.parse(JSON.parse(response.output_text));
 }

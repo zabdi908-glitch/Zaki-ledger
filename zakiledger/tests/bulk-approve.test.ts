@@ -2,6 +2,13 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { NextRequest } from "next/server";
 import type { InvoiceExtraction } from "@/lib/schema";
 
+function s(value: string, confidence: number, reason = "test fixture"): { value: string; confidence: number; reason: string } {
+  return { value, confidence, reason };
+}
+function n(value: number, confidence: number, reason = "test fixture"): { value: number; confidence: number; reason: string } {
+  return { value, confidence, reason };
+}
+
 /**
  * Bulk approve, driven through the real route handler against the in-memory
  * store, with Xero faked at the module boundary.
@@ -182,12 +189,12 @@ describe("one document's failure never costs the others their approval", () => {
         filename: "receipt-oakfield.png",
         extraction: {
           ...sampleReceiptExtraction(),
-          supplierName: { value: "Oakfield Stationers", confidence: 0.95 },
-          invoiceNumber: { value: "OS-771", confidence: 0.9 },
-          invoiceDate: { value: "2026-07-23", confidence: 0.94 },
-          subtotal: { value: 20, confidence: 0.95 },
-          tax: { value: 4, confidence: 0.92 },
-          total: { value: 24, confidence: 0.96 },
+          supplierName: s("Oakfield Stationers", 0.95),
+          invoiceNumber: s("OS-771", 0.9),
+          invoiceDate: s("2026-07-23", 0.94),
+          subtotal: n(20, 0.95),
+          tax: n(4, 0.92),
+          total: n(24, 0.96),
         },
       },
     ]);
@@ -213,24 +220,24 @@ describe("one document's failure never costs the others their approval", () => {
         filename: "receipt-brackley-tools.png",
         extraction: {
           ...sampleReceiptExtraction(),
-          supplierName: { value: "Brackley Tools", confidence: 0.95 },
-          invoiceNumber: { value: "BT-500", confidence: 0.9 },
-          invoiceDate: { value: "2026-07-24", confidence: 0.94 },
-          subtotal: { value: 10, confidence: 0.95 },
-          tax: { value: 2, confidence: 0.92 },
-          total: { value: 12, confidence: 0.96 },
+          supplierName: s("Brackley Tools", 0.95),
+          invoiceNumber: s("BT-500", 0.9),
+          invoiceDate: s("2026-07-24", 0.94),
+          subtotal: n(10, 0.95),
+          tax: n(2, 0.92),
+          total: n(12, 0.96),
         },
       },
       {
         filename: "receipt-lowther-print.png",
         extraction: {
           ...sampleReceiptExtraction(),
-          supplierName: { value: "Lowther Print", confidence: 0.95 },
-          invoiceNumber: { value: "LP-900", confidence: 0.9 },
-          invoiceDate: { value: "2026-07-25", confidence: 0.94 },
-          subtotal: { value: 30, confidence: 0.95 },
-          tax: { value: 6, confidence: 0.92 },
-          total: { value: 36, confidence: 0.96 },
+          supplierName: s("Lowther Print", 0.95),
+          invoiceNumber: s("LP-900", 0.9),
+          invoiceDate: s("2026-07-25", 0.94),
+          subtotal: n(30, 0.95),
+          tax: n(6, 0.92),
+          total: n(36, 0.96),
         },
       },
     ]);
@@ -281,12 +288,12 @@ describe("gating rules carried over from the review screen", () => {
         filename: "receipt-bad-maths.png",
         extraction: {
           ...sampleReceiptExtraction(),
-          supplierName: { value: "Fenwick Supplies", confidence: 0.97 },
-          invoiceNumber: { value: "FS-12", confidence: 0.95 },
-          invoiceDate: { value: "2026-07-26", confidence: 0.96 },
-          subtotal: { value: 100, confidence: 0.97 },
-          tax: { value: 20, confidence: 0.96 },
-          total: { value: 130, confidence: 0.98 }, // should be 120
+          supplierName: s("Fenwick Supplies", 0.97),
+          invoiceNumber: s("FS-12", 0.95),
+          invoiceDate: s("2026-07-26", 0.96),
+          subtotal: n(100, 0.97),
+          tax: n(20, 0.96),
+          total: n(130, 0.98, "should be 120"), // should be 120
         },
       },
     ]);
@@ -298,12 +305,12 @@ describe("gating rules carried over from the review screen", () => {
   it("blocks a duplicate rather than waving it through — nobody is here to decide", async () => {
     const receipt = {
       ...sampleReceiptExtraction(),
-      supplierName: { value: "Hollow Lane Garage", confidence: 0.96 },
-      invoiceNumber: { value: "HL-31", confidence: 0.93 },
-      invoiceDate: { value: "2026-07-27", confidence: 0.95 },
-      subtotal: { value: 40, confidence: 0.95 },
-      tax: { value: 8, confidence: 0.93 },
-      total: { value: 48, confidence: 0.97 },
+      supplierName: s("Hollow Lane Garage", 0.96),
+      invoiceNumber: s("HL-31", 0.93),
+      invoiceDate: s("2026-07-27", 0.95),
+      subtotal: n(40, 0.95),
+      tax: n(8, 0.93),
+      total: n(48, 0.97),
     };
     // Both copies in ONE batch: sequential processing means the first is already
     // in the ledger when the second is checked, so the second is caught.
@@ -323,12 +330,12 @@ describe("gating rules carried over from the review screen", () => {
         filename: "receipt-westgate.png",
         extraction: {
           ...sampleReceiptExtraction(),
-          supplierName: { value: "Westgate Cycles", confidence: 0.96 },
-          invoiceNumber: { value: "WC-88", confidence: 0.93 },
-          invoiceDate: { value: "2026-07-28", confidence: 0.95 },
-          subtotal: { value: 50, confidence: 0.95 },
-          tax: { value: 10, confidence: 0.93 },
-          total: { value: 60, confidence: 0.97 },
+          supplierName: s("Westgate Cycles", 0.96),
+          invoiceNumber: s("WC-88", 0.93),
+          invoiceDate: s("2026-07-28", 0.95),
+          subtotal: n(50, 0.95),
+          tax: n(10, 0.93),
+          total: n(60, 0.97),
         },
       },
     ]);

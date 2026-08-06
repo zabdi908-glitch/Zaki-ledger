@@ -38,14 +38,14 @@ describe("parseCsvStatement", () => {
 
     expect(result.transactions).toHaveLength(2);
     expect(result.transactions[0]).toMatchObject({
-      transactionDate: "2026-07-15",
-      merchant: "Coffee Shop",
-      amount: 4.5, // debit -> positive
+      transactionDate: { value: "2026-07-15", confidence: 1, reason: "CSV parse" },
+      merchant: { value: "Coffee Shop", confidence: 1, reason: "CSV parse" },
+      amount: { value: 4.5, confidence: 1, reason: "CSV parse" }, // debit -> positive
     });
     expect(result.transactions[1]).toMatchObject({
-      transactionDate: "2026-07-16",
-      merchant: "Client Payment",
-      amount: -1200, // credit -> negative
+      transactionDate: { value: "2026-07-16", confidence: 1, reason: "CSV parse" },
+      merchant: { value: "Client Payment", confidence: 1, reason: "CSV parse" },
+      amount: { value: -1200, confidence: 1, reason: "CSV parse" }, // credit -> negative
     });
     expect(result.periodStart).toBe("2026-07-15");
     expect(result.periodEnd).toBe("2026-07-16");
@@ -59,7 +59,7 @@ describe("parseCsvStatement", () => {
     expect(result.transactions).toHaveLength(1);
     // Source amount is negative (bank convention: negative = spend); we flip
     // to our positive-for-debit convention.
-    expect(result.transactions[0].amount).toBe(32.1);
+    expect(result.transactions[0].amount).toMatchObject({ value: 32.1, confidence: 1, reason: "CSV parse" });
   });
 
   it("flips a single signed Amount column to positive-for-debit", () => {
@@ -67,8 +67,8 @@ describe("parseCsvStatement", () => {
 
     const result = parseCsvStatement(csv);
 
-    expect(result.transactions[0].amount).toBe(-2500); // source positive (deposit) -> negative (credit)
-    expect(result.transactions[1].amount).toBe(950); // source negative (spend) -> positive (debit)
+    expect(result.transactions[0].amount).toMatchObject({ value: -2500, confidence: 1, reason: "CSV parse" }); // source positive (deposit) -> negative (credit)
+    expect(result.transactions[1].amount).toMatchObject({ value: 950, confidence: 1, reason: "CSV parse" }); // source negative (spend) -> positive (debit)
   });
 
   it("skips rows with an unparseable date (e.g. a trailing balance line)", () => {

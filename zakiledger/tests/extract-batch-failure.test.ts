@@ -34,13 +34,17 @@ vi.mock("@/lib/auth", () => ({
   requireUser: async () => ({ id: "test-user" }),
 }));
 
-const { POST: batchRoute } = await import("@/app/api/extract-batch/route");
-const { GET: listRoute } = await import("@/app/api/pending/route");
+let batchRoute: any;
+let listRoute: any;
 
-beforeAll(() => {
+beforeAll(async () => {
+  delete process.env.OPENAI_API_KEY;
   delete process.env.ANTHROPIC_API_KEY;
   delete process.env.SUPABASE_URL;
   delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  batchRoute = (await import("@/app/api/extract-batch/route")).POST;
+  listRoute = (await import("@/app/api/pending/route")).GET;
 });
 
 async function uploadBatch(filenames: string[]) {

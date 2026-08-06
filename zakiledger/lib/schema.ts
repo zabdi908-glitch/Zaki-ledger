@@ -10,11 +10,13 @@ import { z } from "zod/v4";
 const ConfidentString = z.object({
   value: z.string(),
   confidence: z.number(),
+  reason: z.string(),
 });
 
 const ConfidentNumber = z.object({
   value: z.number(),
   confidence: z.number(),
+  reason: z.string(),
 });
 
 export const LineItemSchema = z.object({
@@ -36,6 +38,7 @@ export type DocumentType = z.infer<typeof DocumentTypeSchema>;
 const ConfidentDocumentType = z.object({
   value: DocumentTypeSchema,
   confidence: z.number(),
+  reason: z.string(),
 });
 
 export const InvoiceExtractionSchema = z.object({

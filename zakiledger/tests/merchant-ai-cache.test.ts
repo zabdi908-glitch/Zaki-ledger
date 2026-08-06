@@ -1,4 +1,10 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("@/lib/supabase", () => ({
+  getSupabase: () => null,
+  isSupabaseConfigured: () => false,
+}));
+
 import { __clearMerchantAiCacheForTests, cacheCategory, getCachedCategories } from "../lib/merchant-ai-cache";
 
 beforeEach(() => __clearMerchantAiCacheForTests());

@@ -75,20 +75,41 @@ vi.mock("@/lib/auth", () => ({
   requireUser: async () => ({ id: "test-user" }),
 }));
 
-const { POST: batchRoute } = await import("@/app/api/extract-batch/route");
-const { POST: approveRoute } = await import("@/app/api/approve/route");
-const { POST: bulkRoute } = await import("@/app/api/approve/bulk/route");
-const { GET: correctionsRoute } = await import("@/app/api/corrections/route");
-const { GET: pendingRoute } = await import("@/app/api/pending/route");
-const { sampleBulkBatch, sampleMessyReceiptExtraction } = await import("@/lib/demo");
-const { pendingRow, planApproval, rowStatus, tally, tallyLabel, flagReason } = await import(
-  "@/lib/batch-results"
-);
+let batchRoute: any;
+let approveRoute: any;
+let bulkRoute: any;
+let correctionsRoute: any;
+let pendingRoute: any;
+let sampleBulkBatch: any;
+let sampleMessyReceiptExtraction: any;
+let pendingRow: any;
+let planApproval: any;
+let rowStatus: any;
+let tally: any;
+let tallyLabel: any;
+let flagReason: any;
 
-beforeAll(() => {
+beforeAll(async () => {
+  delete process.env.OPENAI_API_KEY;
   delete process.env.ANTHROPIC_API_KEY;
   delete process.env.SUPABASE_URL;
   delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  batchRoute = (await import("@/app/api/extract-batch/route")).POST;
+  approveRoute = (await import("@/app/api/approve/route")).POST;
+  bulkRoute = (await import("@/app/api/approve/bulk/route")).POST;
+  correctionsRoute = (await import("@/app/api/corrections/route")).GET;
+  pendingRoute = (await import("@/app/api/pending/route")).GET;
+  const demo = await import("@/lib/demo");
+  sampleBulkBatch = demo.sampleBulkBatch;
+  sampleMessyReceiptExtraction = demo.sampleMessyReceiptExtraction;
+  const batchResults = await import("@/lib/batch-results");
+  pendingRow = batchResults.pendingRow;
+  planApproval = batchResults.planApproval;
+  rowStatus = batchResults.rowStatus;
+  tally = batchResults.tally;
+  tallyLabel = batchResults.tallyLabel;
+  flagReason = batchResults.flagReason;
 });
 
 /**

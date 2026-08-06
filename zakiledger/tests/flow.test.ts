@@ -7,9 +7,6 @@ vi.mock("@/lib/auth", () => ({
   requireUser: async () => ({ id: "test-user" }),
 }));
 
-const { POST: extractRoute } = await import("@/app/api/extract/route");
-const { POST: approveRoute } = await import("@/app/api/approve/route");
-
 /**
  * End-to-end route tests: upload → extract → approve → duplicate detection,
  * driving the real route handlers in-process. No dev server, no network.
@@ -21,11 +18,20 @@ const { POST: approveRoute } = await import("@/app/api/approve/route");
  * contaminate each other.
  */
 
-beforeAll(() => {
+let extractRoute: (req: NextRequest) => Promise<Response>;
+let approveRoute: (req: NextRequest) => Promise<Response>;
+
+beforeAll(async () => {
   // Force demo mode: deterministic samples, and no real API call from a test run.
+  delete process.env.OPENAI_API_KEY;
   delete process.env.ANTHROPIC_API_KEY;
   delete process.env.SUPABASE_URL;
   delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  // Lazy-import routes *after* env vars are cleared so the OpenAI client
+  // isn't created with the dummy key from vitest.config.ts.
+  extractRoute = (await import("@/app/api/extract/route")).POST;
+  approveRoute = (await import("@/app/api/approve/route")).POST;
 });
 
 type ExtractBody = {

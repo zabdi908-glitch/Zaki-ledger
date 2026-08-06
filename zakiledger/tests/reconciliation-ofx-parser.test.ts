@@ -114,17 +114,17 @@ describe("parseOfxStatement", () => {
 
     const [debit, credit] = result.transactions;
     expect(debit).toMatchObject({
-      transactionDate: "2026-07-05",
-      merchant: "Coffee Shop",
+      transactionDate: { value: "2026-07-05", confidence: 1, reason: "OFX parse" },
+      merchant: { value: "Coffee Shop", confidence: 1, reason: "OFX parse" },
       transactionId: "TX001",
-      amount: 45, // OFX TRNAMT -45.00 (debit) -> our positive-for-debit
+      amount: { value: 45, confidence: 1, reason: "OFX parse" }, // OFX TRNAMT -45.00 (debit) -> our positive-for-debit
       currency: "GBP",
     });
     expect(credit).toMatchObject({
-      transactionDate: "2026-07-10",
-      merchant: "Client Payment",
+      transactionDate: { value: "2026-07-10", confidence: 1, reason: "OFX parse" },
+      merchant: { value: "Client Payment", confidence: 1, reason: "OFX parse" },
       transactionId: "TX002",
-      amount: -1200, // OFX TRNAMT 1200.00 (credit) -> our negative-for-credit
+      amount: { value: -1200, confidence: 1, reason: "OFX parse" }, // OFX TRNAMT 1200.00 (credit) -> our negative-for-credit
     });
   });
 
@@ -135,9 +135,9 @@ describe("parseOfxStatement", () => {
     expect(result.currency).toBe("USD");
     expect(result.closingBalance).toBe(999);
     expect(result.transactions[0]).toMatchObject({
-      transactionDate: "2026-07-03",
-      merchant: "Groceries",
-      amount: 20,
+      transactionDate: { value: "2026-07-03", confidence: 1, reason: "OFX parse" },
+      merchant: { value: "Groceries", confidence: 1, reason: "OFX parse" },
+      amount: { value: 20, confidence: 1, reason: "OFX parse" },
     });
   });
 

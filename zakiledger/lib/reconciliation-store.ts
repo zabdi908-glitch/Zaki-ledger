@@ -1,9 +1,12 @@
 import { getSupabase } from "./supabase";
 import { matchTransactions, scorePair, DATE_PENDING_DAYS } from "./reconciliation-matching";
+import { generateAuditMemos } from "./audit-memo-generator";
+import type { AuditMemo } from "./audit-memo-schema";
 import type {
   BankTransaction,
   FlaggedLevel,
   ParsedStatement,
+  ProposedMatch,
   QbTransaction,
   QbTransactionInput,
   ReconciliationMatch,
@@ -126,6 +129,7 @@ function mapMatchRow(row: Record<string, unknown>): ReconciliationMatch {
     matchedAt: row.matched_at as string,
     approvedBy: (row.approved_by as string) ?? null,
     approvedAt: (row.approved_at as string) ?? null,
+    auditMemo: (row.audit_memo as AuditMemo | null) ?? null,
   };
 }
 
@@ -186,11 +190,11 @@ export async function saveBankStatement(
         id: newId(),
         statementId,
         userId,
-        transactionDate: t.transactionDate,
+        transactionDate: t.transactionDate.value,
         postedDate: t.postedDate,
-        merchant: t.merchant,
-        description: t.description,
-        amount: t.amount,
+        merchant: t.merchant?.value ?? null,
+        description: t.description?.value ?? null,
+        amount: t.amount.value,
         currency: t.currency,
         transactionId: t.transactionId,
         memo: t.memo,
@@ -219,11 +223,11 @@ export async function saveBankStatement(
         id: newId(),
         statement_id: statementId,
         user_id: userId,
-        transaction_date: t.transactionDate,
+        transaction_date: t.transactionDate.value,
         posted_date: t.postedDate,
-        merchant: t.merchant,
-        description: t.description,
-        amount: t.amount,
+        merchant: t.merchant?.value ?? null,
+        description: t.description?.value ?? null,
+        amount: t.amount.value,
         currency: t.currency,
         transaction_id: t.transactionId,
         memo: t.memo,
@@ -449,6 +453,10 @@ export async function computeAndPersistMatches(
   const toScore = bankTransactions.filter((b) => !alreadyMatchedBankIds.has(b.id));
   const result = matchTransactions(toScore, qbTransactions);
 
+  // Generate audit memos for new auto-matches before persisting
+  const auditMemos = await generateAuditMemos(result.matches, bankTransactions, qbTransactions);
+  const memoByBankId = new Map(auditMemos.map((m) => [m.matchId, m]));
+
   const db = getSupabase();
   const nowIso = new Date().toISOString();
 
@@ -468,6 +476,7 @@ export async function computeAndPersistMatches(
           matchedAt: nowIso,
           approvedBy: null,
           approvedAt: null,
+          auditMemo: memoByBankId.get(m.bankTransactionId) ?? null,
         });
       }
     } else {
@@ -483,6 +492,7 @@ export async function computeAndPersistMatches(
           flagged_level: m.flaggedLevel,
           matched_by: "auto",
           matched_at: nowIso,
+          audit_memo: memoByBankId.get(m.bankTransactionId) ?? null,
         })),
         { onConflict: "bank_transaction_id,statement_id", ignoreDuplicates: true },
       );
@@ -530,6 +540,16 @@ export async function createManualMatch(
   const matchReason = reasons.length > 0 ? `manual override (${reasons.join(" + ")})` : "manual override";
   const nowIso = new Date().toISOString();
 
+  // Generate a single PERFECT_MATCH audit memo for manual matches
+  const manualProposedMatch: ProposedMatch = {
+    bankTransactionId,
+    qbTransactionId,
+    confidence,
+    matchReason,
+    flaggedLevel,
+  };
+  const [manualMemo] = await generateAuditMemos([manualProposedMatch], [bank], [qb]);
+
   const db = getSupabase();
   if (!db) {
     const existingIdx = mem.matches.findIndex((m) => m.statementId === statementId && m.bankTransactionId === bankTransactionId);
@@ -546,6 +566,7 @@ export async function createManualMatch(
       matchedAt: nowIso,
       approvedBy: null,
       approvedAt: null,
+      auditMemo: manualMemo ?? null,
     };
     if (existingIdx >= 0) mem.matches[existingIdx] = row;
     else mem.matches.push(row);
@@ -566,6 +587,7 @@ export async function createManualMatch(
         flagged_level: flaggedLevel,
         matched_by: "manual",
         matched_at: nowIso,
+        audit_memo: manualMemo ?? null,
       },
       { onConflict: "bank_transaction_id,statement_id" },
     )
@@ -673,13 +695,22 @@ export async function approveMatches(
       });
     }
   } else {
+    // Scoped by statement_id + user_id, not just id — the ids in `toApprove`
+    // are already filtered to this statement/user by listMatchesForStatement
+    // above, but the write itself must enforce that too: an .update().in("id", ...)
+    // with no other predicate is one bad/forged id away from stamping approval
+    // on a row outside this statement or tenant. Belt + suspenders is what
+    // "can't touch another user's ledger" has to mean at the database layer,
+    // not just at the filter that built the id list.
     const { error: updateError } = await db
       .from("reconciliation_matches")
       .update({ approved_by: approvedBy, approved_at: nowIso })
       .in(
         "id",
         toApprove.map((m) => m.id),
-      );
+      )
+      .eq("statement_id", statementId)
+      .eq("user_id", userId);
     if (updateError) throw new Error(`Failed to approve matches: ${updateError.message}`);
 
     const { error: auditError } = await db.from("reconciliation_audit_log").insert(
@@ -731,13 +762,17 @@ export async function unapproveMatches(userId: string, statementId: string, matc
       });
     }
   } else {
+    // Same statement_id + user_id scoping as approveMatches above — an id-only
+    // .in() filter on a mutating update is never enough on its own.
     const { error: updateError } = await db
       .from("reconciliation_matches")
       .update({ approved_by: null, approved_at: null })
       .in(
         "id",
         toRevert.map((m) => m.id),
-      );
+      )
+      .eq("statement_id", statementId)
+      .eq("user_id", userId);
     if (updateError) throw new Error(`Failed to unapprove matches: ${updateError.message}`);
 
     const { error: auditError } = await db.from("reconciliation_audit_log").insert(
@@ -813,11 +848,25 @@ async function generateReport(userId: string, statementId: string): Promise<Reco
     return report;
   }
 
+  // Preserve the existing report's id on update instead of minting a fresh
+  // uuid every regeneration — otherwise `report.id` changes (and old
+  // reconciliation_reports rows with a now-orphaned id survive if
+  // onConflict:"statement_id" ever stops matching, e.g. under a future
+  // composite key). Reading the current id first keeps this upsert genuinely
+  // idempotent on the row's primary key, not just on statement_id.
+  const { data: existingReport } = await db
+    .from("reconciliation_reports")
+    .select("id")
+    .eq("statement_id", statementId)
+    .eq("user_id", userId)
+    .maybeSingle();
+  const reportId = (existingReport?.id as string) ?? report.id;
+
   const { data, error } = await db
     .from("reconciliation_reports")
     .upsert(
       {
-        id: report.id,
+        id: reportId,
         user_id: userId,
         statement_id: statementId,
         period_start: report.periodStart,

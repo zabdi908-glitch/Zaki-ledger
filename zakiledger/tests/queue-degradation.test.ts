@@ -39,14 +39,19 @@ vi.mock("@/lib/auth", () => ({
   requireUser: async () => ({ id: "test-user" }),
 }));
 
-const { POST: extractRoute } = await import("@/app/api/extract/route");
-const { POST: approveRoute } = await import("@/app/api/approve/route");
-const { REVIEWABLE_FIELDS } = await import("@/lib/schema");
+let extractRoute: any;
+let approveRoute: any;
+let REVIEWABLE_FIELDS: readonly string[];
 
-beforeAll(() => {
+beforeAll(async () => {
+  delete process.env.OPENAI_API_KEY;
   delete process.env.ANTHROPIC_API_KEY;
   delete process.env.SUPABASE_URL;
   delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  extractRoute = (await import("@/app/api/extract/route")).POST;
+  approveRoute = (await import("@/app/api/approve/route")).POST;
+  REVIEWABLE_FIELDS = (await import("@/lib/schema")).REVIEWABLE_FIELDS;
 });
 
 async function extract(filename: string) {

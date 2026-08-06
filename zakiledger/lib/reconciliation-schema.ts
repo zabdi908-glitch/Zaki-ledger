@@ -1,4 +1,5 @@
 import { z } from "zod/v4";
+import type { AuditMemo } from "./audit-memo-schema";
 
 /**
  * Types for the bank-reconciliation domain (Phase 3). Kept separate from
@@ -17,13 +18,30 @@ export type FlaggedLevel = z.infer<typeof FlaggedLevelSchema>;
 export const MatchedBySchema = z.enum(["auto", "manual"]);
 export type MatchedBy = z.infer<typeof MatchedBySchema>;
 
+/**
+ * Wrapper types for AI-extracted fields, matching the invoice side
+ * (lib/schema.ts). CSV/OFX parsers use these with confidence=1.0 since they
+ * are deterministic reads.
+ */
+const ConfidentString = z.object({
+  value: z.string(),
+  confidence: z.number(),
+  reason: z.string(),
+});
+
+const ConfidentNumber = z.object({
+  value: z.number(),
+  confidence: z.number(),
+  reason: z.string(),
+});
+
 /** A transaction as read off a bank statement — parser output, pre-persistence. */
 export const ParsedBankTransactionSchema = z.object({
-  transactionDate: z.string(), // ISO 8601 (YYYY-MM-DD)
+  transactionDate: ConfidentString, // ISO 8601 (YYYY-MM-DD)
   postedDate: z.string().nullable(),
-  merchant: z.string().nullable(),
-  description: z.string().nullable(),
-  amount: z.number(), // signed: positive = debit, negative = credit
+  merchant: ConfidentString.nullable(),
+  description: ConfidentString.nullable(),
+  amount: ConfidentNumber, // signed: positive = debit, negative = credit
   currency: z.string().nullable(),
   transactionId: z.string().nullable(),
   memo: z.string().nullable(),
@@ -112,6 +130,7 @@ export interface ReconciliationMatch {
   matchedAt: string;
   approvedBy: string | null;
   approvedAt: string | null;
+  auditMemo: AuditMemo | null;
 }
 
 export interface ReconciliationReport {

@@ -1,4 +1,5 @@
-import { extractDocument } from "./anthropic";
+import { extractDocument } from "./openai";
+import { extractDocumentEscalation } from "./anthropic";
 import { buildHints } from "./learning";
 import { arithmeticMismatch, REVIEWABLE_FIELDS, type InvoiceExtraction } from "./schema";
 import { confirmationStatsForSupplier, findDuplicateDocument, savePendingDocument } from "./store";
@@ -93,9 +94,9 @@ async function calibrateExtractionConfidence(
  * still succeeded and the human can still approve it on screen.
  */
 export async function extractOneDocument(userId: string, file: File): Promise<ExtractedDocument> {
-  // Demo mode: with no Anthropic key, return a realistic sample so the full
-  // review → approve → learn flow works with zero setup. Real key = real Claude.
-  const demo = !process.env.ANTHROPIC_API_KEY;
+  // Demo mode: with no OpenAI key, return a realistic sample so the full
+  // review → approve → learn flow works with zero setup. Real key = real GPT.
+  const demo = !process.env.OPENAI_API_KEY;
 
   let extraction: InvoiceExtraction;
   // When set, the extraction was refined using this supplier's own correction history.
@@ -119,6 +120,7 @@ export async function extractOneDocument(userId: string, file: File): Promise<Ex
     // the model reads the document. This same pass also classifies the document
     // as an invoice or a receipt — detection is not a separate call.
     const generalHints = await buildHints(userId);
+    let activeHints = generalHints;
     extraction = await extractDocument(base64, mediaType, generalHints);
 
     // Pass 2 — per-supplier learning. Now that we know the supplier, if we hold
@@ -132,9 +134,23 @@ export async function extractOneDocument(userId: string, file: File): Promise<Ex
     if (supplier) {
       const supplierHints = await buildHints(userId, supplier);
       if (supplierHints) {
+        activeHints = supplierHints;
         extraction = await extractDocument(base64, mediaType, supplierHints);
         refinedForSupplier = supplier;
       }
+    }
+
+    // Pass 3 — escalation. If OpenAI's extraction is uncertain, hand the same
+    // document and hints to Anthropic for a more careful read. Missing
+    // ANTHROPIC_API_KEY simply skips this pass; the low-confidence result
+    // remains and flags the document for human review.
+    const criticalLow =
+      extraction.overallConfidence < 0.7 ||
+      (["supplierName", "invoiceNumber", "total"] as const).some(
+        (f) => (extraction as any)[f].confidence < 0.5,
+      );
+    if (criticalLow && process.env.ANTHROPIC_API_KEY) {
+      extraction = await extractDocumentEscalation(base64, mediaType, activeHints);
     }
   }
 

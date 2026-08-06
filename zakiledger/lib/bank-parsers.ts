@@ -126,19 +126,20 @@ export function parseCsvStatement(text: string, defaultCurrency: string | null =
     const currency = currencyHeader ? row[currencyHeader]?.trim() || null : null;
     if (currency && !detectedCurrency) detectedCurrency = currency;
 
+    const rawMerchant = descriptionHeader ? row[descriptionHeader]?.trim() || null : null;
     transactions.push({
-      transactionDate: isoDate,
+      transactionDate: { value: isoDate, confidence: 1.0, reason: "CSV parse" },
       postedDate: null,
-      merchant: descriptionHeader ? row[descriptionHeader]?.trim() || null : null,
-      description: descriptionHeader ? row[descriptionHeader]?.trim() || null : null,
-      amount,
+      merchant: rawMerchant ? { value: rawMerchant, confidence: 1.0, reason: "CSV parse" } : null,
+      description: rawMerchant ? { value: rawMerchant, confidence: 1.0, reason: "CSV parse" } : null,
+      amount: { value: amount, confidence: 1.0, reason: "CSV parse" },
       currency: currency ?? defaultCurrency,
       transactionId: null,
       memo: null,
     });
   }
 
-  const dates = transactions.map((t) => t.transactionDate).sort();
+  const dates = transactions.map((t) => t.transactionDate.value).sort();
   return {
     transactions,
     openingBalance: null, // a plain transaction CSV rarely states one
@@ -168,9 +169,9 @@ function parseMoney(raw: string | undefined): number | null {
  */
 export function parsedTransactionsToQbInputs(transactions: ParsedBankTransaction[]): QbTransactionInput[] {
   return transactions.map((t) => ({
-    postedDate: t.transactionDate,
-    amount: t.amount,
-    description: t.description ?? t.merchant,
+    postedDate: t.transactionDate.value,
+    amount: t.amount.value,
+    description: t.description?.value ?? t.merchant?.value ?? null,
     currency: t.currency,
   }));
 }
@@ -243,12 +244,13 @@ export function parseOfxStatement(text: string): ParsedStatement {
     const sourceAmount = t.TRNAMT !== undefined ? Number(t.TRNAMT) : null;
     if (!isoDate || sourceAmount === null || !Number.isFinite(sourceAmount)) continue;
 
+    const rawMerchant = t.NAME?.trim() || t.PAYEE?.NAME?.trim() || null;
     transactions.push({
-      transactionDate: isoDate,
+      transactionDate: { value: isoDate, confidence: 1.0, reason: "OFX parse" },
       postedDate: isoDate,
-      merchant: t.NAME?.trim() || t.PAYEE?.NAME?.trim() || null,
-      description: t.MEMO?.trim() || t.NAME?.trim() || null,
-      amount: -sourceAmount, // OFX: negative = debit; flip to our positive-for-debit
+      merchant: rawMerchant ? { value: rawMerchant, confidence: 1.0, reason: "OFX parse" } : null,
+      description: t.MEMO?.trim() ? { value: t.MEMO.trim(), confidence: 1.0, reason: "OFX parse" } : rawMerchant ? { value: rawMerchant, confidence: 1.0, reason: "OFX parse" } : null,
+      amount: { value: -sourceAmount, confidence: 1.0, reason: "OFX parse" }, // OFX: negative = debit; flip to our positive-for-debit
       currency,
       transactionId: t.FITID?.trim() || null,
       memo: t.MEMO?.trim() || null,

@@ -8,22 +8,22 @@ import { parsePdfStatement } from "@/lib/bank-statement-pdf";
  * exercised manually, not in this suite.
  */
 describe("parsePdfStatement (demo mode)", () => {
-  it("returns a realistic sample statement with no ANTHROPIC_API_KEY set", async () => {
-    const original = process.env.ANTHROPIC_API_KEY;
-    delete process.env.ANTHROPIC_API_KEY;
+  it("returns a realistic sample statement with no OPENAI_API_KEY set", async () => {
+    const originalOpenAI = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
     try {
       const file = new File(["demo-bytes"], "statement.pdf", { type: "application/pdf" });
       const result = await parsePdfStatement(file);
 
       expect(result.transactions.length).toBeGreaterThan(0);
       for (const t of result.transactions) {
-        expect(t.transactionDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-        expect(typeof t.amount).toBe("number");
+        expect(t.transactionDate.value).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+        expect(typeof t.amount.value).toBe("number");
       }
       expect(result.periodStart).not.toBeNull();
       expect(result.periodEnd).not.toBeNull();
     } finally {
-      if (original !== undefined) process.env.ANTHROPIC_API_KEY = original;
+      if (originalOpenAI !== undefined) process.env.OPENAI_API_KEY = originalOpenAI;
     }
   });
 });

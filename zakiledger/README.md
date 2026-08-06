@@ -14,8 +14,8 @@ correction** (the correction ledger).
  Upload invoice (PDF/image)
         │
         ▼
- /api/extract ──► Claude (claude-opus-4-8, vision)  ◄── few-shot hints from past corrections
-        │            └─ returns structured JSON + per-field confidence
+ /api/extract ──► GPT-4o-mini (primary) → Claude Sonnet (escalation on low confidence)
+        │            └─ returns structured JSON + per-field confidence + per-field reason
         ▼
  Review screen  (high-confidence auto-filled, low-confidence flagged for a human)
         │
@@ -110,7 +110,8 @@ One table, two payoffs. It is populated from invoice #1 — never bolt it on lat
 ## Tech stack
 
 - **Next.js + TypeScript** (one codebase, front + API routes)
-- **Claude** (`@anthropic-ai/sdk`, model `claude-opus-4-8`) for vision extraction
+- **OpenAI** (`openai`, `gpt-4o-mini`) for primary vision extraction
+- **Claude** (`@anthropic-ai/sdk`, `claude-sonnet-4-5`) for escalation on low-confidence documents
 - **Supabase / Postgres** for data + the correction ledger + file storage
 - **Tailwind + shadcn/ui** for the review UI (add as you flesh out the front end)
 - **Xero API** as the first accounting integration (Month 3)

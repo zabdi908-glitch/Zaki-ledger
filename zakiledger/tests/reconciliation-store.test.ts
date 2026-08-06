@@ -38,11 +38,11 @@ describe("bank reconciliation store (in-memory)", () => {
     const statement = await saveBankStatement(userId, "statement.csv", "csv", {
       transactions: [
         {
-          transactionDate: "2026-07-15",
+          transactionDate: { value: "2026-07-15", confidence: 1.0, reason: "test" },
           postedDate: null,
-          merchant: "Vendor X",
-          description: "Vendor X",
-          amount: 100,
+          merchant: { value: "Vendor X", confidence: 1.0, reason: "test" },
+          description: { value: "Vendor X", confidence: 1.0, reason: "test" },
+          amount: { value: 100, confidence: 1.0, reason: "test" },
           currency: "GBP",
           transactionId: null,
           memo: null,
@@ -52,11 +52,11 @@ describe("bank reconciliation store (in-memory)", () => {
           // the pending-clearance window, so this scores 0 on every axis
           // (amount, date, merchant) and stays genuinely unmatched rather
           // than becoming a low-confidence red match.
-          transactionDate: "2026-07-25",
+          transactionDate: { value: "2026-07-25", confidence: 1.0, reason: "test" },
           postedDate: null,
-          merchant: "Unrelated Merchant",
-          description: "Unrelated Merchant",
-          amount: 42,
+          merchant: { value: "Unrelated Merchant", confidence: 1.0, reason: "test" },
+          description: { value: "Unrelated Merchant", confidence: 1.0, reason: "test" },
+          amount: { value: 42, confidence: 1.0, reason: "test" },
           currency: "GBP",
           transactionId: null,
           memo: null,
@@ -103,11 +103,11 @@ describe("bank reconciliation store (in-memory)", () => {
           // period end — 30 days apart, so date scores 0 too. Combined with
           // the amount/merchant mismatch, this pair scores 0 on every axis
           // and produces no auto candidate at all.
-          transactionDate: "2026-07-01",
+          transactionDate: { value: "2026-07-01", confidence: 1.0, reason: "test" },
           postedDate: null,
-          merchant: "Mystery Charge",
-          description: "Mystery Charge",
-          amount: 55,
+          merchant: { value: "Mystery Charge", confidence: 1.0, reason: "test" },
+          description: { value: "Mystery Charge", confidence: 1.0, reason: "test" },
+          amount: { value: 55, confidence: 1.0, reason: "test" },
           currency: "GBP",
           transactionId: null,
           memo: null,
@@ -147,11 +147,11 @@ describe("bank reconciliation store (in-memory)", () => {
     const aliceStatement = await saveBankStatement(alice, "alice.csv", "csv", {
       transactions: [
         {
-          transactionDate: "2026-07-15",
+          transactionDate: { value: "2026-07-15", confidence: 1.0, reason: "test" },
           postedDate: null,
-          merchant: "Alice's Vendor",
-          description: "Alice's Vendor",
-          amount: 10,
+          merchant: { value: "Alice's Vendor", confidence: 1.0, reason: "test" },
+          description: { value: "Alice's Vendor", confidence: 1.0, reason: "test" },
+          amount: { value: 10, confidence: 1.0, reason: "test" },
           currency: "GBP",
           transactionId: null,
           memo: null,
@@ -174,11 +174,11 @@ describe("bank reconciliation store (in-memory)", () => {
     const statement = await saveBankStatement(userId, "statement.csv", "csv", {
       transactions: [
         {
-          transactionDate: "2026-07-15",
+          transactionDate: { value: "2026-07-15", confidence: 1.0, reason: "test" },
           postedDate: null,
-          merchant: "Vendor X",
-          description: "Vendor X",
-          amount: 100,
+          merchant: { value: "Vendor X", confidence: 1.0, reason: "test" },
+          description: { value: "Vendor X", confidence: 1.0, reason: "test" },
+          amount: { value: 100, confidence: 1.0, reason: "test" },
           currency: "GBP",
           transactionId: null,
           memo: null,
@@ -203,5 +203,65 @@ describe("bank reconciliation store (in-memory)", () => {
     const reopened = matches.find((m) => m.id === matchId);
     expect(reopened?.approvedAt).toBeNull();
     expect(reopened?.approvedBy).toBeNull();
+  });
+
+  it("generates audit memos for auto-matches and manual matches", async () => {
+    const userId = freshUser();
+
+    const statement = await saveBankStatement(userId, "statement.csv", "csv", {
+      transactions: [
+        {
+          transactionDate: { value: "2026-07-15", confidence: 1.0, reason: "test" },
+          postedDate: null,
+          merchant: { value: "Vendor X", confidence: 1.0, reason: "test" },
+          description: { value: "Vendor X", confidence: 1.0, reason: "test" },
+          amount: { value: 100, confidence: 1.0, reason: "test" },
+          currency: "GBP",
+          transactionId: null,
+          memo: null,
+        },
+        {
+          // Won't auto-match — different amount, date, merchant
+          transactionDate: { value: "2026-07-01", confidence: 1.0, reason: "test" },
+          postedDate: null,
+          merchant: { value: "Mystery Charge", confidence: 1.0, reason: "test" },
+          description: { value: "Mystery Charge", confidence: 1.0, reason: "test" },
+          amount: { value: 55, confidence: 1.0, reason: "test" },
+          currency: "GBP",
+          transactionId: null,
+          memo: null,
+        },
+      ],
+      openingBalance: null,
+      closingBalance: null,
+      periodStart: "2026-07-01",
+      periodEnd: "2026-07-31",
+      currency: "GBP",
+    });
+
+    await saveQbTransactions(userId, [
+      { postedDate: "2026-07-15", amount: 100, description: "Vendor X" },
+      { postedDate: "2026-07-31", amount: 999, description: "Something Else" },
+    ]);
+
+    const computed = await computeAndPersistMatches(userId, statement.id);
+    expect(computed.matches).toHaveLength(1);
+
+    // Auto-match should have a green audit memo
+    const autoMatch = computed.matches[0];
+    expect(autoMatch.auditMemo).not.toBeNull();
+    expect(autoMatch.auditMemo?.category).toBe("PERFECT_MATCH");
+    expect(autoMatch.auditMemo?.severity).toBe("info");
+
+    // Create a manual match for the unmatched bank transaction
+    const bankTxnId = computed.bankTransactions[1].id;
+    const qbTxns = await listQbTransactionsForPeriod(userId, "2026-07-01", "2026-07-31");
+    const qbTxnId = qbTxns[1].id;
+
+    const manual = await createManualMatch(userId, statement.id, bankTxnId, qbTxnId);
+    expect(manual.matchedBy).toBe("manual");
+    expect(manual.auditMemo).not.toBeNull();
+    expect(manual.auditMemo?.category).toBe("PERFECT_MATCH");
+    expect(manual.auditMemo?.severity).toBe("info");
   });
 });

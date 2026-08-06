@@ -6,10 +6,6 @@ vi.mock("@/lib/auth", () => ({
   requireUser: async () => ({ id: "test-user" }),
 }));
 
-const { POST: batchRoute } = await import("@/app/api/extract-batch/route");
-const { GET: listRoute } = await import("@/app/api/pending/route");
-const { EXTRACT_CONCURRENCY, mapWithConcurrency } = await import("@/lib/extract-pipeline");
-
 /**
  * Batch upload: many files, read in parallel, one result each.
  *
@@ -19,10 +15,23 @@ const { EXTRACT_CONCURRENCY, mapWithConcurrency } = await import("@/lib/extract-
  * in this file while being exactly the thing the feature exists to avoid.
  */
 
-beforeAll(() => {
+let batchRoute: any;
+let listRoute: any;
+let EXTRACT_CONCURRENCY: number;
+let mapWithConcurrency: any;
+
+beforeAll(async () => {
+  delete process.env.OPENAI_API_KEY;
   delete process.env.ANTHROPIC_API_KEY;
   delete process.env.SUPABASE_URL;
   delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  // Lazy-import routes/modules *after* env vars are cleared.
+  batchRoute = (await import("@/app/api/extract-batch/route")).POST;
+  listRoute = (await import("@/app/api/pending/route")).GET;
+  const pipeline = await import("@/lib/extract-pipeline");
+  EXTRACT_CONCURRENCY = pipeline.EXTRACT_CONCURRENCY;
+  mapWithConcurrency = pipeline.mapWithConcurrency;
 });
 
 /** Drive the route and collect the NDJSON stream into the messages it carried. */

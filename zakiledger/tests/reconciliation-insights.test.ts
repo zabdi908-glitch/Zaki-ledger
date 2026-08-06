@@ -54,6 +54,7 @@ function match(overrides: Partial<ReconciliationMatch> = {}): ReconciliationMatc
     matchedAt: "2026-06-02T00:00:00Z",
     approvedBy: null,
     approvedAt: null,
+    auditMemo: null,
     ...overrides,
   };
 }
