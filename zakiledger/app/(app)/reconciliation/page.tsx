@@ -245,6 +245,12 @@ export default function ReconciliationUploadPage() {
             >
               Review matches
             </button>
+            <button
+              style={{ ...shellButton("outline", "lg"), marginTop: 10 }}
+              onClick={() => router.push(`/reconciliation/${statementId}`)}
+            >
+              View Dashboard
+            </button>
           </div>
 
           <div style={shellCard({ padding: 24 })}>

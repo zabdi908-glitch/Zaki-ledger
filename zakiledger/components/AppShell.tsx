@@ -23,6 +23,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { id: "reconcile", label: "Upload Statement", icon: "🏦", href: "/reconciliation" },
       { id: "reconcile-review", label: "Review Matches", icon: "🔍", href: "/reconciliation/review" },
+      { id: "reconcile-compare", label: "Cross-File Compare", icon: "🔀", href: "/reconciliation/compare" },
       { id: "reconcile-batch", label: "Batch Review", icon: "✔️", href: "/reconciliation/batch" },
     ],
   },
