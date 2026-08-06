@@ -5,8 +5,10 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { MatchWithDetails, DashboardData } from "@/lib/dashboard-pipeline";
 import { formatMoney } from "@/lib/currency";
 import {
+  disabledOverride,
   pageTitle,
   pageSubtitle,
+  shellButton,
   shellCard,
   shellColor,
   shellFigures,
@@ -30,6 +32,7 @@ export default function ReconciliationDashboardPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [isBulkProcessing, setIsBulkProcessing] = useState(false);
   const [bulkResults, setBulkResults] = useState<{ approved: number; errors: number } | null>(null);
+  const [isRematching, setIsRematching] = useState(false);
 
   const load = useCallback(async () => {
     if (!statementId) {
@@ -247,6 +250,30 @@ export default function ReconciliationDashboardPage() {
     }
   }
 
+  async function handleRematch() {
+    if (!statementId) return;
+    setIsRematching(true);
+    try {
+      const res = await fetch("/api/reconciliation/on-demand", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ statementId }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        showToast(json.error ?? "Re-match failed.");
+        return;
+      }
+      const { stats } = json as { stats: { total: number; green: number; yellow: number; red: number; unmatched: number } };
+      showToast(`Re-matched: ${stats.green} green, ${stats.yellow} yellow, ${stats.red} red, ${stats.unmatched} unmatched.`);
+      await load();
+    } catch {
+      showToast("Re-match failed.");
+    } finally {
+      setIsRematching(false);
+    }
+  }
+
   if (state === "loading") {
     return (
       <div>
@@ -317,6 +344,15 @@ export default function ReconciliationDashboardPage() {
           <div style={{ fontSize: 14, fontWeight: 600, color: shellColor.ink }}>
             {currency ?? "—"}
           </div>
+        </div>
+        <div style={{ marginLeft: "auto" }}>
+          <button
+            style={isRematching ? { ...shellButton("outline", "sm"), ...disabledOverride() } : shellButton("outline", "sm")}
+            onClick={handleRematch}
+            disabled={isRematching}
+          >
+            {isRematching ? "Matching…" : "Run Matching Now"}
+          </button>
         </div>
       </div>
 

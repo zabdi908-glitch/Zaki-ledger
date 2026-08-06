@@ -263,6 +263,36 @@ export async function getLatestStatementId(userId: string): Promise<string | nul
   return (data?.id as string) ?? null;
 }
 
+/** All bank statements for a user, newest first. */
+export async function listBankStatementsForUser(userId: string): Promise<BankStatementMeta[]> {
+  const db = getSupabase();
+  if (!db) {
+    return mem.statements
+      .filter((s) => s.userId === userId)
+      .map(({ userId: _u, ...rest }) => rest)
+      .reverse();
+  }
+
+  const { data, error } = await db
+    .from("bank_statements")
+    .select()
+    .eq("user_id", userId)
+    .order("upload_date", { ascending: false });
+  if (error) throw new Error(`Failed to load bank statements: ${error.message}`);
+
+  return (data ?? []).map((row: Record<string, unknown>) => ({
+    id: row.id as string,
+    fileName: (row.file_name as string) ?? null,
+    fileFormat: row.file_format as string,
+    periodStart: (row.statement_period_start as string) ?? null,
+    periodEnd: (row.statement_period_end as string) ?? null,
+    currency: (row.currency as string) ?? null,
+    openingBalance: numOrNull(row.opening_balance),
+    closingBalance: numOrNull(row.closing_balance),
+    transactionCount: Number(row.transaction_count ?? 0),
+  }));
+}
+
 /** The statement's metadata, or null if it doesn't exist or belongs to another user. */
 export async function getBankStatement(userId: string, statementId: string): Promise<BankStatementMeta | null> {
   const db = getSupabase();

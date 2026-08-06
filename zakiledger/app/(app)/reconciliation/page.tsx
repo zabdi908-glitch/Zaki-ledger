@@ -1,9 +1,12 @@
+
 "use client";
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { useShellToast } from "@/components/AppShell";
 import ConnectionChip, { useConnectedProvider } from "@/components/ConnectionChip";
+import ProgressStream from "@/components/reconciliation/progress-stream";
+import { useUserId } from "@/hooks/use-user";
 import { buildReviewRows } from "@/lib/reconciliation-insights";
 import { estimateReviewSeconds, formatEstimate, summarizeSections } from "@/lib/review-summary";
 import { SECTIONS } from "@/lib/review-sections";
@@ -57,6 +60,8 @@ export default function ReconciliationUploadPage() {
   const [syncBusy, setSyncBusy] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
 
+  const userId = useUserId();
+
   async function refreshMatchCounts(id: string) {
     const res = await fetch(`/api/reconciliation/${id}/transactions`);
     const data = await res.json().catch(() => ({}));
@@ -88,6 +93,7 @@ export default function ReconciliationUploadPage() {
 
     setStage("processing");
     setError(null);
+    setStatementId(null);
     try {
       const form = new FormData();
       form.append("file", file);
@@ -188,14 +194,16 @@ export default function ReconciliationUploadPage() {
       )}
 
       {stage === "processing" && (
-        <div style={shellCard({ padding: 48, textAlign: "center" })}>
-          <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 20 }}>
-            Matching {transactionCount || ""} transactions against QuickBooks…
-          </div>
-          <div style={{ ...progressTrack(), maxWidth: 420, margin: "0 auto" }}>
-            <div style={progressFill(70)} />
-          </div>
-        </div>
+        <ProgressStream
+          userId={userId}
+          statementId={statementId}
+          transactionCount={transactionCount}
+          onRetry={() => {
+            setStage("idle");
+            setStatementId(null);
+            setError(null);
+          }}
+        />
       )}
 
       {stage === "matched" && statementId && (
