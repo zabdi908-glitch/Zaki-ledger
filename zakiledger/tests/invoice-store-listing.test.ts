@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("@/lib/supabase", () => ({
+vi.mock("../lib/supabase", () => ({
   getSupabase: () => null,
   isSupabaseConfigured: () => false,
 }));

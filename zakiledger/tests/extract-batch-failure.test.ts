@@ -14,9 +14,9 @@ const pipeline = vi.hoisted(() => ({
   failFor: new Set<string>(),
 }));
 
-vi.mock("@/lib/extract-pipeline", async () => {
-  const actual = await vi.importActual<typeof import("@/lib/extract-pipeline")>(
-    "@/lib/extract-pipeline",
+vi.mock("../lib/extract-pipeline", async () => {
+  const actual = await vi.importActual<typeof import("../lib/extract-pipeline")>(
+    "../lib/extract-pipeline",
   );
   return {
     ...actual,
@@ -30,7 +30,7 @@ vi.mock("@/lib/extract-pipeline", async () => {
 });
 
 // No real Supabase session exists in a unit test — stand in for one.
-vi.mock("@/lib/auth", () => ({
+vi.mock("../lib/auth", () => ({
   requireUser: async () => ({ id: "test-user" }),
 }));
 
@@ -43,8 +43,8 @@ beforeAll(async () => {
   delete process.env.SUPABASE_URL;
   delete process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-  batchRoute = (await import("@/app/api/extract-batch/route")).POST;
-  listRoute = (await import("@/app/api/pending/route")).GET;
+  batchRoute = (await import("../app/api/extract-batch/route")).POST;
+  listRoute = (await import("../app/api/pending/route")).GET;
 });
 
 async function uploadBatch(filenames: string[]) {

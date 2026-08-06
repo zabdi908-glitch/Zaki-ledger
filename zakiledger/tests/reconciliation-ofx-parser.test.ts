@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseOfxStatement, sgmlToXml } from "@/lib/bank-parsers";
+import { parseOfxStatement, sgmlToXml } from "../lib/bank-parsers";
 
 // OFX v1: SGML — leaf elements have no closing tag, container elements do.
 const OFX_V1_SGML = `OFXHEADER:100

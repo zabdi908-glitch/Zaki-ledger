@@ -7,28 +7,28 @@ beforeAll(() => {
 });
 
 // Mock the OAuth/API modules so no real network calls are made
-vi.mock("@/lib/quickbooks", () => ({
+vi.mock("../lib/quickbooks", () => ({
   getValidQboAccess: vi.fn(),
   listQuickBooksPurchases: vi.fn(),
 }));
 
-vi.mock("@/lib/xero", () => ({
+vi.mock("../lib/xero", () => ({
   getValidXeroAccess: vi.fn(),
   listXeroBankTransactions: vi.fn(),
 }));
 
 // Dynamic import after mocks are registered and env is cleared
-const { runNightlyMatch } = await import("@/lib/nightly-match");
+const { runNightlyMatch } = await import("../lib/nightly-match");
 const {
   saveBankStatement,
   saveQbTransactions,
   listMatchesForStatement,
-} = await import("@/lib/reconciliation-store");
+} = await import("../lib/reconciliation-store");
 const { getValidQboAccess, listQuickBooksPurchases } = await import(
-  "@/lib/quickbooks"
+  "../lib/quickbooks"
 );
 const { getValidXeroAccess, listXeroBankTransactions } = await import(
-  "@/lib/xero"
+  "../lib/xero"
 );
 
 function freshUser(): string {

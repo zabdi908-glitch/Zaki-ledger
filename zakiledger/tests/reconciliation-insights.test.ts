@@ -8,8 +8,8 @@ import {
   plainEnglishReason,
   sectionFor,
   suggestCategory,
-} from "@/lib/reconciliation-insights";
-import type { BankTransaction, QbTransaction, ReconciliationMatch } from "@/lib/reconciliation-schema";
+} from "../lib/reconciliation-insights";
+import type { BankTransaction, QbTransaction, ReconciliationMatch } from "../lib/reconciliation-schema";
 import { syntheticStatement } from "./fixtures/statement";
 
 function bank(overrides: Partial<BankTransaction> = {}): BankTransaction {

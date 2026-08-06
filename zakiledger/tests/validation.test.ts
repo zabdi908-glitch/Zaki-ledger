@@ -4,20 +4,20 @@ import {
   checkTotals,
   effectiveConfidence,
   gateApproval,
-} from "@/lib/validation";
+} from "../lib/validation";
 import {
   REVIEWABLE_FIELDS,
   arithmeticMismatch,
   type InvoiceExtraction,
   type ReviewableField,
-} from "@/lib/schema";
+} from "../lib/schema";
 import {
   sampleAmbiguousExtraction,
   sampleExtraction,
   sampleForFilename,
   sampleMessyReceiptExtraction,
   sampleReceiptExtraction,
-} from "@/lib/demo";
+} from "../lib/demo";
 
 /**
  * Effective confidence per field, exactly as the review screen computes it —

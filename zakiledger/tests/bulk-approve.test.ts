@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { NextRequest } from "next/server";
-import type { InvoiceExtraction } from "@/lib/schema";
+import type { InvoiceExtraction } from "../lib/schema";
 
 function s(value: string, confidence: number, reason = "test fixture"): { value: string; confidence: number; reason: string } {
   return { value, confidence, reason };
@@ -25,7 +25,7 @@ const xero = vi.hoisted(() => ({
   failFor: null as string | null,
 }));
 
-vi.mock("@/lib/xero", () => ({
+vi.mock("../lib/xero", () => ({
   isXeroConfigured: () => true,
   isXeroConnected: async () => xero.connected,
   createXeroDraftBill: async (_userId: string, bill: any) => {
@@ -46,15 +46,15 @@ const TEST_USER_ID = "test-user";
 // No real Supabase session exists in a unit test — stand in for one, the same
 // user for every request in this file, so route handlers see the documents
 // this file queues directly via lib/store.
-vi.mock("@/lib/auth", () => ({
+vi.mock("../lib/auth", () => ({
   requireUser: async () => ({ id: TEST_USER_ID }),
 }));
 
-const { POST: bulkRoute } = await import("@/app/api/approve/bulk/route");
-const { sampleBulkBatch, sampleReceiptExtraction } = await import("@/lib/demo");
-const { listPendingDocuments, savePendingDocument } = await import("@/lib/store");
-const { SUPPORTED_CURRENCIES } = await import("@/lib/currency");
-type BulkApproveResult = Awaited<ReturnType<typeof import("@/lib/bulk-approve").bulkApprove>>;
+const { POST: bulkRoute } = await import("../app/api/approve/bulk/route");
+const { sampleBulkBatch, sampleReceiptExtraction } = await import("../lib/demo");
+const { listPendingDocuments, savePendingDocument } = await import("../lib/store");
+const { SUPPORTED_CURRENCIES } = await import("../lib/currency");
+type BulkApproveResult = Awaited<ReturnType<typeof import("../lib/bulk-approve").bulkApprove>>;
 
 beforeAll(() => {
   delete process.env.ANTHROPIC_API_KEY;
@@ -273,7 +273,7 @@ describe("one document's failure never costs the others their approval", () => {
 // =============================================================================
 describe("gating rules carried over from the review screen", () => {
   it("blocks a document whose type the model couldn't classify", async () => {
-    const { sampleAmbiguousExtraction } = await import("@/lib/demo");
+    const { sampleAmbiguousExtraction } = await import("../lib/demo");
     const ids = await queue([
       { filename: "ambiguous.pdf", extraction: sampleAmbiguousExtraction() },
     ]);

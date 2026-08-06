@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseCsvStatement, parsedTransactionsToQbInputs } from "@/lib/bank-parsers";
+import { parseCsvStatement, parsedTransactionsToQbInputs } from "../lib/bank-parsers";
 
 describe("parsedTransactionsToQbInputs", () => {
   it("maps a parsed CSV statement onto the QB/Xero import shape", () => {

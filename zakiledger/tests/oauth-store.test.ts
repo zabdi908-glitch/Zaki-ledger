@@ -36,12 +36,12 @@ function stubSupabase(results: { data: unknown; error: { message: string } | nul
 
 async function loadStore(client: unknown) {
   vi.resetModules();
-  vi.doMock("@/lib/supabase", () => ({ getSupabase: () => client }));
-  return import("@/lib/oauth-store");
+  vi.doMock("../lib/supabase", () => ({ getSupabase: () => client }));
+  return import("../lib/oauth-store");
 }
 
 afterEach(() => {
-  vi.doUnmock("@/lib/supabase");
+  vi.doUnmock("../lib/supabase");
   vi.restoreAllMocks();
 });
 

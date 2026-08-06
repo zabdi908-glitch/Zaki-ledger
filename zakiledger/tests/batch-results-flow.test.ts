@@ -1,8 +1,8 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { NextRequest } from "next/server";
-import type { InvoiceExtraction } from "@/lib/schema";
+import type { InvoiceExtraction } from "../lib/schema";
 // Type-only, so it doesn't pull the module in ahead of the vi.mock calls below.
-import type { ResultRow } from "@/lib/batch-results";
+import type { ResultRow } from "../lib/batch-results";
 
 /**
  * The whole journey the results screen exists for, driven through the real route
@@ -26,7 +26,7 @@ const xero = vi.hoisted(() => ({
   calls: [] as Array<{ supplierName: string; total: number | null }>,
 }));
 
-vi.mock("@/lib/xero", () => ({
+vi.mock("../lib/xero", () => ({
   isXeroConfigured: () => true,
   isXeroConnected: async () => true,
   createXeroDraftBill: async (_userId: string, bill: any) => {
@@ -44,8 +44,8 @@ vi.mock("@/lib/xero", () => ({
  */
 const samples = vi.hoisted(() => ({ byFilename: new Map<string, unknown>() }));
 
-vi.mock("@/lib/demo", async () => {
-  const actual = await vi.importActual<typeof import("@/lib/demo")>("@/lib/demo");
+vi.mock("../lib/demo", async () => {
+  const actual = await vi.importActual<typeof import("../lib/demo")>("../lib/demo");
   return {
     ...actual,
     sampleForFilename: (filename: string) =>
@@ -56,9 +56,9 @@ vi.mock("@/lib/demo", async () => {
 /** The one unreadable file, forced at the pipeline boundary — demo reads never fail. */
 const pipeline = vi.hoisted(() => ({ failFor: new Set<string>() }));
 
-vi.mock("@/lib/extract-pipeline", async () => {
-  const actual = await vi.importActual<typeof import("@/lib/extract-pipeline")>(
-    "@/lib/extract-pipeline",
+vi.mock("../lib/extract-pipeline", async () => {
+  const actual = await vi.importActual<typeof import("../lib/extract-pipeline")>(
+    "../lib/extract-pipeline",
   );
   return {
     ...actual,
@@ -71,7 +71,7 @@ vi.mock("@/lib/extract-pipeline", async () => {
 
 // No real Supabase session exists in a unit test — stand in for one, the same
 // user for every request in this file.
-vi.mock("@/lib/auth", () => ({
+vi.mock("../lib/auth", () => ({
   requireUser: async () => ({ id: "test-user" }),
 }));
 
@@ -95,15 +95,15 @@ beforeAll(async () => {
   delete process.env.SUPABASE_URL;
   delete process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-  batchRoute = (await import("@/app/api/extract-batch/route")).POST;
-  approveRoute = (await import("@/app/api/approve/route")).POST;
-  bulkRoute = (await import("@/app/api/approve/bulk/route")).POST;
-  correctionsRoute = (await import("@/app/api/corrections/route")).GET;
-  pendingRoute = (await import("@/app/api/pending/route")).GET;
-  const demo = await import("@/lib/demo");
+  batchRoute = (await import("../app/api/extract-batch/route")).POST;
+  approveRoute = (await import("../app/api/approve/route")).POST;
+  bulkRoute = (await import("../app/api/approve/bulk/route")).POST;
+  correctionsRoute = (await import("../app/api/corrections/route")).GET;
+  pendingRoute = (await import("../app/api/pending/route")).GET;
+  const demo = await import("../lib/demo");
   sampleBulkBatch = demo.sampleBulkBatch;
   sampleMessyReceiptExtraction = demo.sampleMessyReceiptExtraction;
-  const batchResults = await import("@/lib/batch-results");
+  const batchResults = await import("../lib/batch-results");
   pendingRow = batchResults.pendingRow;
   planApproval = batchResults.planApproval;
   rowStatus = batchResults.rowStatus;

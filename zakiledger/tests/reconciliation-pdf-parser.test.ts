@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parsePdfStatement } from "@/lib/bank-statement-pdf";
+import { parsePdfStatement } from "../lib/bank-statement-pdf";
 
 /**
  * Only the demo-mode path is testable here (no ANTHROPIC_API_KEY in CI/dev),

@@ -8,8 +8,8 @@ vi.mock("@anthropic-ai/sdk", () => ({
   },
 }));
 
-const { resolveFuzzyMerchants } = await import("@/lib/comparison-ai");
-import type { BankTransaction, QbTransaction } from "@/lib/reconciliation-schema";
+const { resolveFuzzyMerchants } = await import("../lib/comparison-ai");
+import type { BankTransaction, QbTransaction } from "../lib/reconciliation-schema";
 
 beforeEach(() => {
   anthropicMock.parse.mockReset();

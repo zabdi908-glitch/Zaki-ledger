@@ -8,8 +8,8 @@ import {
   extractReference,
   merchantSimilarity,
   tokenSimilarity,
-} from "@/lib/reconciliation-detectors";
-import type { BankTransaction } from "@/lib/reconciliation-schema";
+} from "../lib/reconciliation-detectors";
+import type { BankTransaction } from "../lib/reconciliation-schema";
 import { syntheticStatement } from "./fixtures/statement";
 
 /** Sign convention: positive = money out (debit), negative = money in (credit). */

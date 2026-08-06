@@ -5,8 +5,8 @@ import {
   scorePair,
   GREEN_MIN_SCORE,
   YELLOW_MIN_SCORE,
-} from "@/lib/reconciliation-matching";
-import type { BankTransaction, QbTransaction } from "@/lib/reconciliation-schema";
+} from "../lib/reconciliation-matching";
+import type { BankTransaction, QbTransaction } from "../lib/reconciliation-schema";
 
 function bank(overrides: Partial<BankTransaction> & Pick<BankTransaction, "id">): BankTransaction {
   return {

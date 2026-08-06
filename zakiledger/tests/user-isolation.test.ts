@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from "vitest";
-import { sampleReceiptExtraction } from "@/lib/demo";
+import { sampleReceiptExtraction } from "../lib/demo";
 
 /**
  * The property multi-user auth exists to guarantee: one user's queue,
@@ -26,8 +26,8 @@ const {
   findDuplicateReceipt,
   recordCorrection,
   recentCorrections,
-} = await import("@/lib/store");
-const { saveConnection, getConnection, deleteConnection } = await import("@/lib/oauth-store");
+} = await import("../lib/store");
+const { saveConnection, getConnection, deleteConnection } = await import("../lib/oauth-store");
 
 const ALICE = "alice";
 const BOB = "bob";

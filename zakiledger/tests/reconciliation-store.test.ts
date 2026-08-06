@@ -25,7 +25,7 @@ const {
   getReconciliationReport,
   getBankStatement,
   listQbTransactionsForPeriod,
-} = await import("@/lib/reconciliation-store");
+} = await import("../lib/reconciliation-store");
 
 function freshUser(): string {
   return crypto.randomUUID();

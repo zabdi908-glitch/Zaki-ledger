@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { NextRequest } from "next/server";
 
 // No auth needed for this route — it processes uploaded files inline.
-vi.mock("@/lib/auth", () => ({
+vi.mock("../lib/auth", () => ({
   requireUser: async () => ({ id: "test-user" }),
 }));
 
@@ -12,7 +12,7 @@ beforeAll(async () => {
   // Force deterministic mode: no real AI calls.
   delete process.env.ANTHROPIC_API_KEY;
 
-  compareRoute = (await import("@/app/api/reconciliation/compare/route")).POST;
+  compareRoute = (await import("../app/api/reconciliation/compare/route")).POST;
 });
 
 function makeCsv(date: string, description: string, amount: number, currency = "GBP"): string {

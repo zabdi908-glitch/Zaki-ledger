@@ -5,8 +5,8 @@ import {
   plainEnglishGateReason,
   sectionForGate,
   type QueueItem,
-} from "@/lib/extraction-insights";
-import { gateApproval } from "@/lib/validation";
+} from "../lib/extraction-insights";
+import { gateApproval } from "../lib/validation";
 
 function item(overrides: Partial<QueueItem> = {}): QueueItem {
   return {

@@ -10,14 +10,14 @@ import {
   tally,
   tallyLabel,
   type ResultRow,
-} from "@/lib/batch-results";
+} from "../lib/batch-results";
 import {
   sampleAmbiguousExtraction,
   sampleForeignCurrencyReceiptExtraction,
   sampleMessyReceiptExtraction,
   sampleReceiptExtraction,
-} from "@/lib/demo";
-import type { InvoiceExtraction } from "@/lib/schema";
+} from "../lib/demo";
+import type { InvoiceExtraction } from "../lib/schema";
 
 /**
  * The results screen's decision logic: what a row is, and how it gets approved.

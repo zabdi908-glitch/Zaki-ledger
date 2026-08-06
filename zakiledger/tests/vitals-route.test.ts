@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { POST } from "@/app/api/vitals/route";
+import { POST } from "../app/api/vitals/route";
 
 /**
  * /api/vitals is unauthenticated by design (beacons fire from any client),

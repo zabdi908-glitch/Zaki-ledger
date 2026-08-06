@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { NextRequest } from "next/server";
 
 // No real Supabase session exists in a unit test — stand in for one.
-vi.mock("@/lib/auth", () => ({
+vi.mock("../lib/auth", () => ({
   requireUser: async () => ({ id: "test-user" }),
 }));
 
@@ -27,9 +27,9 @@ beforeAll(async () => {
   delete process.env.SUPABASE_SERVICE_ROLE_KEY;
 
   // Lazy-import routes/modules *after* env vars are cleared.
-  batchRoute = (await import("@/app/api/extract-batch/route")).POST;
-  listRoute = (await import("@/app/api/pending/route")).GET;
-  const pipeline = await import("@/lib/extract-pipeline");
+  batchRoute = (await import("../app/api/extract-batch/route")).POST;
+  listRoute = (await import("../app/api/pending/route")).GET;
+  const pipeline = await import("../lib/extract-pipeline");
   EXTRACT_CONCURRENCY = pipeline.EXTRACT_CONCURRENCY;
   mapWithConcurrency = pipeline.mapWithConcurrency;
 });

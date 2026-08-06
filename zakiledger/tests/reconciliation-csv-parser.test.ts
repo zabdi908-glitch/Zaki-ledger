@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseCsvStatement, parseFlexibleDate } from "@/lib/bank-parsers";
+import { parseCsvStatement, parseFlexibleDate } from "../lib/bank-parsers";
 
 describe("parseFlexibleDate", () => {
   it("parses ISO dates", () => {

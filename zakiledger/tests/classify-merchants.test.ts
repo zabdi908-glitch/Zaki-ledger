@@ -3,21 +3,21 @@ import type { NextRequest } from "next/server";
 
 const merchantAi = vi.hoisted(() => ({ classify: vi.fn() }));
 
-vi.mock("@/lib/merchant-ai", () => ({
+vi.mock("../lib/merchant-ai", () => ({
   classifyMerchant: merchantAi.classify,
 }));
 
-vi.mock("@/lib/auth", () => ({
+vi.mock("../lib/auth", () => ({
   requireUser: async () => ({ id: "test-user" }),
 }));
 
-vi.mock("@/lib/supabase", () => ({
+vi.mock("../lib/supabase", () => ({
   getSupabase: () => null,
   isSupabaseConfigured: () => false,
 }));
 
-const { POST: classifyRoute } = await import("@/app/api/reconciliation/classify-merchants/route");
-const { __clearMerchantAiCacheForTests } = await import("@/lib/merchant-ai-cache");
+const { POST: classifyRoute } = await import("../app/api/reconciliation/classify-merchants/route");
+const { __clearMerchantAiCacheForTests } = await import("../lib/merchant-ai-cache");
 
 beforeEach(() => {
   __clearMerchantAiCacheForTests();

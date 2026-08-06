@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { NextRequest } from "next/server";
-import { resolvePendingDocument, savePendingDocument } from "@/lib/store";
-import { sampleMessyReceiptExtraction, sampleReceiptExtraction } from "@/lib/demo";
+import { resolvePendingDocument, savePendingDocument } from "../lib/store";
+import { sampleMessyReceiptExtraction, sampleReceiptExtraction } from "../lib/demo";
 
 /**
  * The two endpoints behind the pending-documents view.
@@ -18,13 +18,13 @@ const TEST_USER_ID = "test-user";
 // No real Supabase session exists in a unit test — stand in for one, the same
 // user for every request in this file, so route handlers see the documents
 // the test queued directly via lib/store.
-vi.mock("@/lib/auth", () => ({
+vi.mock("../lib/auth", () => ({
   requireUser: async () => ({ id: TEST_USER_ID }),
 }));
 
-const { GET: listRoute } = await import("@/app/api/pending/route");
-const { DELETE: deleteRoute, GET: detailRoute } = await import("@/app/api/pending/[id]/route");
-const { POST: approveRoute } = await import("@/app/api/approve/route");
+const { GET: listRoute } = await import("../app/api/pending/route");
+const { DELETE: deleteRoute, GET: detailRoute } = await import("../app/api/pending/[id]/route");
+const { POST: approveRoute } = await import("../app/api/approve/route");
 
 beforeAll(() => {
   delete process.env.ANTHROPIC_API_KEY;

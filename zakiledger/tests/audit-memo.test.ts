@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { generateAuditMemos } from "@/lib/audit-memo-generator";
-import { AuditCategorySchema } from "@/lib/audit-memo-schema";
-import type { ProposedMatch, BankTransaction, QbTransaction } from "@/lib/reconciliation-schema";
+import { generateAuditMemos } from "../lib/audit-memo-generator";
+import { AuditCategorySchema } from "../lib/audit-memo-schema";
+import type { ProposedMatch, BankTransaction, QbTransaction } from "../lib/reconciliation-schema";
 
 function match(overrides: Partial<ProposedMatch> & Pick<ProposedMatch, "bankTransactionId">): ProposedMatch {
   return {

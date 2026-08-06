@@ -8,7 +8,7 @@ vi.mock("@anthropic-ai/sdk", () => ({
   },
 }));
 
-const { classifyMerchant } = await import("@/lib/merchant-ai");
+const { classifyMerchant } = await import("../lib/merchant-ai");
 
 beforeEach(() => {
   anthropicMock.parse.mockReset();

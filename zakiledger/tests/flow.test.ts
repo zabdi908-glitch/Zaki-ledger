@@ -1,9 +1,9 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { NextRequest } from "next/server";
-import { REVIEWABLE_FIELDS, type DocumentType, type InvoiceExtraction } from "@/lib/schema";
+import { REVIEWABLE_FIELDS, type DocumentType, type InvoiceExtraction } from "../lib/schema";
 
 // No real Supabase session exists in a unit test — stand in for one.
-vi.mock("@/lib/auth", () => ({
+vi.mock("../lib/auth", () => ({
   requireUser: async () => ({ id: "test-user" }),
 }));
 
@@ -30,8 +30,8 @@ beforeAll(async () => {
 
   // Lazy-import routes *after* env vars are cleared so the OpenAI client
   // isn't created with the dummy key from vitest.config.ts.
-  extractRoute = (await import("@/app/api/extract/route")).POST;
-  approveRoute = (await import("@/app/api/approve/route")).POST;
+  extractRoute = (await import("../app/api/extract/route")).POST;
+  approveRoute = (await import("../app/api/approve/route")).POST;
 });
 
 type ExtractBody = {

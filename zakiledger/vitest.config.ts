@@ -10,6 +10,7 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["tests/**/*.test.ts"],
+    exclude: ["node_modules", ".claude/**"],
     // Route-level tests share a process-wide in-memory store, so each file gets
     // its own worker and a clean module registry. Without this, one file's
     // approved documents leak into another's duplicate checks.

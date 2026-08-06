@@ -13,8 +13,8 @@ import type { NextRequest } from "next/server";
  */
 const store = vi.hoisted(() => ({ failQueueWrites: true }));
 
-vi.mock("@/lib/store", async () => {
-  const actual = await vi.importActual<typeof import("@/lib/store")>("@/lib/store");
+vi.mock("../lib/store", async () => {
+  const actual = await vi.importActual<typeof import("../lib/store")>("../lib/store");
   return {
     ...actual,
     savePendingDocument: async (...args: Parameters<typeof actual.savePendingDocument>) => {
@@ -35,7 +35,7 @@ vi.mock("@/lib/store", async () => {
 });
 
 // No real Supabase session exists in a unit test — stand in for one.
-vi.mock("@/lib/auth", () => ({
+vi.mock("../lib/auth", () => ({
   requireUser: async () => ({ id: "test-user" }),
 }));
 
@@ -49,9 +49,9 @@ beforeAll(async () => {
   delete process.env.SUPABASE_URL;
   delete process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-  extractRoute = (await import("@/app/api/extract/route")).POST;
-  approveRoute = (await import("@/app/api/approve/route")).POST;
-  REVIEWABLE_FIELDS = (await import("@/lib/schema")).REVIEWABLE_FIELDS;
+  extractRoute = (await import("../app/api/extract/route")).POST;
+  approveRoute = (await import("../app/api/approve/route")).POST;
+  REVIEWABLE_FIELDS = (await import("../lib/schema")).REVIEWABLE_FIELDS;
 });
 
 async function extract(filename: string) {

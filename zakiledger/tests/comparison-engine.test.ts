@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { compareBankToQb } from "@/lib/comparison-engine";
-import type { BankTransaction, QbTransaction } from "@/lib/reconciliation-schema";
+import { compareBankToQb } from "../lib/comparison-engine";
+import type { BankTransaction, QbTransaction } from "../lib/reconciliation-schema";
 
 function bank(overrides: Partial<BankTransaction> & Pick<BankTransaction, "id">): BankTransaction {
   return {
