@@ -2,12 +2,15 @@
 -- Creates every table referenced by lib/reconciliation-store.ts,
 -- lib/store.ts, and lib/oauth-store.ts, with column names and types
 -- extracted directly from the actual TypeScript insert/select calls.
+-- Drops and recreates any table that already exists from a prior migration
+-- so column shapes match what the app code actually reads and writes.
 -- Run this in Supabase SQL Editor.
 
 -- =========================================================================
 -- 1. bank_statements — one row per uploaded bank statement file
 -- =========================================================================
-CREATE TABLE IF NOT EXISTS public.bank_statements (
+DROP TABLE IF EXISTS public.bank_statements CASCADE;
+CREATE TABLE public.bank_statements (
   id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id                 UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   file_name               TEXT,
@@ -22,7 +25,6 @@ CREATE TABLE IF NOT EXISTS public.bank_statements (
 );
 
 ALTER TABLE public.bank_statements ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "Users can only access their own bank_statements" ON public.bank_statements;
 CREATE POLICY "Users can only access their own bank_statements"
   ON public.bank_statements FOR ALL
   USING (auth.uid() = user_id);
@@ -33,7 +35,8 @@ CREATE INDEX IF NOT EXISTS idx_bank_statements_user
 -- =========================================================================
 -- 2. bank_transactions — parsed lines from an uploaded statement
 -- =========================================================================
-CREATE TABLE IF NOT EXISTS public.bank_transactions (
+DROP TABLE IF EXISTS public.bank_transactions CASCADE;
+CREATE TABLE public.bank_transactions (
   id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   statement_id      UUID NOT NULL REFERENCES public.bank_statements(id) ON DELETE CASCADE,
   user_id           UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
@@ -48,7 +51,6 @@ CREATE TABLE IF NOT EXISTS public.bank_transactions (
 );
 
 ALTER TABLE public.bank_transactions ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "Users can only access their own bank_transactions" ON public.bank_transactions;
 CREATE POLICY "Users can only access their own bank_transactions"
   ON public.bank_transactions FOR ALL
   USING (auth.uid() = user_id);
@@ -61,7 +63,8 @@ CREATE INDEX IF NOT EXISTS idx_bank_transactions_user
 -- =========================================================================
 -- 3. qb_transactions — QuickBooks / Xero transactions synced or imported
 -- =========================================================================
-CREATE TABLE IF NOT EXISTS public.qb_transactions (
+DROP TABLE IF EXISTS public.qb_transactions CASCADE;
+CREATE TABLE public.qb_transactions (
   id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id            UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   qb_transaction_id  TEXT,                               -- QB/Xero's own id
@@ -76,7 +79,6 @@ CREATE TABLE IF NOT EXISTS public.qb_transactions (
 );
 
 ALTER TABLE public.qb_transactions ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "Users can only access their own qb_transactions" ON public.qb_transactions;
 CREATE POLICY "Users can only access their own qb_transactions"
   ON public.qb_transactions FOR ALL
   USING (auth.uid() = user_id);
@@ -87,7 +89,8 @@ CREATE INDEX IF NOT EXISTS idx_qb_transactions_user
 -- =========================================================================
 -- 4. reconciliation_matches — auto-scored or manually created match pairs
 -- =========================================================================
-CREATE TABLE IF NOT EXISTS public.reconciliation_matches (
+DROP TABLE IF EXISTS public.reconciliation_matches CASCADE;
+CREATE TABLE public.reconciliation_matches (
   id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id               UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   statement_id          UUID NOT NULL REFERENCES public.bank_statements(id) ON DELETE CASCADE,
@@ -107,7 +110,6 @@ CREATE TABLE IF NOT EXISTS public.reconciliation_matches (
 );
 
 ALTER TABLE public.reconciliation_matches ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "Users can only access their own reconciliation_matches" ON public.reconciliation_matches;
 CREATE POLICY "Users can only access their own reconciliation_matches"
   ON public.reconciliation_matches FOR ALL
   USING (auth.uid() = user_id);
@@ -124,7 +126,8 @@ CREATE INDEX IF NOT EXISTS idx_reconciliation_matches_user
 -- =========================================================================
 -- 5. reconciliation_reports — per-statement reconciliation summary
 -- =========================================================================
-CREATE TABLE IF NOT EXISTS public.reconciliation_reports (
+DROP TABLE IF EXISTS public.reconciliation_reports CASCADE;
+CREATE TABLE public.reconciliation_reports (
   id                       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id                  UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   statement_id             UUID NOT NULL REFERENCES public.bank_statements(id) ON DELETE CASCADE,
@@ -144,7 +147,6 @@ CREATE TABLE IF NOT EXISTS public.reconciliation_reports (
 );
 
 ALTER TABLE public.reconciliation_reports ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "Users can only access their own reconciliation_reports" ON public.reconciliation_reports;
 CREATE POLICY "Users can only access their own reconciliation_reports"
   ON public.reconciliation_reports FOR ALL
   USING (auth.uid() = user_id);
@@ -155,7 +157,8 @@ CREATE INDEX IF NOT EXISTS idx_reconciliation_reports_user
 -- =========================================================================
 -- 6. reconciliation_audit_log — immutable audit trail for match lifecycle
 -- =========================================================================
-CREATE TABLE IF NOT EXISTS public.reconciliation_audit_log (
+DROP TABLE IF EXISTS public.reconciliation_audit_log CASCADE;
+CREATE TABLE public.reconciliation_audit_log (
   id                        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   reconciliation_match_id   UUID NOT NULL REFERENCES public.reconciliation_matches(id) ON DELETE CASCADE,
   action                    TEXT NOT NULL,              -- 'match_approved' | 'match_unapproved'
@@ -168,7 +171,6 @@ CREATE TABLE IF NOT EXISTS public.reconciliation_audit_log (
 ALTER TABLE public.reconciliation_audit_log ENABLE ROW LEVEL SECURITY;
 -- Audit log is scoped by the match, which is already scoped by user_id;
 -- RLS on this table is defensive belt-and-suspenders.
-DROP POLICY IF EXISTS "Users can only access their own audit log" ON public.reconciliation_audit_log;
 CREATE POLICY "Users can only access their own audit log"
   ON public.reconciliation_audit_log FOR ALL
   USING (
@@ -185,7 +187,8 @@ CREATE INDEX IF NOT EXISTS idx_reconciliation_audit_log_match
 -- =========================================================================
 -- 7. pending_documents — extraction queue before approval
 -- =========================================================================
-CREATE TABLE IF NOT EXISTS public.pending_documents (
+DROP TABLE IF EXISTS public.pending_documents CASCADE;
+CREATE TABLE public.pending_documents (
   id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id       UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   extraction    JSONB NOT NULL,                         -- InvoiceExtraction verbatim
@@ -199,7 +202,6 @@ CREATE TABLE IF NOT EXISTS public.pending_documents (
 );
 
 ALTER TABLE public.pending_documents ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "Users can only access their own pending_documents" ON public.pending_documents;
 CREATE POLICY "Users can only access their own pending_documents"
   ON public.pending_documents FOR ALL
   USING (auth.uid() = user_id);
@@ -213,7 +215,8 @@ CREATE INDEX IF NOT EXISTS idx_pending_documents_queue
 -- =========================================================================
 -- 8. invoices — human-approved invoices and receipts in the ledger
 -- =========================================================================
-CREATE TABLE IF NOT EXISTS public.invoices (
+DROP TABLE IF EXISTS public.invoices CASCADE;
+CREATE TABLE public.invoices (
   id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id            UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   document_type      TEXT NOT NULL DEFAULT 'invoice',   -- 'invoice' | 'receipt'
@@ -232,7 +235,6 @@ CREATE TABLE IF NOT EXISTS public.invoices (
 );
 
 ALTER TABLE public.invoices ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "Users can only access their own invoices" ON public.invoices;
 CREATE POLICY "Users can only access their own invoices"
   ON public.invoices FOR ALL
   USING (auth.uid() = user_id);
@@ -248,7 +250,8 @@ CREATE INDEX IF NOT EXISTS idx_invoices_receipt_identity
 -- =========================================================================
 -- 9. corrections — the correction ledger (append-only audit trail)
 -- =========================================================================
-CREATE TABLE IF NOT EXISTS public.corrections (
+DROP TABLE IF EXISTS public.corrections CASCADE;
+CREATE TABLE public.corrections (
   id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   invoice_id     UUID REFERENCES public.invoices(id) ON DELETE SET NULL,
   user_id        UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
@@ -261,7 +264,6 @@ CREATE TABLE IF NOT EXISTS public.corrections (
 );
 
 ALTER TABLE public.corrections ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "Users can only access their own corrections" ON public.corrections;
 CREATE POLICY "Users can only access their own corrections"
   ON public.corrections FOR ALL
   USING (auth.uid() = user_id);
@@ -276,7 +278,8 @@ CREATE INDEX IF NOT EXISTS idx_corrections_user
 -- =========================================================================
 -- 10. confirmations — the confirmation ledger (append-only trust record)
 -- =========================================================================
-CREATE TABLE IF NOT EXISTS public.confirmations (
+DROP TABLE IF EXISTS public.confirmations CASCADE;
+CREATE TABLE public.confirmations (
   id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   invoice_id      UUID REFERENCES public.invoices(id) ON DELETE SET NULL,
   user_id         UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
@@ -287,7 +290,6 @@ CREATE TABLE IF NOT EXISTS public.confirmations (
 );
 
 ALTER TABLE public.confirmations ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "Users can only access their own confirmations" ON public.confirmations;
 CREATE POLICY "Users can only access their own confirmations"
   ON public.confirmations FOR ALL
   USING (auth.uid() = user_id);
@@ -302,7 +304,8 @@ CREATE INDEX IF NOT EXISTS idx_confirmations_user
 -- =========================================================================
 -- 11. oauth_connections — accounting-platform OAuth tokens
 -- =========================================================================
-CREATE TABLE IF NOT EXISTS public.oauth_connections (
+DROP TABLE IF EXISTS public.oauth_connections CASCADE;
+CREATE TABLE public.oauth_connections (
   id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id       UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   provider      TEXT NOT NULL
@@ -317,7 +320,6 @@ CREATE TABLE IF NOT EXISTS public.oauth_connections (
 );
 
 ALTER TABLE public.oauth_connections ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "Users can only access their own oauth_connections" ON public.oauth_connections;
 CREATE POLICY "Users can only access their own oauth_connections"
   ON public.oauth_connections FOR ALL
   USING (auth.uid() = user_id);
