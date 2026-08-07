@@ -48,12 +48,8 @@ export default function MatchList({
   if (matches.length === 0) {
     return (
       <div
-        style={{
-          padding: 48,
-          textAlign: "center",
-          color: shellColor.inkFaint,
-          fontSize: 14,
-        }}
+        className="zl-text-center zl-text-sm"
+        style={{ padding: 48, color: shellColor.inkFaint }}
       >
         {emptyMessage}
       </div>
@@ -61,21 +57,14 @@ export default function MatchList({
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+    <div className="zl-flex-col zl-gap-16">
       {/* Bulk action bar */}
       {showBulkActions && (
         <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            padding: "12px 16px",
-            background: shellColor.highBg,
-            borderRadius: 12,
-            border: `1px solid ${shellColor.cardBorder}`,
-          }}
+          className="zl-flex zl-items-center zl-justify-between zl-px-4 zl-py-3 zl-rounded-lg"
+          style={{ background: shellColor.highBg, border: `1px solid ${shellColor.cardBorder}` }}
         >
-          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <div className="zl-flex zl-items-center zl-gap-12">
             <input
               type="checkbox"
               checked={allSelected}
@@ -86,13 +75,13 @@ export default function MatchList({
               className="w-4 h-4 cursor-pointer"
               aria-label="Select all matches"
             />
-            <span style={{ fontSize: 13, fontWeight: 600, color: shellColor.ink }}>
+            <span className="zl-text-sm zl-font-semibold" style={{ color: shellColor.ink }}>
               {selectedCount > 0 ? `${selectedCount} selected` : "Select all"}
             </span>
           </div>
 
           {isBulkProcessing ? (
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div className="zl-flex zl-items-center zl-gap-8">
               <span
                 style={{
                   display: "inline-block",
@@ -104,10 +93,10 @@ export default function MatchList({
                   animation: "spin 0.8s linear infinite",
                 }}
               />
-              <span style={{ fontSize: 13, color: shellColor.inkSoft }}>Processing…</span>
+              <span className="zl-text-sm" style={{ color: shellColor.inkSoft }}>Processing…</span>
             </div>
           ) : bulkResults ? (
-            <span style={{ fontSize: 13, color: shellColor.inkSoft }}>
+            <span className="zl-text-sm" style={{ color: shellColor.inkSoft }}>
               {bulkResults.errors > 0
                 ? `${bulkResults.approved} approved, ${bulkResults.errors} failed`
                 : `${bulkResults.approved} approved`}
@@ -117,11 +106,7 @@ export default function MatchList({
               onClick={onBulkApprove}
               disabled={!canBulkApprove}
               className="inline-flex items-center justify-center gap-2 rounded-lg font-semibold text-white text-[13px] px-4 py-2 border-none cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-              style={{
-                background: shellColor.high,
-                opacity: canBulkApprove ? 1 : 0.5,
-                cursor: canBulkApprove ? "pointer" : "not-allowed",
-              }}
+              style={{ background: shellColor.high }}
             >
               Approve & Sync All
             </button>

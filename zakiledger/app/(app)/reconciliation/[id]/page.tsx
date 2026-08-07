@@ -310,38 +310,38 @@ export default function ReconciliationDashboardPage() {
       <h1 style={pageTitle}>Reconciliation</h1>
 
       {/* Statement metadata header */}
-      <div style={{ ...shellCard({ padding: "16px 20px", marginBottom: 20 }), display: "flex", flexWrap: "wrap", gap: 20, alignItems: "center" }}>
+      <div className="zl-flex zl-flex-wrap zl-gap-20 zl-items-center" style={shellCard({ padding: "16px 20px", marginBottom: 20 })}>
         <div>
-          <div style={{ fontSize: 12, color: shellColor.inkFaint, textTransform: "uppercase", letterSpacing: "0.03em" }}>
+          <div className="zl-text-xs zl-uppercase zl-tracking-wide" style={{ color: shellColor.inkFaint }}>
             Statement
           </div>
-          <div style={{ fontSize: 14, fontWeight: 600, color: shellColor.ink }}>
+          <div className="zl-text-sm zl-font-semibold" style={{ color: shellColor.ink }}>
             {statement.fileName ?? "Unnamed statement"}
           </div>
         </div>
         <div>
-          <div style={{ fontSize: 12, color: shellColor.inkFaint, textTransform: "uppercase", letterSpacing: "0.03em" }}>
+          <div className="zl-text-xs zl-uppercase zl-tracking-wide" style={{ color: shellColor.inkFaint }}>
             Period
           </div>
-          <div style={{ fontSize: 14, fontWeight: 600, color: shellColor.ink }}>
+          <div className="zl-text-sm zl-font-semibold" style={{ color: shellColor.ink }}>
             {statement.periodStart && statement.periodEnd
               ? `${new Date(statement.periodStart).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })} – ${new Date(statement.periodEnd).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })}`
               : "—"}
           </div>
         </div>
         <div>
-          <div style={{ fontSize: 12, color: shellColor.inkFaint, textTransform: "uppercase", letterSpacing: "0.03em" }}>
+          <div className="zl-text-xs zl-uppercase zl-tracking-wide" style={{ color: shellColor.inkFaint }}>
             Transactions
           </div>
-          <div style={{ fontSize: 14, fontWeight: 600, color: shellColor.ink, ...shellFigures }}>
+          <div className="zl-text-sm zl-font-semibold" style={{ color: shellColor.ink, ...shellFigures }}>
             {statement.transactionCount}
           </div>
         </div>
         <div>
-          <div style={{ fontSize: 12, color: shellColor.inkFaint, textTransform: "uppercase", letterSpacing: "0.03em" }}>
+          <div className="zl-text-xs zl-uppercase zl-tracking-wide" style={{ color: shellColor.inkFaint }}>
             Currency
           </div>
-          <div style={{ fontSize: 14, fontWeight: 600, color: shellColor.ink }}>
+          <div className="zl-text-sm zl-font-semibold" style={{ color: shellColor.ink }}>
             {currency ?? "—"}
           </div>
         </div>
@@ -358,7 +358,7 @@ export default function ReconciliationDashboardPage() {
 
       {/* Summary bar */}
       {summary && (
-        <div style={{ ...shellCard({ padding: "16px 20px", marginBottom: 20 }), display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 16 }}>
+        <div className="zl-grid zl-grid-cols-auto-fit zl-gap-16" style={shellCard({ padding: "16px 20px", marginBottom: 20 })}>
           <SummaryItem label="Matched total" value={formatMoney(summary.matchedTotal, currency)} />
           <SummaryItem label="Unmatched" value={formatMoney(summary.unmatched, currency)} />
           <SummaryItem label="Variance" value={formatMoney(summary.variance, currency)} />
@@ -367,7 +367,7 @@ export default function ReconciliationDashboardPage() {
 
       <TabBar tabs={tabs} activeTab={activeTab} onTabChange={(k) => setActiveTab(k as typeof activeTab)} />
 
-      <div style={{ marginTop: 20 }}>
+      <div className="zl-mt-5">
         <MatchList
           matches={activeMatches}
           onApprove={handleApprove}
@@ -390,8 +390,8 @@ export default function ReconciliationDashboardPage() {
 function SummaryItem({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <div style={{ fontSize: 12, color: shellColor.inkFaint, marginBottom: 2 }}>{label}</div>
-      <div style={{ fontSize: 18, fontWeight: 600, color: shellColor.ink, ...shellFigures }}>{value}</div>
+      <div className="zl-text-xs zl-mb-0-5" style={{ color: shellColor.inkFaint }}>{label}</div>
+      <div className="zl-text-lg zl-font-semibold" style={{ color: shellColor.ink, ...shellFigures }}>{value}</div>
     </div>
   );
 }

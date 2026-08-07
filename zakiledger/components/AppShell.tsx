@@ -4,38 +4,52 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { shellColor, shellFont } from "@/lib/shell-theme";
+import {
+  ArrowLeftRight,
+  BarChart3,
+  CheckSquare,
+  ClipboardList,
+  Edit3,
+  FolderOpen,
+  Home,
+  Landmark,
+  ListChecks,
+  Search,
+  Settings,
+  Upload,
+} from "lucide-react";
 
-type NavItem = { id: string; label: string; icon: string; href: string; soon?: boolean };
+type NavItem = { id: string; label: string; icon: React.ReactNode; href: string; soon?: boolean };
 type NavGroup = { label: string | null; items: NavItem[] };
 
 const NAV_GROUPS: NavGroup[] = [
-  { label: null, items: [{ id: "dashboard", label: "Dashboard", icon: "🏠", href: "/dashboard" }] },
+  { label: null, items: [{ id: "dashboard", label: "Dashboard", icon: <Home size={16} color="#E67E22" />, href: "/dashboard" }] },
   {
     label: "Extraction",
     items: [
-      { id: "upload", label: "Upload & Extract", icon: "📤", href: "/upload" },
-      { id: "review", label: "Review & Edit", icon: "✏️", href: "/review" },
-      { id: "batch", label: "Batch Review", icon: "✅", href: "/batch" },
+      { id: "upload", label: "Upload & Extract", icon: <Upload size={16} color="#3498DB" />, href: "/upload" },
+      { id: "review", label: "Review & Edit", icon: <Edit3 size={16} color="#F1C40F" />, href: "/review" },
+      { id: "batch", label: "Batch Review", icon: <CheckSquare size={16} color="#2ECC71" />, href: "/batch" },
     ],
   },
   {
     label: "Reconciliation",
     items: [
-      { id: "reconcile", label: "Upload Statement", icon: "🏦", href: "/reconciliation" },
-      { id: "reconcile-review", label: "Review Matches", icon: "🔍", href: "/reconciliation/review" },
-      { id: "reconcile-compare", label: "Cross-File Compare", icon: "🔀", href: "/reconciliation/compare" },
-      { id: "reconcile-batch", label: "Batch Review", icon: "✔️", href: "/reconciliation/batch" },
+      { id: "reconcile", label: "Upload Statement", icon: <Landmark size={16} color="#9B59B6" />, href: "/reconciliation" },
+      { id: "reconcile-review", label: "Review Matches", icon: <Search size={16} color="#3498DB" />, href: "/reconciliation/review" },
+      { id: "reconcile-compare", label: "Cross-File Compare", icon: <ArrowLeftRight size={16} color="#3498DB" />, href: "/reconciliation/compare" },
+      { id: "reconcile-batch", label: "Batch Review", icon: <ListChecks size={16} color="#2ECC71" />, href: "/reconciliation/batch" },
     ],
   },
   {
     label: "Organization",
     items: [
-      { id: "auto-categorize", label: "Auto-Categorize", icon: "📁", href: "/auto-categorize", soon: true },
-      { id: "document-portal", label: "Document Portal", icon: "📋", href: "/document-portal", soon: true },
+      { id: "auto-categorize", label: "Auto-Categorize", icon: <FolderOpen size={16} color="#E67E22" />, href: "/auto-categorize", soon: true },
+      { id: "document-portal", label: "Document Portal", icon: <ClipboardList size={16} color="#3498DB" />, href: "/document-portal", soon: true },
     ],
   },
-  { label: "Insights", items: [{ id: "reports", label: "Reports & Analytics", icon: "📊", href: "/reports", soon: true }] },
-  { label: "Account", items: [{ id: "settings", label: "Settings", icon: "⚙️", href: "/settings" }] },
+  { label: "Insights", items: [{ id: "reports", label: "Reports & Analytics", icon: <BarChart3 size={16} color="#1ABC9C" />, href: "/reports", soon: true }] },
+  { label: "Account", items: [{ id: "settings", label: "Settings", icon: <Settings size={16} color="#BDC3C7" />, href: "/settings" }] },
 ];
 
 // --- toast -------------------------------------------------------------------
@@ -248,7 +262,7 @@ function NavItemInner({
 }) {
   if (collapsed) {
     return (
-      <div style={{ width: 28, height: 28, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, margin: "0 auto" }}>
+      <div style={{ width: 28, height: 28, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto" }}>
         {item.icon}
       </div>
     );
@@ -256,7 +270,7 @@ function NavItemInner({
   return (
     <>
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-        <span style={{ fontSize: 15, lineHeight: 1, flexShrink: 0 }}>{item.icon}</span>
+        {item.icon}
         <span>{item.label}</span>
       </div>
       {soon && (

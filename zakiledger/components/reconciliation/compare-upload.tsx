@@ -83,8 +83,8 @@ export default function CompareUpload({ onCompare, isLoading = false }: CompareU
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+    <div className="zl-flex-col zl-gap-20">
+      <div className="zl-grid zl-grid-cols-2 zl-gap-20">
         {/* Bank Statement Drop Zone */}
         <label
           style={dropZoneStyle(bankDragOver, bankFile !== null)}
@@ -92,10 +92,10 @@ export default function CompareUpload({ onCompare, isLoading = false }: CompareU
           onDragLeave={() => handleDragLeave("bank")}
           onDrop={(e) => handleDrop(e, "bank")}
         >
-          <div style={{ fontSize: 15, fontWeight: 600, color: shellColor.ink }}>
+          <div className="zl-text-base zl-font-semibold" style={{ color: shellColor.ink }}>
             {bankFile ? bankFile.name : "Bank Statement (CSV/OFX)"}
           </div>
-          <div style={{ fontSize: 13, color: shellColor.inkSoft }}>
+          <div className="zl-text-sm" style={{ color: shellColor.inkSoft }}>
             {bankFile ? `${(bankFile.size / 1024).toFixed(1)} KB` : "Drag & drop or click to choose"}
           </div>
           <input
@@ -113,10 +113,10 @@ export default function CompareUpload({ onCompare, isLoading = false }: CompareU
           onDragLeave={() => handleDragLeave("qb")}
           onDrop={(e) => handleDrop(e, "qb")}
         >
-          <div style={{ fontSize: 15, fontWeight: 600, color: shellColor.ink }}>
+          <div className="zl-text-base zl-font-semibold" style={{ color: shellColor.ink }}>
             {qbFile ? qbFile.name : "QuickBooks Export (CSV)"}
           </div>
-          <div style={{ fontSize: 13, color: shellColor.inkSoft }}>
+          <div className="zl-text-sm" style={{ color: shellColor.inkSoft }}>
             {qbFile ? `${(qbFile.size / 1024).toFixed(1)} KB` : "Drag & drop or click to choose"}
           </div>
           <input
@@ -129,10 +129,10 @@ export default function CompareUpload({ onCompare, isLoading = false }: CompareU
       </div>
 
       {/* Optional Date Range */}
-      <div style={{ ...shellCard({ padding: "16px 20px" }), display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
-        <span style={{ fontSize: 13, fontWeight: 600, color: shellColor.inkSoft }}>Optional date range:</span>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <label style={{ fontSize: 12.5, color: shellColor.inkFaint }}>Start</label>
+      <div className="zl-flex zl-items-center zl-gap-16 zl-flex-wrap" style={shellCard({ padding: "16px 20px" })}>
+        <span className="zl-text-sm zl-font-semibold" style={{ color: shellColor.inkSoft }}>Optional date range:</span>
+        <div className="zl-flex zl-items-center zl-gap-8">
+          <label className="zl-text-xs" style={{ color: shellColor.inkFaint }}>Start</label>
           <input
             type="date"
             value={dateStart}
@@ -147,8 +147,8 @@ export default function CompareUpload({ onCompare, isLoading = false }: CompareU
             }}
           />
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <label style={{ fontSize: 12.5, color: shellColor.inkFaint }}>End</label>
+        <div className="zl-flex zl-items-center zl-gap-8">
+          <label className="zl-text-xs" style={{ color: shellColor.inkFaint }}>End</label>
           <input
             type="date"
             value={dateEnd}

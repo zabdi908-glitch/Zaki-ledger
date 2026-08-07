@@ -34,10 +34,10 @@ export default function ConnectionChip() {
   const color = provider ? shellColor.high : shellColor.medium;
   const bg = provider ? shellColor.highBg : shellColor.trackBg;
   return (
-    <div style={{ margin: "0 0 16px", display: "flex", alignItems: "center", gap: 10 }}>
+    <div className="zl-flex zl-items-center zl-gap-10" style={{ margin: "0 0 16px" }}>
       <span style={pill(color, bg)}>{label}</span>
       {!provider && (
-        <Link href="/settings" style={{ fontSize: 12.5, color: shellColor.inkSoft }}>
+        <Link href="/settings" className="zl-text-xs" style={{ color: shellColor.inkSoft }}>
           Connect in Settings →
         </Link>
       )}

@@ -19,11 +19,8 @@ interface TabBarProps {
 export default function TabBar({ tabs, activeTab, onTabChange }: TabBarProps) {
   return (
     <div
-      style={{
-        display: "flex",
-        gap: 4,
-        borderBottom: `1px solid ${shellColor.cardBorder}`,
-      }}
+      className="zl-flex zl-gap-8 zl-border-b"
+      style={{ borderBottom: `1px solid ${shellColor.cardBorder}` }}
     >
       {tabs.map((tab) => {
         const isActive = tab.key === activeTab;
@@ -31,21 +28,12 @@ export default function TabBar({ tabs, activeTab, onTabChange }: TabBarProps) {
           <button
             key={tab.key}
             onClick={() => onTabChange(tab.key)}
+            className="zl-inline-flex zl-items-center zl-gap-8 zl-px-4 zl-py-3 zl-text-sm zl-font-semibold zl-bg-transparent zl-border-none zl-pointer zl-transition-colors"
             style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 8,
-              padding: "10px 16px",
-              fontSize: 14,
-              fontWeight: 600,
               fontFamily: shellFont.body,
               color: isActive ? shellColor.ink : shellColor.inkSoft,
-              background: "transparent",
-              border: "none",
               borderBottom: `2px solid ${isActive ? tab.color : "transparent"}`,
-              cursor: "pointer",
               marginBottom: -1,
-              transition: "color 120ms, border-color 120ms",
             }}
           >
             {tab.label}

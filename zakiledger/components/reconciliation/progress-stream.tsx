@@ -101,7 +101,7 @@ export default function ProgressStream({
 
   return (
     <div style={shellCard({ padding: 48, textAlign: "center" })}>
-      <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>
+      <div className="zl-font-semibold zl-mb-2" style={{ fontSize: 16 }}>
         {stage === "complete"
           ? "All done!"
           : isUploadingPhase
@@ -135,14 +135,8 @@ export default function ProgressStream({
 
       {/* Stage labels */}
       <div
-        style={{
-          display: "flex",
-          justifyContent: "center",
-          gap: 8,
-          flexWrap: "wrap",
-          maxWidth: 560,
-          margin: "0 auto",
-        }}
+        className="zl-flex zl-justify-center zl-gap-8 zl-flex-wrap"
+        style={{ maxWidth: 560, margin: "0 auto" }}
       >
         {STAGE_CONFIG.map((s, i) => {
           const isCompleted = i < currentIndex;

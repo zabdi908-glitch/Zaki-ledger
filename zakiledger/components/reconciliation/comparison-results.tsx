@@ -70,46 +70,23 @@ function CollapsibleSection({
     <div style={shellCard({ overflow: "hidden" })}>
       <button
         onClick={onToggle}
-        style={{
-          width: "100%",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          padding: "14px 20px",
-          background: "transparent",
-          border: "none",
-          cursor: "pointer",
-          fontSize: 14,
-          fontWeight: 600,
-          color: shellColor.ink,
-          textAlign: "left",
-        }}
+        className="zl-flex zl-items-center zl-justify-between zl-px-5 zl-py-4 zl-bg-transparent zl-border-none zl-pointer zl-text-sm zl-font-semibold zl-w-full"
+        style={{ color: shellColor.ink, textAlign: "left" }}
       >
-        <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <span className="zl-flex zl-items-center zl-gap-10">
           <span
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              minWidth: 24,
-              height: 24,
-              padding: "0 8px",
-              borderRadius: 12,
-              background: bg,
-              color,
-              fontSize: 12,
-              fontWeight: 700,
-            }}
+            className="zl-inline-flex zl-items-center zl-justify-center zl-text-xs zl-font-bold"
+            style={{ minWidth: 24, height: 24, padding: "0 8px", borderRadius: 12, background: bg, color }}
           >
             {count}
           </span>
           {title}
         </span>
-        <span style={{ color: shellColor.inkFaint, fontSize: 12, transition: "transform 0.15s", transform: isOpen ? "rotate(180deg)" : "none" }}>
+        <span className="zl-text-xs" style={{ color: shellColor.inkFaint, transition: "transform 0.15s", transform: isOpen ? "rotate(180deg)" : "none" }}>
           ▼
         </span>
       </button>
-      {isOpen && <div style={{ padding: "0 20px 16px" }}>{children}</div>}
+      {isOpen && <div className="zl-px-5 zl-pb-4">{children}</div>}
     </div>
   );
 }
@@ -118,14 +95,14 @@ function MatchedRow({ match }: { match: ComparisonMatch }) {
   const bank = match.bankTransaction;
   const qb = match.qbTransaction;
   return (
-    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: `1px solid ${shellColor.cardBorder}` }}>
-      <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-        <span style={{ fontSize: 13, fontWeight: 600, color: shellColor.ink }}>{bank.merchant ?? bank.description ?? "—"}</span>
+    <div className="zl-flex zl-justify-between zl-items-center" style={{ padding: "10px 0", borderBottom: `1px solid ${shellColor.cardBorder}` }}>
+      <div className="zl-flex-col zl-gap-2">
+        <span className="zl-text-sm zl-font-semibold" style={{ color: shellColor.ink }}>{bank.merchant ?? bank.description ?? "—"}</span>
         <span style={{ fontSize: 11.5, color: shellColor.inkSoft }}>{formatDate(bank.transactionDate)} · {formatCurrency(bank.amount, bank.currency)}</span>
       </div>
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      <div className="zl-flex zl-items-center zl-gap-8">
         <span style={{ fontSize: 11.5, color: shellColor.inkFaint }}>{match.matchType.replace("_", " ")}</span>
-        <span style={{ ...shellFigures, fontSize: 12, fontWeight: 600, color: shellColor.high }}>{Math.round(match.confidence * 100)}%</span>
+        <span className="zl-text-xs zl-font-semibold" style={{ ...shellFigures, color: shellColor.high }}>{Math.round(match.confidence * 100)}%</span>
       </div>
     </div>
   );
@@ -139,9 +116,9 @@ function MissingRow({ item }: { item: MissingTransaction }) {
   const date = "transactionDate" in tx ? tx.transactionDate : "postedDate" in tx ? tx.postedDate : null;
   const name = "merchant" in tx && tx.merchant ? tx.merchant : "description" in tx && tx.description ? tx.description : "—";
   return (
-    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: `1px solid ${shellColor.cardBorder}` }}>
-      <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-        <span style={{ fontSize: 13, fontWeight: 600, color: shellColor.ink }}>{name}</span>
+    <div className="zl-flex zl-justify-between zl-items-center" style={{ padding: "10px 0", borderBottom: `1px solid ${shellColor.cardBorder}` }}>
+      <div className="zl-flex-col zl-gap-2">
+        <span className="zl-text-sm zl-font-semibold" style={{ color: shellColor.ink }}>{name}</span>
         <span style={{ fontSize: 11.5, color: shellColor.inkSoft }}>{formatDate(date)} · {formatCurrency(amount, currency)}</span>
       </div>
       <span style={{ fontSize: 11.5, color: shellColor.inkFaint }}>{isBank ? "In bank only" : "In QB only"}</span>
@@ -152,7 +129,7 @@ function MissingRow({ item }: { item: MissingTransaction }) {
 function DuplicateRow({ dup }: { dup: DuplicateTransaction }) {
   return (
     <div style={{ padding: "10px 0", borderBottom: `1px solid ${shellColor.cardBorder}` }}>
-      <div style={{ fontSize: 12, fontWeight: 600, color: shellColor.dupe, marginBottom: 4 }}>{dup.entries.length} entries · {dup.source}</div>
+      <div className="zl-text-xs zl-font-semibold zl-mb-1" style={{ color: shellColor.dupe }}>{dup.entries.length} entries · {dup.source}</div>
       {dup.entries.map((entry, i) => {
         const amount = "amount" in entry ? entry.amount : 0;
         const currency = "currency" in entry ? entry.currency : null;
@@ -170,14 +147,14 @@ function DuplicateRow({ dup }: { dup: DuplicateTransaction }) {
 
 function MismatchRow({ mm }: { mm: AmountMismatch }) {
   return (
-    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: `1px solid ${shellColor.cardBorder}` }}>
-      <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-        <span style={{ fontSize: 13, fontWeight: 600, color: shellColor.ink }}>{mm.bankTransaction.merchant ?? mm.bankTransaction.description ?? "—"}</span>
+    <div className="zl-flex zl-justify-between zl-items-center" style={{ padding: "10px 0", borderBottom: `1px solid ${shellColor.cardBorder}` }}>
+      <div className="zl-flex-col zl-gap-2">
+        <span className="zl-text-sm zl-font-semibold" style={{ color: shellColor.ink }}>{mm.bankTransaction.merchant ?? mm.bankTransaction.description ?? "—"}</span>
         <span style={{ fontSize: 11.5, color: shellColor.inkSoft }}>
           Bank: {formatCurrency(mm.bankAmount, mm.bankTransaction.currency)} · QB: {formatCurrency(mm.qbAmount, mm.qbTransaction.currency)}
         </span>
       </div>
-      <span style={{ ...shellFigures, fontSize: 12, fontWeight: 600, color: shellColor.low }}>Δ {formatCurrency(mm.difference, mm.bankTransaction.currency)}</span>
+      <span className="zl-text-xs zl-font-semibold" style={{ ...shellFigures, color: shellColor.low }}>Δ {formatCurrency(mm.difference, mm.bankTransaction.currency)}</span>
     </div>
   );
 }
@@ -190,12 +167,12 @@ function UnmatchedRow({ item }: { item: UnmatchedItem }) {
   const name = "merchant" in tx && tx.merchant ? tx.merchant : "description" in tx && tx.description ? tx.description : "—";
   const sevColor = item.severity === "critical" ? shellColor.low : item.severity === "warning" ? shellColor.medium : shellColor.inkFaint;
   return (
-    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: `1px solid ${shellColor.cardBorder}` }}>
-      <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-        <span style={{ fontSize: 13, fontWeight: 600, color: shellColor.ink }}>{name}</span>
+    <div className="zl-flex zl-justify-between zl-items-center" style={{ padding: "10px 0", borderBottom: `1px solid ${shellColor.cardBorder}` }}>
+      <div className="zl-flex-col zl-gap-2">
+        <span className="zl-text-sm zl-font-semibold" style={{ color: shellColor.ink }}>{name}</span>
         <span style={{ fontSize: 11.5, color: shellColor.inkSoft }}>{formatDate(date)} · {formatCurrency(amount, currency)}</span>
       </div>
-      <span style={{ fontSize: 11.5, color: sevColor, fontWeight: 600, textTransform: "capitalize" }}>{item.severity}</span>
+      <span className="zl-text-xs zl-font-semibold zl-uppercase" style={{ color: sevColor }}>{item.severity}</span>
     </div>
   );
 }
@@ -224,23 +201,23 @@ export default function ComparisonResults({ result }: { result: ComparisonResult
     : 0;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+    <div className="zl-flex-col zl-gap-16">
       {/* Summary Card */}
       <div style={shellCard({ padding: 24 })}>
-        <div style={{ fontSize: 15, fontWeight: 600, color: shellColor.ink, marginBottom: 4 }}>Comparison Summary</div>
-        <p style={{ margin: 0, fontSize: 13.5, color: shellColor.inkSoft, marginBottom: 16 }}>{result.summary}</p>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 16 }}>
-          <div style={{ textAlign: "center" }}>
+        <div className="zl-text-base zl-font-semibold zl-mb-1" style={{ color: shellColor.ink }}>Comparison Summary</div>
+        <p className="zl-my-0" style={{ fontSize: 13.5, color: shellColor.inkSoft, marginBottom: 16 }}>{result.summary}</p>
+        <div className="zl-grid zl-grid-cols-3 zl-gap-16">
+          <div className="zl-text-center">
             <div style={{ ...shellFigures, fontSize: 28, fontWeight: 700, color: shellColor.high }}>{result.matches.length}</div>
-            <div style={{ fontSize: 11.5, color: shellColor.inkFaint, marginTop: 2 }}>Matched</div>
+            <div className="zl-mt-0-5" style={{ fontSize: 11.5, color: shellColor.inkFaint }}>Matched</div>
           </div>
-          <div style={{ textAlign: "center" }}>
+          <div className="zl-text-center">
             <div style={{ ...shellFigures, fontSize: 28, fontWeight: 700, color: shellColor.low }}>{totalIssues}</div>
-            <div style={{ fontSize: 11.5, color: shellColor.inkFaint, marginTop: 2 }}>Issues</div>
+            <div className="zl-mt-0-5" style={{ fontSize: 11.5, color: shellColor.inkFaint }}>Issues</div>
           </div>
-          <div style={{ textAlign: "center" }}>
+          <div className="zl-text-center">
             <div style={{ ...shellFigures, fontSize: 28, fontWeight: 700, color: shellColor.teal }}>{matchRate}%</div>
-            <div style={{ fontSize: 11.5, color: shellColor.inkFaint, marginTop: 2 }}>Match Rate</div>
+            <div className="zl-mt-0-5" style={{ fontSize: 11.5, color: shellColor.inkFaint }}>Match Rate</div>
           </div>
         </div>
       </div>
@@ -257,7 +234,7 @@ export default function ComparisonResults({ result }: { result: ComparisonResult
           onToggle={() => toggle(section.key)}
         >
           {section.count === 0 ? (
-            <p style={{ margin: 0, fontSize: 13, color: shellColor.inkFaint, padding: "8px 0" }}>No items</p>
+            <p className="zl-my-0" style={{ fontSize: 13, color: shellColor.inkFaint, padding: "8px 0" }}>No items</p>
           ) : (
             <div>
               {section.key === "matched" && result.matches.map((m, i) => <MatchedRow key={i} match={m} />)}

@@ -61,7 +61,7 @@ export default function CrossFileComparisonPage() {
       )}
 
       {comparisonResult && !isLoading && (
-        <div style={{ marginTop: 28 }}>
+        <div className="zl-mt-7">
           <ComparisonResults result={comparisonResult} />
         </div>
       )}

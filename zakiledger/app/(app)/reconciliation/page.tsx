@@ -172,19 +172,18 @@ export default function ReconciliationUploadPage() {
       {stage === "idle" && (
         <div>
           <label
+            className="zl-block zl-text-center zl-pointer zl-py-16"
             style={{
-              display: "block",
               border: `2px dashed ${shellColor.cardBorder}`,
               borderRadius: 14,
-              padding: "64px 24px",
-              textAlign: "center",
-              cursor: "pointer",
+              paddingLeft: 24,
+              paddingRight: 24,
               background: shellColor.paper,
             }}
           >
-            <div style={{ fontSize: 17, fontWeight: 600, marginBottom: 6 }}>Drop your bank statement here</div>
-            <div style={{ fontSize: 14, color: shellColor.inkSoft, marginBottom: 20 }}>
-              CSV, OFX, or PDF — we&apos;ll match it against your QuickBooks entries
+            <div className="zl-font-semibold zl-mb-1" style={{ fontSize: 17 }}>Drop your bank statement here</div>
+            <div className="zl-text-sm zl-mb-3" style={{ color: shellColor.inkSoft }}>
+              CSV, OFX, or PDF — we'll match it against your QuickBooks entries
             </div>
             <span style={shellButton("primary", "lg")}>Choose statement</span>
             <input type="file" accept=".csv,.ofx,.qfx,.pdf" onChange={onUploadStatement} hidden />
@@ -209,18 +208,18 @@ export default function ReconciliationUploadPage() {
       {stage === "matched" && statementId && (
         <div>
           <div style={shellCard({ padding: 32, marginBottom: 20 })}>
-            <div style={{ fontSize: 17, fontWeight: 600, marginBottom: 6 }}>
+            <div className="zl-font-semibold zl-mb-1" style={{ fontSize: 17 }}>
               {transactionCount} transactions imported
             </div>
             {matchedCount > 0 && (
-              <p style={{ margin: "0 0 12px", fontSize: 13.5, color: shellColor.inkSoft }}>{matchedCount} already approved</p>
+              <p className="zl-my-0 zl-mb-3" style={{ fontSize: 13.5, color: shellColor.inkSoft }}>{matchedCount} already approved</p>
             )}
             {summary && (
               <>
                 <div style={{ ...progressTrack(), marginBottom: 6 }}>
                   <div style={progressFill(summary.readyPct)} />
                 </div>
-                <div style={{ fontSize: 13, color: shellColor.inkSoft, marginBottom: 16 }}>
+                <div className="zl-text-xs zl-mb-3" style={{ color: shellColor.inkSoft }}>
                   {summary.readyPct}% ready to approve · {formatEstimate(estimateReviewSeconds(summary))}
                 </div>
                 {SECTIONS.filter((s) => (summary.counts.get(s.key) ?? 0) > 0).map((s) => (
@@ -262,18 +261,18 @@ export default function ReconciliationUploadPage() {
           </div>
 
           <div style={shellCard({ padding: 24 })}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
+            <div className="zl-flex zl-justify-between zl-items-center zl-flex-wrap zl-gap-12">
               <div>
-                <div style={{ fontSize: 13, fontWeight: 700, color: shellColor.inkFaint, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                <div className="zl-text-xs zl-font-bold zl-uppercase zl-tracking-wide" style={{ color: shellColor.inkFaint }}>
                   Accounting transactions
                 </div>
-                <p style={{ margin: "8px 0 0", color: shellColor.inkSoft, fontSize: 13.5, maxWidth: 460 }}>
+                <p className="zl-my-0 zl-mt-2" style={{ color: shellColor.inkSoft, fontSize: 13.5, maxWidth: 460 }}>
                   {connectedProvider
                     ? `Live-synced from ${connectedProvider === "xero" ? "Xero" : "QuickBooks"}. ${qbCount} on file.`
                     : `No live QuickBooks/Xero connection yet — import a CSV export for this period. ${qbCount} on file.`}
                 </p>
               </div>
-              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <div className="zl-flex zl-gap-10 zl-flex-wrap">
                 {connectedProvider && (
                   <button
                     style={syncBusy ? { ...shellButton("primary", "sm"), ...disabledOverride() } : shellButton("primary", "sm")}
@@ -289,8 +288,8 @@ export default function ReconciliationUploadPage() {
                 </label>
               </div>
             </div>
-            {qbError && <p style={{ marginTop: 12, color: shellColor.low, fontSize: 13.5 }}>{qbError}</p>}
-            {syncError && <p style={{ marginTop: 12, color: shellColor.low, fontSize: 13.5 }}>{syncError}</p>}
+            {qbError && <p className="zl-mt-3" style={{ color: shellColor.low, fontSize: 13.5 }}>{qbError}</p>}
+            {syncError && <p className="zl-mt-3" style={{ color: shellColor.low, fontSize: 13.5 }}>{syncError}</p>}
           </div>
         </div>
       )}

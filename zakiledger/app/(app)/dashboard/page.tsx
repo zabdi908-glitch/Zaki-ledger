@@ -2,6 +2,7 @@ import Link from "next/link";
 import { getSessionUser } from "@/lib/auth";
 import { getDashboardData } from "@/lib/dashboard";
 import { pageSubtitle, pageTitle, shellButton, shellCard, shellColor } from "@/lib/shell-theme";
+import MonthlyVolume from "@/components/dashboard/MonthlyVolume";
 
 /**
  * Dashboard — server component, real aggregates (see lib/dashboard.ts) in
@@ -11,6 +12,7 @@ export default async function DashboardPage() {
   const user = await getSessionUser();
   const data = await getDashboardData(user?.id ?? "demo-user");
   const monthLabel = new Date().toLocaleString("en-US", { month: "long", year: "numeric" });
+  const volumeData = data.chartBars.map((b) => ({ label: b.label, value: b.heightPct }));
 
   return (
     <div>
@@ -49,24 +51,7 @@ export default async function DashboardPage() {
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 16 }}>
-        <div style={shellCard({ padding: 24 })}>
-          <h3 style={{ fontSize: 16, fontWeight: 600, margin: "0 0 20px" }}>Monthly extraction volume</h3>
-          <div style={{ display: "flex", alignItems: "flex-end", gap: 16, height: 140 }}>
-            {data.chartBars.map((bar, i) => (
-              <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 8, height: "100%", justifyContent: "flex-end" }}>
-                <div
-                  style={{
-                    width: "100%",
-                    borderRadius: "4px 4px 0 0",
-                    background: i === data.chartBars.length - 1 ? "oklch(62% 0.11 195)" : "oklch(88% 0.015 240)",
-                    height: `${Math.max(bar.heightPct, 2)}%`,
-                  }}
-                />
-                <div style={{ fontSize: 11.5, color: shellColor.inkSoft }}>{bar.label}</div>
-              </div>
-            ))}
-          </div>
-        </div>
+        <MonthlyVolume data={volumeData} />
         <div style={shellCard({ padding: 24 })}>
           <h3 style={{ fontSize: 16, fontWeight: 600, margin: "0 0 16px" }}>Quick actions</h3>
           <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 24 }}>
