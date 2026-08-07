@@ -1,5 +1,4 @@
-import { quickBooksConnectionStatus } from "./quickbooks";
-import { xeroConnectionStatus } from "./xero";
+import { cache } from "react";
 import {
   getAverageConfidence,
   getMonthlyInvoiceCounts,
@@ -22,7 +21,6 @@ export interface DashboardData {
   extractedThisMonth: number;
   extractedDeltaPct: number | null;
   chartBars: { label: string; heightPct: number }[];
-  accounting: { connected: boolean; label: string };
   recentActivity: { text: string; time: string }[];
 }
 
@@ -38,14 +36,16 @@ function relativeTime(iso: string): string {
   return `${weeks} week${weeks === 1 ? "" : "s"} ago`;
 }
 
-export async function getDashboardData(userId: string): Promise<DashboardData> {
+export const getDashboardData = cache(async function getDashboardData(
+  userId: string,
+): Promise<DashboardData> {
   // Every source is independently fault-tolerant: this is the screen a user
   // lands on right after logging in, so one flaky query (a schema that
   // isn't provisioned yet, a transient auth hiccup) must degrade that one
   // stat/section to empty rather than 500 the whole page — the same
   // "secondary read never blocks the primary flow" rule the rest of the
   // app already follows (see e.g. refreshPending in the old app/page.tsx).
-  const [pending, avgConfidence, monthly, corrections, invoices, matches, qbo, xero] = await Promise.all([
+  const [pending, avgConfidence, monthly, corrections, invoices, matches] = await Promise.all([
     listPendingDocuments(userId).catch(() => []),
     getAverageConfidence(userId).catch(() => null),
     getMonthlyInvoiceCounts(userId, 6).catch(() => []),
@@ -55,8 +55,6 @@ export async function getDashboardData(userId: string): Promise<DashboardData> {
     // above — its schema may not be provisioned in every environment yet
     // (see the Phase 3 migration in db/schema.sql).
     listRecentApprovedMatches(userId, 5).catch(() => []),
-    quickBooksConnectionStatus(userId).catch(() => ({ connected: false })),
-    xeroConnectionStatus(userId).catch(() => ({ connected: false })),
   ]);
 
   const maxCount = Math.max(1, ...monthly.map((m) => m.count));
@@ -85,15 +83,12 @@ export async function getDashboardData(userId: string): Promise<DashboardData> {
     .slice(0, 4)
     .map((a) => ({ text: a.text, time: relativeTime(a.at) }));
 
-  const connected = qbo.connected || xero.connected;
-
   return {
     pendingCount: pending.length,
     avgConfidencePct,
     extractedThisMonth: thisMonth,
     extractedDeltaPct,
     chartBars,
-    accounting: { connected, label: connected ? "Connected ✓" : "Not connected" },
     recentActivity: activity,
   };
-}
+});
