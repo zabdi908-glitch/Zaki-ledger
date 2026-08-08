@@ -336,6 +336,12 @@ create table if not exists reconciliation_matches (
 create index if not exists reconciliation_matches_statement_idx
   on reconciliation_matches (statement_id);
 
+-- Phase 1 -> Phase 2 migration: the audit_memo column was added after the
+-- initial reconciliation_matches table was deployed to Render.  Using
+-- `if not exists` keeps this safe to re-run — a no-op on a fresh install
+-- and the repair path on an existing deployment.
+alter table reconciliation_matches add column if not exists audit_memo jsonb;
+
 -- Bank transactions that didn't clear the matching threshold at all (as
 -- opposed to a 'red' flagged_level match, which still has a best-guess
 -- candidate). Recorded so a statement's unmatched items survive independent

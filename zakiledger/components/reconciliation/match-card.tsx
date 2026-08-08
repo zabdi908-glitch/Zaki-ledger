@@ -4,6 +4,7 @@ import { useState } from "react";
 import type { ReconciliationMatch, BankTransaction, QbTransaction } from "@/lib/reconciliation-schema";
 import type { AuditMemo } from "@/lib/audit-memo-schema";
 import { shellColor, shellButton, pill, shellFigures, microLabel } from "@/lib/shell-theme";
+import { formatMoney } from "@/lib/currency";
 
 interface MatchCardProps {
   match: ReconciliationMatch;
@@ -16,10 +17,6 @@ interface MatchCardProps {
   selected?: boolean;
   onSelect?: () => void;
   showCheckbox?: boolean;
-}
-
-function formatCurrency(amount: number, currency?: string | null): string {
-  return `${currency ?? "$"}${Math.abs(amount).toFixed(2)}`;
 }
 
 function formatDate(d: string | null | undefined): string {
@@ -108,7 +105,7 @@ export default function MatchCard({
               {bankTransaction.merchant ?? bankTransaction.description ?? "—"}
             </span>
             <span className="text-[11.5px]" style={{ color: shellColor.inkSoft }}>
-              <span style={shellFigures}>{formatCurrency(bankTransaction.amount, bankTransaction.currency)}</span>
+              <span style={shellFigures}>{formatMoney(bankTransaction.amount, bankTransaction.currency)}</span>
               {" · "}
               {formatDate(bankTransaction.transactionDate)}
             </span>
@@ -127,7 +124,7 @@ export default function MatchCard({
             </span>
             <span className="text-[11.5px]" style={{ color: shellColor.inkSoft }}>
               <span style={shellFigures}>
-                {qbTransaction ? formatCurrency(qbTransaction.amount, qbTransaction.currency) : "—"}
+                {qbTransaction ? formatMoney(qbTransaction.amount, qbTransaction.currency) : "—"}
               </span>
               {" · "}
               {formatDate(qbTransaction?.postedDate)}

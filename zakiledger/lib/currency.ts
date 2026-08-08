@@ -17,7 +17,36 @@
  * sees. Widening it is a one-line change once an org has the currency enabled on
  * their side (Xero rejects a CurrencyCode the organisation hasn't added).
  */
-export const SUPPORTED_CURRENCIES = ["GBP", "EUR", "USD", "AUD", "NZD", "CAD"] as const;
+export const SUPPORTED_CURRENCIES = [
+  // Major world currencies (emitting currencies)
+  "AED", "AFN", "ALL", "AMD", "ANG", "AOA", "ARS", "AUD", "AWG", "AZN",
+  "BAM", "BBD", "BDT", "BGN", "BHD", "BIF", "BMD", "BND", "BOB", "BRL",
+  "BSD", "BTN", "BWP", "BYN", "BZD",
+  "CAD", "CDF", "CHF", "CLP", "CNY", "COP", "CRC", "CUP", "CVE", "CZK",
+  "DJF", "DKK", "DOP", "DZD",
+  "EGP", "ERN", "ETB", "EUR",
+  "FJD", "FKP",
+  "GBP", "GEL", "GHS", "GIP", "GMD", "GNF", "GTQ", "GYD",
+  "HKD", "HNL", "HTG", "HUF",
+  "IDR", "ILS", "INR", "IQD", "IRR", "ISK",
+  "JMD", "JOD", "JPY",
+  "KES", "KGS", "KHR", "KMF", "KPW", "KRW", "KWD", "KYD", "KZT",
+  "LAK", "LBP", "LKR", "LRD", "LSL", "LYD",
+  "MAD", "MDL", "MGA", "MKD", "MMK", "MNT", "MOP", "MRU", "MUR", "MVR", "MWK", "MXN", "MYR", "MZN",
+  "NAD", "NGN", "NIO", "NOK", "NPR", "NZD",
+  "OMR",
+  "PAB", "PEN", "PGK", "PHP", "PKR", "PLN", "PYG",
+  "QAR",
+  "RON", "RSD", "RUB", "RWF",
+  "SAR", "SBD", "SCR", "SDG", "SEK", "SGD", "SHP", "SLE", "SOS", "SRD", "SSP", "STN", "SYP", "SZL",
+  "THB", "TJS", "TMT", "TND", "TOP", "TRY", "TTD", "TWD", "TZS",
+  "UAH", "UGX", "USD", "UYU", "UZS",
+  "VES", "VND", "VUV",
+  "WST",
+  "XAF", "XCD", "XOF", "XPF",
+  "YER",
+  "ZAR", "ZMW", "ZWL",
+] as const;
 export type SupportedCurrency = (typeof SUPPORTED_CURRENCIES)[number];
 
 /** True when we can post a bill in this currency. Case/whitespace tolerant. */
@@ -33,12 +62,34 @@ export function unsupportedCurrencyReason(code: string | null | undefined): stri
 }
 
 const CURRENCY_SYMBOLS: Record<string, string> = {
-  GBP: "£",
-  EUR: "€",
-  USD: "$",
-  AUD: "A$",
-  NZD: "NZ$",
-  CAD: "C$",
+  // Major currencies with distinct symbols
+  AED: "د.إ", AFN: "؋", ALL: "L", AMD: "֏", ANG: "ƒ", AOA: "Kz", ARS: "$", AUD: "A$", AWG: "ƒ", AZN: "₼",
+  BAM: "KM", BBD: "$", BDT: "৳", BGN: "лв", BHD: ".د.ب", BIF: "FBu", BMD: "$", BND: "$", BOB: "Bs", BRL: "R$",
+  BSD: "$", BTN: "Nu.", BWP: "P", BYN: "Br", BZD: "$",
+  CAD: "C$", CDF: "FC", CHF: "CHF", CLP: "$", CNY: "¥", COP: "$", CRC: "₡", CUP: "$", CVE: "$", CZK: "Kč",
+  DJF: "Fdj", DKK: "kr", DOP: "$", DZD: "دج",
+  EGP: "£", ERN: "Nfk", ETB: "Br", EUR: "€",
+  FJD: "$", FKP: "£",
+  GBP: "£", GEL: "₾", GHS: "₵", GIP: "£", GMD: "D", GNF: "FG", GTQ: "Q", GYD: "$",
+  HKD: "HK$", HNL: "L", HTG: "G", HUF: "Ft",
+  IDR: "Rp", ILS: "₪", INR: "₹", IQD: "ع.د", IRR: "﷼", ISK: "kr",
+  JMD: "$", JOD: "د.ا", JPY: "¥",
+  KES: "KSh", KGS: "с", KHR: "៛", KMF: "CF", KPW: "₩", KRW: "₩", KWD: "د.ك", KYD: "$", KZT: "₸",
+  LAK: "₭", LBP: "£", LKR: "Rs", LRD: "$", LSL: "L", LYD: "ل.د",
+  MAD: "د.م.", MDL: "L", MGA: "Ar", MKD: "ден", MMK: "K", MNT: "₮", MOP: "MOP$", MRU: "UM", MUR: "Rs", MVR: "Rf", MWK: "MK", MXN: "Mex$", MYR: "RM", MZN: "MT",
+  NAD: "$", NGN: "₦", NIO: "C$", NOK: "kr", NPR: "Rs", NZD: "NZ$",
+  OMR: "ر.ع.",
+  PAB: "B/.", PEN: "S/", PGK: "K", PHP: "₱", PKR: "Rs", PLN: "zł", PYG: "₲",
+  QAR: "ر.ق",
+  RON: "lei", RSD: "дин", RUB: "₽", RWF: "FRw",
+  SAR: "﷼", SBD: "$", SCR: "Rs", SDG: "ج.س.", SEK: "kr", SGD: "S$", SHP: "£", SLE: "Le", SOS: "Sh", SRD: "$", SSP: "£", STN: "Db", SYP: "£", SZL: "E",
+  THB: "฿", TJS: "ЅМ", TMT: "m", TND: "د.ت", TOP: "T$", TRY: "₺", TTD: "$", TWD: "NT$", TZS: "TSh",
+  UAH: "₴", UGX: "USh", USD: "$", UYU: "$", UZS: "so'm",
+  VES: "Bs.", VND: "₫", VUV: "VT",
+  WST: "T",
+  XAF: "FCFA", XCD: "$", XOF: "CFA", XPF: "₣",
+  YER: "﷼",
+  ZAR: "R", ZMW: "ZK", ZWL: "$",
 };
 
 /** e.g. "£288.00", or "JPY 1200.00" for a code we have no symbol for. */

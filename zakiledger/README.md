@@ -207,6 +207,45 @@ Deploy to **Vercel** (it auto-detects Next.js — no config needed):
 3. Add `ANTHROPIC_API_KEY` (and optionally the Supabase vars) in Vercel → Settings
    → Environment Variables, then redeploy to go from demo to real.
 
+## Testing
+
+Zaki Ledger tests live in three layers. All commands run from the `zakiledger/`
+directory.
+
+### Unit & integration tests (Vitest)
+
+No network, no browser — pure logic. Covers currency formatting, extraction
+pipeline, and API route handlers.
+
+```bash
+cd zakiledger
+npm test                 # run once
+npm run test:watch       # watch mode
+```
+
+### E2E — local dev server (Playwright)
+
+Targets `http://localhost:3000`. Requires `npm run dev` running separately and
+auth cookies seeded by the global setup (signs up / signs in via Supabase).
+
+```bash
+cd zakiledger
+npx playwright test --config playwright.config.ts
+```
+
+### E2E — live deployment (Playwright)
+
+Targets the Render deployment (`https://zaki-ledger.onrender.com`). Runs the same
+specs but mocks all API routes so no backend keys are needed.
+
+```bash
+cd zakiledger
+npx playwright test --config playwright.live.config.ts
+```
+
+**Test files** live in `tests/e2e/` and `tests/integration/`. See
+`docs/smoke-test-checklist.md` for a manual visual checklist to run post-deploy.
+
 ## Next steps (mirrors the roadmap)
 
 - [x] Wire the correction ledger to Supabase (`lib/store.ts` is now Supabase-backed, with an in-memory fallback when keys are absent; `/api/approve` also persists the approved invoice)

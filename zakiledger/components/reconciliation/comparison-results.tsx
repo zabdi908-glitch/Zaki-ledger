@@ -10,6 +10,7 @@ import type {
   UnmatchedItem,
 } from "@/lib/comparison-schema";
 import { shellCard, shellColor, shellFigures, microLabel } from "@/lib/shell-theme";
+import { formatMoney } from "@/lib/currency";
 
 type SectionKey = "matched" | "missingInQb" | "missingInBank" | "duplicates" | "amountMismatches" | "unmatchedItems";
 
@@ -37,10 +38,6 @@ function useCollapsibleSections(initial: SectionKey[] = []): {
   }
 
   return { open, toggle };
-}
-
-function formatCurrency(amount: number, currency?: string | null): string {
-  return `${currency ?? "$"}${Math.abs(amount).toFixed(2)}`;
 }
 
 function formatDate(d: string | Date | null | undefined): string {
@@ -98,7 +95,7 @@ function MatchedRow({ match }: { match: ComparisonMatch }) {
     <div className="zl-flex zl-justify-between zl-items-center" style={{ padding: "10px 0", borderBottom: `1px solid ${shellColor.cardBorder}` }}>
       <div className="zl-flex-col zl-gap-2">
         <span className="zl-text-sm zl-font-semibold" style={{ color: shellColor.ink }}>{bank.merchant ?? bank.description ?? "—"}</span>
-        <span style={{ fontSize: 11.5, color: shellColor.inkSoft }}>{formatDate(bank.transactionDate)} · {formatCurrency(bank.amount, bank.currency)}</span>
+        <span style={{ fontSize: 11.5, color: shellColor.inkSoft }}>{formatDate(bank.transactionDate)} · {formatMoney(bank.amount, bank.currency)}</span>
       </div>
       <div className="zl-flex zl-items-center zl-gap-8">
         <span style={{ fontSize: 11.5, color: shellColor.inkFaint }}>{match.matchType.replace("_", " ")}</span>
@@ -119,7 +116,7 @@ function MissingRow({ item }: { item: MissingTransaction }) {
     <div className="zl-flex zl-justify-between zl-items-center" style={{ padding: "10px 0", borderBottom: `1px solid ${shellColor.cardBorder}` }}>
       <div className="zl-flex-col zl-gap-2">
         <span className="zl-text-sm zl-font-semibold" style={{ color: shellColor.ink }}>{name}</span>
-        <span style={{ fontSize: 11.5, color: shellColor.inkSoft }}>{formatDate(date)} · {formatCurrency(amount, currency)}</span>
+        <span style={{ fontSize: 11.5, color: shellColor.inkSoft }}>{formatDate(date)} · {formatMoney(amount, currency)}</span>
       </div>
       <span style={{ fontSize: 11.5, color: shellColor.inkFaint }}>{isBank ? "In bank only" : "In QB only"}</span>
     </div>
@@ -137,7 +134,7 @@ function DuplicateRow({ dup }: { dup: DuplicateTransaction }) {
         const name = "merchant" in entry && entry.merchant ? entry.merchant : "description" in entry && entry.description ? entry.description : "—";
         return (
           <div key={i} style={{ fontSize: 12.5, color: shellColor.inkSoft, paddingLeft: 8 }}>
-            {name} · {formatDate(date)} · {formatCurrency(amount, currency)}
+            {name} · {formatDate(date)} · {formatMoney(amount, currency)}
           </div>
         );
       })}
@@ -151,10 +148,10 @@ function MismatchRow({ mm }: { mm: AmountMismatch }) {
       <div className="zl-flex-col zl-gap-2">
         <span className="zl-text-sm zl-font-semibold" style={{ color: shellColor.ink }}>{mm.bankTransaction.merchant ?? mm.bankTransaction.description ?? "—"}</span>
         <span style={{ fontSize: 11.5, color: shellColor.inkSoft }}>
-          Bank: {formatCurrency(mm.bankAmount, mm.bankTransaction.currency)} · QB: {formatCurrency(mm.qbAmount, mm.qbTransaction.currency)}
+          Bank: {formatMoney(mm.bankAmount, mm.bankTransaction.currency)} · QB: {formatMoney(mm.qbAmount, mm.qbTransaction.currency)}
         </span>
       </div>
-      <span className="zl-text-xs zl-font-semibold" style={{ ...shellFigures, color: shellColor.low }}>Δ {formatCurrency(mm.difference, mm.bankTransaction.currency)}</span>
+      <span className="zl-text-xs zl-font-semibold" style={{ ...shellFigures, color: shellColor.low }}>Δ {formatMoney(mm.difference, mm.bankTransaction.currency)}</span>
     </div>
   );
 }
@@ -170,7 +167,7 @@ function UnmatchedRow({ item }: { item: UnmatchedItem }) {
     <div className="zl-flex zl-justify-between zl-items-center" style={{ padding: "10px 0", borderBottom: `1px solid ${shellColor.cardBorder}` }}>
       <div className="zl-flex-col zl-gap-2">
         <span className="zl-text-sm zl-font-semibold" style={{ color: shellColor.ink }}>{name}</span>
-        <span style={{ fontSize: 11.5, color: shellColor.inkSoft }}>{formatDate(date)} · {formatCurrency(amount, currency)}</span>
+        <span style={{ fontSize: 11.5, color: shellColor.inkSoft }}>{formatDate(date)} · {formatMoney(amount, currency)}</span>
       </div>
       <span className="zl-text-xs zl-font-semibold zl-uppercase" style={{ color: sevColor }}>{item.severity}</span>
     </div>
