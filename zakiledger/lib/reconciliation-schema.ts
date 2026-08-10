@@ -58,6 +58,10 @@ export const ParsedStatementSchema = z.object({
   periodStart: z.string().nullable(),
   periodEnd: z.string().nullable(),
   currency: z.string().nullable(),
+  sourceProvider: z.string().nullable().optional(),
+  sourceOrganisationId: z.string().nullable().optional(),
+  sourceAccountId: z.string().nullable().optional(),
+  sourceAccountMetadata: z.record(z.string(), z.string().nullable()).nullable().optional(),
 });
 export type ParsedStatement = z.infer<typeof ParsedStatementSchema>;
 
@@ -73,6 +77,12 @@ export interface BankTransaction {
   currency: string | null;
   transactionId: string | null;
   memo: string | null;
+  externalTransactionId?: string | null;
+  sourceProvider?: string | null;
+  sourceOrganisationId?: string | null;
+  sourceAccountId?: string | null;
+  identityFingerprint?: string | null;
+  identityFingerprintVersion?: number | null;
 }
 
 /** A QB/Xero transaction already posted, regardless of how it got imported. */
@@ -86,6 +96,11 @@ export interface QbTransaction {
   accountName: string | null;
   accountType: string | null;
   currency: string | null;
+  provider?: string | null;
+  organisationId?: string | null;
+  externalObjectType?: string | null;
+  identityFingerprint?: string | null;
+  identityFingerprintVersion?: number | null;
 }
 
 /** Input shape for POST /api/reconciliation/qb-transactions — today's stand-in
@@ -99,6 +114,9 @@ export const QbTransactionInputSchema = z.object({
   accountName: z.string().nullable().optional(),
   accountType: z.string().nullable().optional(),
   currency: z.string().nullable().optional(),
+  provider: z.string().nullable().optional(),
+  organisationId: z.string().nullable().optional(),
+  externalObjectType: z.string().nullable().optional(),
 });
 export type QbTransactionInput = z.infer<typeof QbTransactionInputSchema>;
 

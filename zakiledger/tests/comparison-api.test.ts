@@ -1,18 +1,36 @@
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { NextRequest } from "next/server";
 
-// No auth needed for this route — it processes uploaded files inline.
+// Auth and the comparison engine are mocked so this suite never needs credentials or network access.
+const requireUserMock = vi.hoisted(() => vi.fn());
+
 vi.mock("../lib/auth", () => ({
-  requireUser: async () => ({ id: "test-user" }),
+  requireUser: requireUserMock,
 }));
+
+const compareBankToQbWithAIMock = vi.hoisted(() =>
+  vi.fn<typeof import("../lib/comparison-engine")["compareBankToQbWithAI"]>(),
+);
+
+vi.mock("../lib/comparison-engine", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/comparison-engine")>();
+  return { ...actual, compareBankToQbWithAI: compareBankToQbWithAIMock };
+});
 
 let compareRoute: (req: NextRequest) => Promise<Response>;
 
 beforeAll(async () => {
-  // Force deterministic mode: no real AI calls.
   delete process.env.ANTHROPIC_API_KEY;
-
   compareRoute = (await import("../app/api/reconciliation/compare/route")).POST;
+});
+
+beforeEach(() => {
+  requireUserMock.mockResolvedValue({ id: "test-user" });
+  compareBankToQbWithAIMock.mockImplementation(async (...args) => {
+    const actual = await vi.importActual<typeof import("../lib/comparison-engine")>("../lib/comparison-engine");
+    return actual.compareBankToQbWithAI(...args);
+  });
+  compareBankToQbWithAIMock.mockClear();
 });
 
 function makeCsv(date: string, description: string, amount: number, currency = "GBP"): string {
@@ -35,6 +53,19 @@ function buildRequest(form: FormData): NextRequest {
 }
 
 describe("POST /api/reconciliation/compare", () => {
+  it("returns 401 and does not call the comparison engine when unauthenticated", async () => {
+    requireUserMock.mockResolvedValueOnce(null);
+    const form = new FormData();
+    form.append("bankFile", new File(["not read"], "bank.csv", { type: "text/csv" }));
+    form.append("qbFile", new File(["not read"], "qb.csv", { type: "text/csv" }));
+
+    const res = await compareRoute(buildRequest(form));
+
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ error: "Unauthorized" });
+    expect(compareBankToQbWithAIMock).not.toHaveBeenCalled();
+  });
+
   it("returns a valid ComparisonResult for two matching CSV files", async () => {
     const bankCsv = makeCsv("15/07/2026", "Vendor X", -100.0);
     const qbCsv = makeCsv("15/07/2026", "Vendor X", -100.0);
@@ -45,6 +76,7 @@ describe("POST /api/reconciliation/compare", () => {
 
     const res = await compareRoute(buildRequest(form));
     expect(res.status).toBe(200);
+    expect(compareBankToQbWithAIMock).toHaveBeenCalledTimes(1);
 
     const body = await res.json();
     expect(body.matches).toHaveLength(1);

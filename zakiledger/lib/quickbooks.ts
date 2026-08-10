@@ -304,6 +304,9 @@ export async function listQuickBooksPurchases(
     for (const p of batch) {
       if (p.TxnDate === undefined || p.TotalAmt === undefined) continue;
       results.push({
+        provider: "quickbooks",
+        organisationId: realmId,
+        externalObjectType: "purchase",
         qbTransactionId: p.Id ?? null,
         qbAccountId: p.AccountRef?.value ?? null,
         postedDate: p.TxnDate,

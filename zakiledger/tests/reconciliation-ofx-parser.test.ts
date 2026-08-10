@@ -111,6 +111,13 @@ describe("parseOfxStatement", () => {
     expect(result.periodStart).toBe("2026-07-01");
     expect(result.periodEnd).toBe("2026-07-31");
     expect(result.closingBalance).toBe(5000);
+    expect(result.sourceProvider).toBe("ofx");
+    expect(result.sourceAccountId).toMatch(/^[a-f0-9]{64}$/);
+    expect(result.sourceAccountMetadata).toMatchObject({
+      accountLast4: "2345",
+      accountType: "checking",
+    });
+    expect(JSON.stringify(result)).not.toContain("00012345");
 
     const [debit, credit] = result.transactions;
     expect(debit).toMatchObject({

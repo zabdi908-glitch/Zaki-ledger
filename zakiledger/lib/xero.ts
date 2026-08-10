@@ -296,6 +296,9 @@ export async function listXeroBankTransactions(
       // Flip RECEIVE to our negative-in convention (SPEND is already positive-out).
       const amount = t.Type === "RECEIVE" ? -t.Total : t.Total;
       results.push({
+        provider: "xero",
+        organisationId: access.tenantId,
+        externalObjectType: "bank_transaction",
         qbTransactionId: t.BankTransactionID ?? null,
         qbAccountId: t.BankAccount?.AccountID ?? null,
         postedDate,

@@ -4,6 +4,7 @@ import { parsePdfStatement } from "@/lib/bank-statement-pdf";
 import { saveBankStatement } from "@/lib/reconciliation-store";
 import { requireUser } from "@/lib/auth";
 import type { FileFormat } from "@/lib/reconciliation-schema";
+import { sha256Hex } from "@/lib/financial-identity";
 
 /** File extension -> parser. */
 function detectFormat(fileName: string): FileFormat | null {
@@ -39,11 +40,14 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const fileBytes = new Uint8Array(await file.arrayBuffer());
+    const sourceArtifactHash = sha256Hex(fileBytes);
+    const text = format === "pdf" ? null : new TextDecoder().decode(fileBytes);
     const parsed =
       format === "csv"
-        ? parseCsvStatement(await file.text())
+        ? parseCsvStatement(text!)
         : format === "ofx"
-          ? parseOfxStatement(await file.text())
+          ? parseOfxStatement(text!)
           : await parsePdfStatement(file);
 
     if (parsed.transactions.length === 0) {
@@ -53,7 +57,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const statement = await saveBankStatement(user.id, file.name, format, parsed);
+    const statement = await saveBankStatement(user.id, file.name, format, parsed, { sourceArtifactHash });
 
     return NextResponse.json({
       statementId: statement.id,

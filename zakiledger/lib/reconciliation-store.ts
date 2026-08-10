@@ -12,6 +12,12 @@ import type {
   ReconciliationMatch,
   ReconciliationReport,
 } from "./reconciliation-schema";
+import {
+  ACCOUNTING_FINGERPRINT_VERSION,
+  BANK_FINGERPRINT_VERSION,
+  accountingTransactionFingerprint,
+  bankTransactionFingerprint,
+} from "./financial-identity";
 
 /**
  * Storage for the bank-reconciliation domain. Mirrors lib/store.ts and
@@ -33,6 +39,21 @@ export interface BankStatementMeta {
   openingBalance: number | null;
   closingBalance: number | null;
   transactionCount: number;
+  sourceProvider?: string | null;
+  sourceOrganisationId?: string | null;
+  sourceAccountId?: string | null;
+  sourceArtifactHash?: string | null;
+}
+
+export interface BankIngestionOptions {
+  sourceArtifactHash?: string | null;
+}
+
+export interface AccountingIngestionOptions {
+  provider?: string | null;
+  organisationId?: string | null;
+  externalObjectType?: string | null;
+  sourceArtifactHash?: string | null;
 }
 
 // --- In-memory fallback ------------------------------------------------
@@ -45,6 +66,8 @@ interface MemBankTxn extends BankTransaction {
 }
 interface MemQbTxn extends QbTransaction {
   userId: string;
+  sourceArtifactHash?: string | null;
+  sourceRowNumber?: number | null;
 }
 interface MemMatch extends ReconciliationMatch {
   userId: string;
@@ -61,6 +84,12 @@ interface MemAuditEntry {
   oldConfidence: number | null;
   newConfidence: number | null;
 }
+interface MemBankObservation {
+  userId: string;
+  statementId: string;
+  bankTransactionId: string;
+  sourceRowNumber: number;
+}
 
 const globalForRecon = globalThis as unknown as {
   __zakiLedgerRecon?: {
@@ -70,6 +99,7 @@ const globalForRecon = globalThis as unknown as {
     matches: MemMatch[];
     reports: MemReport[];
     auditLog: MemAuditEntry[];
+    bankObservations: MemBankObservation[];
   };
 };
 const mem = (globalForRecon.__zakiLedgerRecon ??= {
@@ -79,6 +109,7 @@ const mem = (globalForRecon.__zakiLedgerRecon ??= {
   matches: [],
   reports: [],
   auditLog: [],
+  bankObservations: [],
 });
 
 function newId(): string {
@@ -99,6 +130,12 @@ function mapBankTxnRow(row: Record<string, unknown>): BankTransaction {
     currency: (row.currency as string) ?? null,
     transactionId: (row.transaction_id as string) ?? null,
     memo: (row.memo as string) ?? null,
+    externalTransactionId: (row.external_transaction_id as string) ?? null,
+    sourceProvider: (row.source_provider as string) ?? null,
+    sourceOrganisationId: (row.source_organisation_id as string) ?? null,
+    sourceAccountId: (row.source_account_id as string) ?? null,
+    identityFingerprint: (row.identity_fingerprint as string) ?? null,
+    identityFingerprintVersion: numOrNull(row.identity_fingerprint_version),
   };
 }
 
@@ -113,6 +150,11 @@ function mapQbTxnRow(row: Record<string, unknown>): QbTransaction {
     accountName: (row.account_name as string) ?? null,
     accountType: (row.account_type as string) ?? null,
     currency: (row.currency as string) ?? null,
+    provider: (row.provider as string) ?? null,
+    organisationId: (row.organisation_id as string) ?? null,
+    externalObjectType: (row.external_object_type as string) ?? null,
+    identityFingerprint: (row.identity_fingerprint as string) ?? null,
+    identityFingerprintVersion: numOrNull(row.identity_fingerprint_version),
   };
 }
 
@@ -168,7 +210,12 @@ export async function saveBankStatement(
   fileName: string | null,
   fileFormat: "csv" | "ofx" | "pdf",
   parsed: ParsedStatement,
+  options: BankIngestionOptions = {},
 ): Promise<BankStatementMeta> {
+  const sourceProvider = parsed.sourceProvider ?? fileFormat;
+  const sourceOrganisationId = parsed.sourceOrganisationId ?? null;
+  const sourceAccountId = parsed.sourceAccountId ?? null;
+  const sourceArtifactHash = options.sourceArtifactHash ?? null;
   const statementId = newId();
   const meta: BankStatementMeta = {
     id: statementId,
@@ -180,63 +227,132 @@ export async function saveBankStatement(
     openingBalance: parsed.openingBalance,
     closingBalance: parsed.closingBalance,
     transactionCount: parsed.transactions.length,
+    sourceProvider,
+    sourceOrganisationId,
+    sourceAccountId,
+    sourceArtifactHash,
   };
 
   const db = getSupabase();
   if (!db) {
+    if (sourceArtifactHash) {
+      const existing = mem.statements.find(
+        (s) =>
+          s.userId === userId &&
+          s.sourceProvider === sourceProvider &&
+          s.sourceOrganisationId === sourceOrganisationId &&
+          s.sourceAccountId === sourceAccountId &&
+          s.sourceArtifactHash === sourceArtifactHash,
+      );
+      if (existing) {
+        const { userId: _userId, ...existingMeta } = existing;
+        return existingMeta;
+      }
+    }
     mem.statements.push({ ...meta, userId });
-    for (const t of parsed.transactions) {
-      mem.bankTxns.push({
-        id: newId(),
-        statementId,
-        userId,
-        transactionDate: t.transactionDate.value,
-        postedDate: t.postedDate,
-        merchant: t.merchant?.value ?? null,
-        description: t.description?.value ?? null,
-        amount: t.amount.value,
-        currency: t.currency,
-        transactionId: t.transactionId,
-        memo: t.memo,
-      });
+    for (const [sourceRowNumber, t] of parsed.transactions.entries()) {
+      const externalTransactionId = t.transactionId?.trim() || null;
+      const strongIdentity = Boolean(sourceProvider && sourceAccountId && externalTransactionId);
+      let canonical = strongIdentity
+        ? mem.bankTxns.find(
+            (row) =>
+              row.userId === userId &&
+              row.sourceProvider === sourceProvider &&
+              row.sourceOrganisationId === sourceOrganisationId &&
+              row.sourceAccountId === sourceAccountId &&
+              row.externalTransactionId === externalTransactionId,
+          )
+        : undefined;
+      if (!canonical) {
+        canonical = {
+          id: newId(),
+          statementId,
+          userId,
+          transactionDate: t.transactionDate.value,
+          postedDate: t.postedDate,
+          merchant: t.merchant?.value ?? null,
+          description: t.description?.value ?? null,
+          amount: t.amount.value,
+          currency: t.currency,
+          transactionId: t.transactionId,
+          memo: t.memo,
+          externalTransactionId,
+          sourceProvider,
+          sourceOrganisationId,
+          sourceAccountId,
+          identityFingerprint: bankTransactionFingerprint({
+            sourceProvider,
+            sourceOrganisationId,
+            sourceAccountId,
+            transactionDate: t.transactionDate.value,
+            postedDate: t.postedDate,
+            amount: t.amount.value,
+            currency: t.currency,
+            merchant: t.merchant?.value ?? null,
+            description: t.description?.value ?? null,
+            reference: t.memo,
+          }),
+          identityFingerprintVersion: BANK_FINGERPRINT_VERSION,
+        };
+        mem.bankTxns.push(canonical);
+      }
+      if (!mem.bankObservations.some((o) => o.statementId === statementId && o.bankTransactionId === canonical!.id)) {
+        mem.bankObservations.push({ userId, statementId, bankTransactionId: canonical.id, sourceRowNumber });
+      }
     }
     return meta;
   }
 
-  const { error: statementError } = await db.from("bank_statements").insert({
-    id: statementId,
-    user_id: userId,
-    file_name: fileName,
-    file_format: fileFormat,
-    statement_period_start: parsed.periodStart,
-    statement_period_end: parsed.periodEnd,
-    currency: parsed.currency,
-    opening_balance: parsed.openingBalance,
-    closing_balance: parsed.closingBalance,
-    transaction_count: parsed.transactions.length,
+  const transactions = parsed.transactions.map((t, sourceRowNumber) => ({
+    source_row_number: sourceRowNumber,
+    transaction_date: t.transactionDate.value,
+    posted_date: t.postedDate,
+    merchant: t.merchant?.value ?? null,
+    description: t.description?.value ?? null,
+    amount: t.amount.value,
+    currency: t.currency,
+    external_transaction_id: t.transactionId?.trim() || null,
+    transaction_id: t.transactionId?.trim() || null,
+    memo: t.memo,
+    identity_fingerprint: bankTransactionFingerprint({
+      sourceProvider,
+      sourceOrganisationId,
+      sourceAccountId,
+      transactionDate: t.transactionDate.value,
+      postedDate: t.postedDate,
+      amount: t.amount.value,
+      currency: t.currency,
+      merchant: t.merchant?.value ?? null,
+      description: t.description?.value ?? null,
+      reference: t.memo,
+    }),
+    identity_fingerprint_version: BANK_FINGERPRINT_VERSION,
+  }));
+  const { data, error } = await db.rpc("ingest_bank_statement_v1", {
+    p_user_id: userId,
+    p_statement: {
+      id: statementId,
+      file_name: fileName,
+      file_format: fileFormat,
+      statement_period_start: parsed.periodStart,
+      statement_period_end: parsed.periodEnd,
+      currency: parsed.currency,
+      opening_balance: parsed.openingBalance,
+      closing_balance: parsed.closingBalance,
+      transaction_count: parsed.transactions.length,
+      source_provider: sourceProvider,
+      source_organisation_id: sourceOrganisationId,
+      source_account_id: sourceAccountId,
+      source_account_metadata: parsed.sourceAccountMetadata ?? null,
+      source_artifact_hash: sourceArtifactHash,
+    },
+    p_transactions: transactions,
   });
-  if (statementError) throw new Error(`Failed to save bank statement: ${statementError.message}`);
-
-  if (parsed.transactions.length > 0) {
-    const { error: txnError } = await db.from("bank_transactions").insert(
-      parsed.transactions.map((t) => ({
-        id: newId(),
-        statement_id: statementId,
-        user_id: userId,
-        transaction_date: t.transactionDate.value,
-        posted_date: t.postedDate,
-        merchant: t.merchant?.value ?? null,
-        description: t.description?.value ?? null,
-        amount: t.amount.value,
-        currency: t.currency,
-        transaction_id: t.transactionId,
-        memo: t.memo,
-      })),
-    );
-    if (txnError) throw new Error(`Failed to save bank transactions: ${txnError.message}`);
-  }
-
-  return meta;
+  if (error) throw new Error(`Failed to ingest bank statement atomically: ${error.message}`);
+  const persistedId = (data as { statement_id?: string } | null)?.statement_id ?? statementId;
+  const persisted = await getBankStatement(userId, persistedId);
+  if (!persisted) throw new Error("Bank statement ingestion completed without a readable statement.");
+  return persisted;
 }
 
 /**
@@ -290,6 +406,10 @@ export async function listBankStatementsForUser(userId: string): Promise<BankSta
     openingBalance: numOrNull(row.opening_balance),
     closingBalance: numOrNull(row.closing_balance),
     transactionCount: Number(row.transaction_count ?? 0),
+    sourceProvider: (row.source_provider as string) ?? null,
+    sourceOrganisationId: (row.source_organisation_id as string) ?? null,
+    sourceAccountId: (row.source_account_id as string) ?? null,
+    sourceArtifactHash: (row.source_artifact_hash as string) ?? null,
   }));
 }
 
@@ -320,25 +440,32 @@ export async function getBankStatement(userId: string, statementId: string): Pro
     openingBalance: numOrNull(data.opening_balance),
     closingBalance: numOrNull(data.closing_balance),
     transactionCount: Number(data.transaction_count ?? 0),
+    sourceProvider: (data.source_provider as string) ?? null,
+    sourceOrganisationId: (data.source_organisation_id as string) ?? null,
+    sourceAccountId: (data.source_account_id as string) ?? null,
+    sourceArtifactHash: (data.source_artifact_hash as string) ?? null,
   };
 }
 
 export async function listBankTransactions(userId: string, statementId: string): Promise<BankTransaction[]> {
   const db = getSupabase();
   if (!db) {
+    const observedIds = new Set(
+      mem.bankObservations
+        .filter((o) => o.statementId === statementId && o.userId === userId)
+        .map((o) => o.bankTransactionId),
+    );
     return mem.bankTxns
-      .filter((t) => t.statementId === statementId && t.userId === userId)
-      .map(({ userId: _u, ...rest }) => rest);
+      .filter((t) => t.userId === userId && (observedIds.has(t.id) || t.statementId === statementId))
+      .map(({ userId: _u, ...rest }) => ({ ...rest, statementId }));
   }
 
-  const { data, error } = await db
-    .from("bank_transactions")
-    .select()
-    .eq("statement_id", statementId)
-    .eq("user_id", userId)
-    .order("transaction_date", { ascending: true });
+  const { data, error } = await db.rpc("list_statement_bank_transactions_v1", {
+    p_user_id: userId,
+    p_statement_id: statementId,
+  });
   if (error) throw new Error(`Failed to load bank transactions: ${error.message}`);
-  return (data ?? []).map((r) => mapBankTxnRow(r as Record<string, unknown>));
+  return (data ?? []).map((r: Record<string, unknown>) => ({ ...mapBankTxnRow(r), statementId }));
 }
 
 // --- QB/Xero transactions ------------------------------------------------
@@ -349,14 +476,50 @@ export async function listBankTransactions(userId: string, statementId: string):
  * stand-in); tomorrow's live QB/Xero sync calls this exact function with
  * data pulled from their APIs instead of growing a second write path.
  */
-export async function saveQbTransactions(userId: string, transactions: QbTransactionInput[]): Promise<number> {
+export async function saveQbTransactions(
+  userId: string,
+  transactions: QbTransactionInput[],
+  options: AccountingIngestionOptions = {},
+): Promise<number> {
   const db = getSupabase();
   if (!db) {
-    for (const t of transactions) {
+    let inserted = 0;
+    for (const [sourceRowNumber, t] of transactions.entries()) {
+      const provider = t.provider ?? options.provider ?? null;
+      const organisationId = t.organisationId ?? options.organisationId ?? null;
+      const externalObjectType = t.externalObjectType ?? options.externalObjectType ?? null;
+      const externalId = t.qbTransactionId?.trim() || null;
+      const strongIdentity = Boolean(provider && organisationId && externalObjectType && externalId);
+      const artifactMatch = options.sourceArtifactHash
+        ? mem.qbTxns.find(
+            (row) =>
+              row.userId === userId &&
+              row.provider === provider &&
+              row.organisationId === organisationId &&
+              row.sourceArtifactHash === options.sourceArtifactHash &&
+              row.sourceRowNumber === sourceRowNumber,
+          )
+        : undefined;
+      const identityMatch = strongIdentity
+        ? mem.qbTxns.find(
+            (row) =>
+              row.userId === userId &&
+              row.provider === provider &&
+              row.organisationId === organisationId &&
+              row.externalObjectType === externalObjectType &&
+              row.qbTransactionId === externalId,
+          )
+        : undefined;
+      if (artifactMatch && identityMatch && artifactMatch.id !== identityMatch.id) {
+        // The two database-backed retry keys must identify one canonical row.
+        // Picking either would silently collapse distinct financial records.
+        throw new Error("Provider identity conflicts with artifact identity.");
+      }
+      if (artifactMatch || identityMatch) continue;
       mem.qbTxns.push({
         id: newId(),
         userId,
-        qbTransactionId: t.qbTransactionId ?? null,
+        qbTransactionId: externalId,
         qbAccountId: t.qbAccountId ?? null,
         postedDate: t.postedDate,
         amount: t.amount,
@@ -364,17 +527,36 @@ export async function saveQbTransactions(userId: string, transactions: QbTransac
         accountName: t.accountName ?? null,
         accountType: t.accountType ?? null,
         currency: t.currency ?? null,
+        provider,
+        organisationId,
+        externalObjectType,
+        identityFingerprint: accountingTransactionFingerprint({
+          provider,
+          organisationId,
+          externalObjectType,
+          accountId: t.qbAccountId ?? null,
+          postedDate: t.postedDate,
+          amount: t.amount,
+          currency: t.currency ?? null,
+          description: t.description ?? null,
+        }),
+        identityFingerprintVersion: ACCOUNTING_FINGERPRINT_VERSION,
+        sourceArtifactHash: options.sourceArtifactHash ?? null,
+        sourceRowNumber,
       });
+      inserted += 1;
     }
-    return transactions.length;
+    return inserted;
   }
 
   if (transactions.length === 0) return 0;
-  const { error } = await db.from("qb_transactions").insert(
-    transactions.map((t) => ({
+  const payload = transactions.map((t, sourceRowNumber) => {
+    const provider = t.provider ?? options.provider ?? null;
+    const organisationId = t.organisationId ?? options.organisationId ?? null;
+    const externalObjectType = t.externalObjectType ?? options.externalObjectType ?? null;
+    return {
       id: newId(),
-      user_id: userId,
-      qb_transaction_id: t.qbTransactionId ?? null,
+      qb_transaction_id: t.qbTransactionId?.trim() || null,
       qb_account_id: t.qbAccountId ?? null,
       posted_date: t.postedDate,
       amount: t.amount,
@@ -382,11 +564,30 @@ export async function saveQbTransactions(userId: string, transactions: QbTransac
       account_name: t.accountName ?? null,
       account_type: t.accountType ?? null,
       currency: t.currency ?? null,
-      synced_from_qb_at: new Date().toISOString(),
-    })),
-  );
-  if (error) throw new Error(`Failed to save QB transactions: ${error.message}`);
-  return transactions.length;
+      provider,
+      organisation_id: organisationId,
+      external_object_type: externalObjectType,
+      identity_fingerprint: accountingTransactionFingerprint({
+        provider,
+        organisationId,
+        externalObjectType,
+        accountId: t.qbAccountId ?? null,
+        postedDate: t.postedDate,
+        amount: t.amount,
+        currency: t.currency ?? null,
+        description: t.description ?? null,
+      }),
+      identity_fingerprint_version: ACCOUNTING_FINGERPRINT_VERSION,
+      source_artifact_hash: options.sourceArtifactHash ?? null,
+      source_row_number: sourceRowNumber,
+    };
+  });
+  const { data, error } = await db.rpc("ingest_accounting_transactions_v1", {
+    p_user_id: userId,
+    p_transactions: payload,
+  });
+  if (error) throw new Error(`Failed to ingest accounting transactions atomically: ${error.message}`);
+  return Number((data as { inserted_count?: number } | null)?.inserted_count ?? 0);
 }
 
 /**

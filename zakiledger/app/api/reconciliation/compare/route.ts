@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { parseCsvStatement, parseOfxStatement, parsedTransactionsToQbInputs } from "@/lib/bank-parsers";
 import { compareBankToQbWithAI } from "@/lib/comparison-engine";
+import { requireUser } from "@/lib/auth";
 import type { BankTransaction, QbTransaction, ParsedBankTransaction, QbTransactionInput } from "@/lib/reconciliation-schema";
 import type { ComparisonResult, ComparisonFilters } from "@/lib/comparison-schema";
 
@@ -51,6 +52,9 @@ function toQbTransactions(inputs: QbTransactionInput[]): QbTransaction[] {
  * Returns a ComparisonResult JSON object.
  */
 export async function POST(req: NextRequest) {
+  const user = await requireUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
   try {
     const form = await req.formData();
     const bankFile = form.get("bankFile");
