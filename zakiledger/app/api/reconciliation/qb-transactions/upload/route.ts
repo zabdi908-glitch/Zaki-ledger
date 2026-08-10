@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { parseCsvStatement, parsedTransactionsToQbInputs } from "@/lib/bank-parsers";
 import { saveQbTransactions } from "@/lib/reconciliation-store";
 import { requireUser } from "@/lib/auth";
+import { sha256Hex } from "@/lib/financial-identity";
 
 /**
  * POST /api/reconciliation/qb-transactions/upload
@@ -24,7 +25,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "No file uploaded." }, { status: 400 });
     }
 
-    const text = await file.text();
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const text = new TextDecoder().decode(bytes);
     const parsed = parseCsvStatement(text);
     if (parsed.transactions.length === 0) {
       return NextResponse.json(
@@ -33,7 +35,11 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const imported = await saveQbTransactions(user.id, parsedTransactionsToQbInputs(parsed.transactions));
+    const imported = await saveQbTransactions(user.id, parsedTransactionsToQbInputs(parsed.transactions), {
+      provider: "accounting_csv",
+      externalObjectType: "csv_transaction",
+      sourceArtifactHash: sha256Hex(bytes),
+    });
     return NextResponse.json({ imported });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to import accounting transactions.";

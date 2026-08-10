@@ -1,6 +1,7 @@
 import Papa from "papaparse";
 import { XMLParser } from "fast-xml-parser";
 import type { ParsedBankTransaction, ParsedStatement, QbTransactionInput } from "./reconciliation-schema";
+import { deriveOfxAccountIdentity } from "./financial-identity";
 
 /**
  * Bank statement parsing — CSV and OFX, no network/DB. Pure text-in,
@@ -235,6 +236,12 @@ export function parseOfxStatement(text: string): ParsedStatement {
   if (!stmtrs) throw new Error("OFX file has no bank statement response (STMTRS) section.");
 
   const currency: string | null = stmtrs.CURDEF ?? null;
+  const accountFrom = stmtrs.BANKACCTFROM ?? stmtrs.CCACCTFROM;
+  const accountIdentity = deriveOfxAccountIdentity({
+    bankId: accountFrom?.BANKID,
+    accountId: accountFrom?.ACCTID,
+    accountType: accountFrom?.ACCTTYPE ?? (stmtrs.CCACCTFROM ? "creditcard" : null),
+  });
   const tranList = stmtrs.BANKTRANLIST ?? stmtrs.CCTRANLIST;
   const rawTxns = asArray(tranList?.STMTTRN);
 
@@ -264,5 +271,9 @@ export function parseOfxStatement(text: string): ParsedStatement {
     periodStart: parseOfxDate(tranList?.DTSTART),
     periodEnd: parseOfxDate(tranList?.DTEND),
     currency,
+    sourceProvider: "ofx",
+    sourceOrganisationId: null,
+    sourceAccountId: accountIdentity?.sourceAccountId ?? null,
+    sourceAccountMetadata: accountIdentity?.metadata ?? null,
   };
 }
