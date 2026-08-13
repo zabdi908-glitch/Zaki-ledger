@@ -1,6 +1,9 @@
 import { getSupabase } from "./supabase";
 import { matchTransactions, scorePair, DATE_PENDING_DAYS } from "./reconciliation-matching";
 import { generateAuditMemos } from "./audit-memo-generator";
+import { resolveTenantContextForUser } from "./tenant-context";
+import { detectReconciliationSchemaCapability } from "./reconciliation-schema-capability";
+import { assertReconciliationWritesNotFrozen } from "./reconciliation-freeze";
 import type { AuditMemo } from "./audit-memo-schema";
 import type {
   BankTransaction,
@@ -212,6 +215,10 @@ export async function saveBankStatement(
   parsed: ParsedStatement,
   options: BankIngestionOptions = {},
 ): Promise<BankStatementMeta> {
+  // Freeze guard FIRST — before capability detection, tenant resolution, or
+  // any mutation. Freeze ON means zero reconciliation writes on any schema.
+  assertReconciliationWritesNotFrozen();
+
   const sourceProvider = parsed.sourceProvider ?? fileFormat;
   const sourceOrganisationId = parsed.sourceOrganisationId ?? null;
   const sourceAccountId = parsed.sourceAccountId ?? null;
@@ -328,6 +335,16 @@ export async function saveBankStatement(
     }),
     identity_fingerprint_version: BANK_FINGERPRINT_VERSION,
   }));
+
+  // On a canonical-012 schema, tenant resolution and stamps are mandatory —
+  // any resolution failure propagates (fail closed, no legacy fallback).
+  // On pre-012, the pre-4C payload is sent unchanged: no canonical fields.
+  const capability = await detectReconciliationSchemaCapability(db);
+  const tenantCtx =
+    capability.version === "canonical-012"
+      ? await resolveTenantContextForUser(userId)
+      : null;
+
   const { data, error } = await db.rpc("ingest_bank_statement_v1", {
     p_user_id: userId,
     p_statement: {
@@ -345,6 +362,12 @@ export async function saveBankStatement(
       source_account_id: sourceAccountId,
       source_account_metadata: parsed.sourceAccountMetadata ?? null,
       source_artifact_hash: sourceArtifactHash,
+      ...(tenantCtx
+        ? {
+            client_entity_id: tenantCtx.clientEntityId,
+            ledger_book_id: tenantCtx.internalLedgerBookId,
+          }
+        : {}),
     },
     p_transactions: transactions,
   });
@@ -481,6 +504,8 @@ export async function saveQbTransactions(
   transactions: QbTransactionInput[],
   options: AccountingIngestionOptions = {},
 ): Promise<number> {
+  assertReconciliationWritesNotFrozen();
+
   const db = getSupabase();
   if (!db) {
     let inserted = 0;
@@ -582,9 +607,25 @@ export async function saveQbTransactions(
       source_row_number: sourceRowNumber,
     };
   });
+
+  // Canonical-012: resolve tenant and stamp every item — mandatory, no
+  // fallback. Pre-012: pre-4C payload without canonical fields.
+  const capability = await detectReconciliationSchemaCapability(db);
+  const tenantCtx =
+    capability.version === "canonical-012"
+      ? await resolveTenantContextForUser(userId)
+      : null;
+  const stampedPayload = tenantCtx
+    ? payload.map((item) => ({
+        ...item,
+        client_entity_id: tenantCtx.clientEntityId,
+        ledger_book_id: tenantCtx.internalLedgerBookId,
+      }))
+    : payload;
+
   const { data, error } = await db.rpc("ingest_accounting_transactions_v1", {
     p_user_id: userId,
-    p_transactions: payload,
+    p_transactions: stampedPayload,
   });
   if (error) throw new Error(`Failed to ingest accounting transactions atomically: ${error.message}`);
   return Number((data as { inserted_count?: number } | null)?.inserted_count ?? 0);
@@ -673,6 +714,8 @@ export async function computeAndPersistMatches(
   unmatchedBankIds: string[];
   unmatchedQbIds: string[];
 }> {
+  assertReconciliationWritesNotFrozen();
+
   const statement = await getBankStatement(userId, statementId);
   if (!statement) throw new Error("Statement not found.");
 
@@ -711,6 +754,11 @@ export async function computeAndPersistMatches(
         });
       }
     } else {
+      const capability = await detectReconciliationSchemaCapability(db);
+      const tenantCtx =
+        capability.version === "canonical-012"
+          ? await resolveTenantContextForUser(userId)
+          : null;
       const { error } = await db.from("reconciliation_matches").upsert(
         result.matches.map((m) => ({
           id: newId(),
@@ -724,6 +772,7 @@ export async function computeAndPersistMatches(
           matched_by: "auto",
           matched_at: nowIso,
           audit_memo: memoByBankId.get(m.bankTransactionId) ?? null,
+          ...(tenantCtx ? { client_entity_id: tenantCtx.clientEntityId } : {}),
         })),
         { onConflict: "bank_transaction_id,statement_id", ignoreDuplicates: true },
       );
@@ -756,6 +805,8 @@ export async function createManualMatch(
   bankTransactionId: string,
   qbTransactionId: string,
 ): Promise<ReconciliationMatch> {
+  assertReconciliationWritesNotFrozen();
+
   const bankTxns = await listBankTransactions(userId, statementId);
   const bank = bankTxns.find((t) => t.id === bankTransactionId);
   if (!bank) throw new Error("Bank transaction not found on this statement.");
@@ -805,6 +856,11 @@ export async function createManualMatch(
     return rest;
   }
 
+  const capability = await detectReconciliationSchemaCapability(db);
+  const tenantCtx =
+    capability.version === "canonical-012"
+      ? await resolveTenantContextForUser(userId)
+      : null;
   const { data, error } = await db
     .from("reconciliation_matches")
     .upsert(
@@ -819,6 +875,7 @@ export async function createManualMatch(
         matched_by: "manual",
         matched_at: nowIso,
         audit_memo: manualMemo ?? null,
+        ...(tenantCtx ? { client_entity_id: tenantCtx.clientEntityId } : {}),
       },
       { onConflict: "bank_transaction_id,statement_id" },
     )
@@ -837,6 +894,8 @@ export async function createManualMatch(
  * this refuses to touch it.
  */
 export async function rejectMatch(userId: string, statementId: string, matchId: string): Promise<void> {
+  assertReconciliationWritesNotFrozen();
+
   const db = getSupabase();
   if (!db) {
     const idx = mem.matches.findIndex((m) => m.id === matchId && m.statementId === statementId && m.userId === userId);
@@ -902,6 +961,8 @@ export async function approveMatches(
   matchIds: string[],
   approvedBy: string,
 ): Promise<ReconciliationReport> {
+  assertReconciliationWritesNotFrozen();
+
   const allMatches = await listMatchesForStatement(userId, statementId);
   const toApprove = allMatches.filter((m) => matchIds.includes(m.id));
   if (toApprove.length === 0) throw new Error("None of the given match ids belong to this statement.");
@@ -944,6 +1005,11 @@ export async function approveMatches(
       .eq("user_id", userId);
     if (updateError) throw new Error(`Failed to approve matches: ${updateError.message}`);
 
+    const capabilityApprove = await detectReconciliationSchemaCapability(db);
+    const tenantCtxApprove =
+      capabilityApprove.version === "canonical-012"
+        ? await resolveTenantContextForUser(userId)
+        : null;
     const { error: auditError } = await db.from("reconciliation_audit_log").insert(
       toApprove.map((m) => ({
         id: newId(),
@@ -953,6 +1019,12 @@ export async function approveMatches(
         action_at: nowIso,
         old_confidence: m.confidence,
         new_confidence: m.confidence,
+        ...(tenantCtxApprove
+          ? {
+              user_id: userId,
+              client_entity_id: tenantCtxApprove.clientEntityId,
+            }
+          : {}),
       })),
     );
     if (auditError) throw new Error(`Failed to write audit log: ${auditError.message}`);
@@ -969,6 +1041,8 @@ export async function approveMatches(
  * touched; the returned count is how many actually were.
  */
 export async function unapproveMatches(userId: string, statementId: string, matchIds: string[]): Promise<number> {
+  assertReconciliationWritesNotFrozen();
+
   const allMatches = await listMatchesForStatement(userId, statementId);
   const toRevert = allMatches.filter((m) => matchIds.includes(m.id) && m.approvedAt !== null);
   if (toRevert.length === 0) return 0;
@@ -1006,6 +1080,11 @@ export async function unapproveMatches(userId: string, statementId: string, matc
       .eq("user_id", userId);
     if (updateError) throw new Error(`Failed to unapprove matches: ${updateError.message}`);
 
+    const capabilityUnapprove = await detectReconciliationSchemaCapability(db);
+    const tenantCtxUnapprove =
+      capabilityUnapprove.version === "canonical-012"
+        ? await resolveTenantContextForUser(userId)
+        : null;
     const { error: auditError } = await db.from("reconciliation_audit_log").insert(
       toRevert.map((m) => ({
         id: newId(),
@@ -1015,6 +1094,12 @@ export async function unapproveMatches(userId: string, statementId: string, matc
         action_at: nowIso,
         old_confidence: m.confidence,
         new_confidence: m.confidence,
+        ...(tenantCtxUnapprove
+          ? {
+              user_id: userId,
+              client_entity_id: tenantCtxUnapprove.clientEntityId,
+            }
+          : {}),
       })),
     );
     if (auditError) throw new Error(`Failed to write audit log: ${auditError.message}`);
@@ -1032,6 +1117,11 @@ export async function unapproveMatches(userId: string, statementId: string, matc
  * account-balance access.
  */
 async function generateReport(userId: string, statementId: string): Promise<ReconciliationReport> {
+  // generateReport is only reached through approveMatches, which already
+  // asserts not-frozen; the guard repeats here so a future direct caller
+  // cannot persist a report while the freeze is on.
+  assertReconciliationWritesNotFrozen();
+
   const statement = await getBankStatement(userId, statementId);
   if (!statement) throw new Error("Statement not found.");
 
@@ -1093,6 +1183,11 @@ async function generateReport(userId: string, statementId: string): Promise<Reco
     .maybeSingle();
   const reportId = (existingReport?.id as string) ?? report.id;
 
+  const capabilityReport = await detectReconciliationSchemaCapability(db);
+  const tenantCtxReport =
+    capabilityReport.version === "canonical-012"
+      ? await resolveTenantContextForUser(userId)
+      : null;
   const { data, error } = await db
     .from("reconciliation_reports")
     .upsert(
@@ -1112,6 +1207,7 @@ async function generateReport(userId: string, statementId: string): Promise<Reco
         variance: report.variance,
         is_reconciled: report.isReconciled,
         reconciled_at: report.reconciledAt,
+        ...(tenantCtxReport ? { client_entity_id: tenantCtxReport.clientEntityId } : {}),
       },
       { onConflict: "statement_id" },
     )

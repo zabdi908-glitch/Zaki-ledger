@@ -1,7 +1,14 @@
+import { pathToFileURL } from "node:url";
 import { runNightlyMatch } from "../lib/nightly-match";
 import { getSupabase } from "../lib/supabase";
+import { isReconciliationWriteFrozen } from "../lib/reconciliation-freeze";
 
-async function main() {
+export async function main() {
+  if (isReconciliationWriteFrozen()) {
+    console.log("Reconciliation writes are frozen — nightly match aborted.");
+    process.exit(0);
+  }
+
   const db = getSupabase();
   if (!db) {
     console.error("Database not configured — aborting nightly match.");
@@ -34,4 +41,14 @@ async function main() {
   process.exit(0);
 }
 
-main();
+
+// Auto-run only when executed directly (tsx scripts/nightly-match.ts). When the
+// module is imported (tests), main() is exported so the freeze guard can be
+// exercised in-process without spawning a child process.
+const isDirectRun =
+  process.argv[1] !== undefined &&
+  import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (isDirectRun) {
+  void main();
+}

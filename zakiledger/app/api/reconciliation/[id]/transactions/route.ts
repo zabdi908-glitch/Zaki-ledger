@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { computeAndPersistMatches, getBankStatement } from "@/lib/reconciliation-store";
 import { requireUser } from "@/lib/auth";
+import { isReconciliationWriteFrozen, reconciliationFreezeResponse } from "@/lib/reconciliation-freeze";
 import { matchInvoices } from "@/lib/invoice-matching";
 import { listInvoiceMatches } from "@/lib/invoice-match-store";
 import { listApprovedInvoicesForMatching } from "@/lib/store";
@@ -18,6 +19,7 @@ import { listApprovedInvoicesForMatching } from "@/lib/store";
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const user = await requireUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (isReconciliationWriteFrozen()) return reconciliationFreezeResponse();
 
   try {
     const { id } = await params;

@@ -16,11 +16,12 @@ beforeEach(() => __clearDecisionMemForTests());
 
 describe("decision log", () => {
   it("records and lists decisions scoped by user and statement", async () => {
-    await recordDecision(U, {
+    const clientEntityId = "00000000-0000-0000-0000-000000000001";
+    await recordDecision(U, clientEntityId, {
       statementId: "s1", matchId: "m1", bankTransactionId: "b1",
       decisionType: "approve", merchantName: "SHELL", suggestedCategory: "Motor Expenses", userChoiceCategory: null,
     });
-    await recordDecision("other-user", {
+    await recordDecision("other-user", "00000000-0000-0000-0000-000000000002", {
       statementId: "s1", matchId: "m2", bankTransactionId: "b2",
       decisionType: "reject", merchantName: null, suggestedCategory: null, userChoiceCategory: null,
     });

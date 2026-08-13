@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { listBankTransactions, listMatchesForStatement, rejectMatch } from "@/lib/reconciliation-store";
 import { recordDecision } from "@/lib/decision-store";
 import { requireUser } from "@/lib/auth";
+import { isReconciliationWriteFrozen, reconciliationFreezeResponse } from "@/lib/reconciliation-freeze";
+import { resolveTenantClientEntityIdForWrite } from "@/lib/tenant-context";
 import { z } from "zod/v4";
 
 const BodySchema = z.object({
@@ -19,6 +21,7 @@ const BodySchema = z.object({
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const user = await requireUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (isReconciliationWriteFrozen()) return reconciliationFreezeResponse();
 
   try {
     const { id } = await params;
@@ -36,9 +39,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     // the category was.
     try {
       if (match) {
+        const clientEntityId = await resolveTenantClientEntityIdForWrite(user.id);
         const bankTxns = await listBankTransactions(user.id, id);
         const bank = bankTxns.find((b) => b.id === match.bankTransactionId);
-        await recordDecision(user.id, {
+        await recordDecision(user.id, clientEntityId, {
           statementId: id,
           matchId: body.matchId,
           bankTransactionId: match.bankTransactionId,

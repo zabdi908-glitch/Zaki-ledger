@@ -3,6 +3,7 @@ import { isQuickBooksConnected, listQuickBooksPurchases } from "@/lib/quickbooks
 import { isXeroConnected, listXeroBankTransactions } from "@/lib/xero";
 import { getBankStatement, saveQbTransactions } from "@/lib/reconciliation-store";
 import { requireUser } from "@/lib/auth";
+import { isReconciliationWriteFrozen, reconciliationFreezeResponse } from "@/lib/reconciliation-freeze";
 import { z } from "zod/v4";
 
 const BodySchema = z.object({
@@ -36,6 +37,7 @@ function today(): string {
 export async function POST(req: NextRequest) {
   const user = await requireUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (isReconciliationWriteFrozen()) return reconciliationFreezeResponse();
 
   try {
     const { statementId } = BodySchema.parse(await req.json());

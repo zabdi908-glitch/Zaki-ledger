@@ -46,17 +46,17 @@ async function uploadBatch(filenames: string[]) {
   const text = await res.text();
   const messages = text
     .split("\n")
-    .filter((l) => l.trim())
-    .map((l) => JSON.parse(l) as any);
+    .filter((l: string) => l.trim())
+    .map((l: string) => JSON.parse(l) as any);
 
   return {
     status: res.status,
     contentType: res.headers.get("Content-Type") ?? "",
     messages,
-    start: messages.find((m) => m.type === "start"),
-    results: messages.filter((m) => m.type === "result"),
-    duplicates: messages.filter((m) => m.type === "duplicate"),
-    summary: messages.find((m) => m.type === "summary"),
+    start: messages.find((m: any) => m.type === "start"),
+    results: messages.filter((m: any) => m.type === "result"),
+    duplicates: messages.filter((m: any) => m.type === "duplicate"),
+    summary: messages.find((m: any) => m.type === "summary"),
   };
 }
 
@@ -164,7 +164,7 @@ describe("mapWithConcurrency", () => {
 
   it("runs work concurrently — five 60ms items finish in well under 300ms", async () => {
     const started = Date.now();
-    await mapWithConcurrency([1, 2, 3, 4, 5], 5, async (n) => {
+    await mapWithConcurrency([1, 2, 3, 4, 5], 5, async (n: number) => {
       await sleep(60);
       return n;
     });
@@ -179,7 +179,7 @@ describe("mapWithConcurrency", () => {
     let running = 0;
     let peak = 0;
 
-    await mapWithConcurrency([...Array(12).keys()], 3, async (n) => {
+    await mapWithConcurrency([...Array(12).keys()], 3, async (n: number) => {
       running += 1;
       peak = Math.max(peak, running);
       await sleep(10);
@@ -195,7 +195,7 @@ describe("mapWithConcurrency", () => {
 
   it("keeps results in input order however they finish", async () => {
     // First item slowest, so completion order is the reverse of input order.
-    const out = await mapWithConcurrency([30, 20, 10], 3, async (ms) => {
+    const out = await mapWithConcurrency([30, 20, 10], 3, async (ms: number) => {
       await sleep(ms);
       return ms;
     });
@@ -207,11 +207,11 @@ describe("mapWithConcurrency", () => {
     await mapWithConcurrency(
       [40, 10, 25],
       3,
-      async (ms) => {
+      async (ms: number) => {
         await sleep(ms);
         return ms;
       },
-      (result) => seen.push(result),
+      (result: any) => seen.push(result),
     );
     // Fastest first — this callback firing in completion order is what makes the
     // "3 of 5 complete" counter a fact rather than an animation.

@@ -25,6 +25,32 @@ function requiredEnv(): { url: string; anonKey: string } {
 }
 
 /**
+ * Expire this application's Supabase session cookie and every chunk belonging
+ * to it. This is deliberately separate from `auth.signOut()`: if a login
+ * follow-up fails, the browser must not keep the just-issued credentials even
+ * when the Auth sign-out request itself reports an error.
+ */
+export async function clearSupabaseRouteHandlerSession() {
+  const { url } = requiredEnv();
+  const cookieStore = await cookies();
+  const storageKey = `sb-${new URL(url).hostname.split(".")[0]}-auth-token`;
+  const cookieNames = new Set([storageKey]);
+
+  for (const { name } of cookieStore.getAll()) {
+    if (name === storageKey || name.startsWith(`${storageKey}.`)) {
+      cookieNames.add(name);
+    }
+  }
+
+  // `createSupabaseRouteHandlerClient` uses the default host-only, root-path
+  // Supabase cookie settings. Expiring the base name also covers a newly set
+  // single-cookie session that is not yet visible through getAll().
+  for (const name of cookieNames) {
+    cookieStore.set(name, "", { maxAge: 0, path: "/" });
+  }
+}
+
+/**
  * For Route Handlers (app/api/**): reads AND writes session cookies via
  * next/headers — Route Handlers are one of the two contexts (with Server
  * Actions) Next.js allows to mutate cookies. Any refresh `getUser()` performs,

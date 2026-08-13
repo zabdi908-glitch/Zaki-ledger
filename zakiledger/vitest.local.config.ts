@@ -1,0 +1,20 @@
+import { defineConfig } from "vitest/config";
+import { fileURLToPath } from "node:url";
+import base from "./vitest.config";
+
+export default defineConfig({
+  resolve: {
+    alias: { "@": fileURLToPath(new URL("./", import.meta.url)) },
+  },
+  test: {
+    ...base.test,
+    env: {
+      OPENAI_API_KEY: "sk-test-dummy-key",
+      ANTHROPIC_API_KEY: "sk-ant-test-dummy-key",
+      SUPABASE_URL: "http://127.0.0.1:54321",
+      SUPABASE_ANON_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0",
+      SUPABASE_SERVICE_ROLE_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU",
+      SUPABASE_DB_URL: "postgresql://postgres:postgres@127.0.0.1:54322/postgres",
+    },
+  },
+});

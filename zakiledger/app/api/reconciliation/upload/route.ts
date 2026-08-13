@@ -3,6 +3,7 @@ import { parseCsvStatement, parseOfxStatement } from "@/lib/bank-parsers";
 import { parsePdfStatement } from "@/lib/bank-statement-pdf";
 import { saveBankStatement } from "@/lib/reconciliation-store";
 import { requireUser } from "@/lib/auth";
+import { isReconciliationWriteFrozen, reconciliationFreezeResponse } from "@/lib/reconciliation-freeze";
 import type { FileFormat } from "@/lib/reconciliation-schema";
 import { sha256Hex } from "@/lib/financial-identity";
 
@@ -24,6 +25,7 @@ function detectFormat(fileName: string): FileFormat | null {
 export async function POST(req: NextRequest) {
   const user = await requireUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (isReconciliationWriteFrozen()) return reconciliationFreezeResponse();
 
   try {
     const form = await req.formData();

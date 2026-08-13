@@ -17,12 +17,24 @@ vi.mock("../lib/xero", () => ({
   listXeroBankTransactions: vi.fn(),
 }));
 
+vi.mock("../lib/reconciliation-store", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("../lib/reconciliation-store")
+  >();
+  return {
+    ...actual,
+    saveQbTransactions: vi.fn(actual.saveQbTransactions),
+    computeAndPersistMatches: vi.fn(actual.computeAndPersistMatches),
+  };
+});
+
 // Dynamic import after mocks are registered and env is cleared
 const { runNightlyMatch } = await import("../lib/nightly-match");
 const {
   saveBankStatement,
   saveQbTransactions,
   listMatchesForStatement,
+  computeAndPersistMatches,
 } = await import("../lib/reconciliation-store");
 const { getValidQboAccess, listQuickBooksPurchases } = await import(
   "../lib/quickbooks"
@@ -556,5 +568,144 @@ describe("runNightlyMatch", () => {
 
     const matches = await listMatchesForStatement(userId, statement.id);
     expect(matches.length).toBe(1);
+  });
+
+  describe("freeze guard", () => {
+    it("returns zero mutations when ZAKI_RECONCILIATION_WRITE_FREEZE=1", async () => {
+      try {
+        const userId = freshUser();
+
+        // Setup happens BEFORE the freeze: with the flag ON, the store-level
+        // freeze guards block these writes themselves (asserted below).
+        await saveBankStatement(
+          userId,
+          "frozen-test.csv",
+          "csv",
+          {
+            periodStart: "2025-01-01",
+            periodEnd: "2025-01-31",
+            currency: "GBP",
+            openingBalance: 5000.0,
+            closingBalance: 4000.0,
+            transactions: [
+              {
+                transactionDate: { value: "2025-01-10", confidence: 1, reason: "test" },
+                postedDate: "2025-01-10",
+                merchant: { value: "Test Merchant", confidence: 1, reason: "test" },
+                description: { value: "Test", confidence: 1, reason: "test" },
+                amount: { value: 100.0, confidence: 1, reason: "test" },
+                currency: "GBP",
+                transactionId: "txn-001",
+                memo: null,
+              },
+            ],
+          },
+        );
+
+        // Add some QB transactions
+        await saveQbTransactions(userId, [
+          {
+            postedDate: "2025-01-10",
+            amount: 100.0,
+            description: "Test QB",
+          },
+        ]);
+
+        process.env.ZAKI_RECONCILIATION_WRITE_FREEZE = "1";
+
+        // Store-level freeze guards: direct writes must throw frozen errors
+        // before touching tenant resolution or the database.
+        await expect(
+          saveBankStatement(userId, "blocked.csv", "csv", {
+            periodStart: "2025-01-01",
+            periodEnd: "2025-01-31",
+            currency: "GBP",
+            openingBalance: 0,
+            closingBalance: 0,
+            transactions: [],
+          }),
+        ).rejects.toThrow("frozen");
+        await expect(
+          saveQbTransactions(userId, [{ postedDate: "2025-01-10", amount: 1, description: "x" }]),
+        ).rejects.toThrow("frozen");
+
+        (getValidQboAccess as any).mockResolvedValue(null);
+        (getValidXeroAccess as any).mockResolvedValue(null);
+
+        vi.mocked(saveQbTransactions).mockClear();
+        vi.mocked(computeAndPersistMatches).mockClear();
+
+        const result = await runNightlyMatch(userId);
+
+        expect(result.statementsProcessed).toBe(0);
+        expect(result.matchesFound).toBe(0);
+        expect(result.errors).toContain(
+          "Reconciliation writes are frozen — nightly match aborted.",
+        );
+        expect(vi.mocked(saveQbTransactions)).not.toHaveBeenCalled();
+        expect(vi.mocked(computeAndPersistMatches)).not.toHaveBeenCalled();
+      } finally {
+        delete process.env.ZAKI_RECONCILIATION_WRITE_FREEZE;
+      }
+    });
+
+    it("normal behavior when ZAKI_RECONCILIATION_WRITE_FREEZE is not set", async () => {
+      // Ensure flag is absent
+      delete process.env.ZAKI_RECONCILIATION_WRITE_FREEZE;
+      vi.mocked(saveQbTransactions).mockClear();
+      vi.mocked(computeAndPersistMatches).mockClear();
+
+      const userId = freshUser();
+
+      const statement = await saveBankStatement(
+        userId,
+        "not-frozen.csv",
+        "csv",
+        {
+          periodStart: "2025-01-01",
+          periodEnd: "2025-01-31",
+          currency: "GBP",
+          openingBalance: 3000.0,
+          closingBalance: 2000.0,
+          transactions: [
+            {
+              transactionDate: { value: "2025-01-15", confidence: 1, reason: "test" },
+              postedDate: "2025-01-15",
+              merchant: { value: "Normal Merchant", confidence: 1, reason: "test" },
+              description: { value: "Normal", confidence: 1, reason: "test" },
+              amount: { value: 50.0, confidence: 1, reason: "test" },
+              currency: "GBP",
+              transactionId: "txn-normal",
+              memo: null,
+            },
+          ],
+        },
+      );
+
+      // one matching QB transaction via mock
+      (getValidQboAccess as any).mockResolvedValue("mock-access");
+      (listQuickBooksPurchases as any).mockResolvedValue([
+        {
+          postedDate: "2025-01-15",
+          amount: 50.0,
+          description: "Normal QB match",
+          qbTransactionId: "qb-normal",
+          provider: "quickbooks",
+          organisationId: "org-1",
+          externalObjectType: "purchase",
+        },
+      ]);
+      (getValidXeroAccess as any).mockResolvedValue(null);
+
+      const result = await runNightlyMatch(userId);
+
+      expect(result.statementsProcessed).toBeGreaterThanOrEqual(1);
+      expect(result.matchesFound).toBeGreaterThanOrEqual(1);
+      expect(result.errors).not.toContain(
+        "Reconciliation writes are frozen — nightly match aborted.",
+      );
+      expect(vi.mocked(saveQbTransactions)).toHaveBeenCalled();
+      expect(vi.mocked(computeAndPersistMatches)).toHaveBeenCalled();
+    });
   });
 });

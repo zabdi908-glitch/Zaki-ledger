@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/auth";
+import { isReconciliationWriteFrozen, reconciliationFreezeResponse } from "@/lib/reconciliation-freeze";
 import {
   getBankStatement,
   saveQbTransactions,
@@ -39,6 +40,7 @@ export async function POST(req: Request) {
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+  if (isReconciliationWriteFrozen()) return reconciliationFreezeResponse();
 
   let body: { statementId?: unknown };
   try {

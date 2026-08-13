@@ -131,7 +131,7 @@ function batchFor(tag: string) {
   const clean = sampleBulkBatch().slice(0, 3);
 
   samples.byFilename = new Map<string, unknown>([
-    ...clean.map(({ extraction }, i): [string, unknown] => [
+    ...clean.map(({ extraction }: { extraction: any }, i: number): [string, unknown] => [
       filenames[i],
       { ...extraction, supplierName: { ...extraction.supplierName, value: `${extraction.supplierName.value} (${tag})` } },
     ]),
@@ -159,12 +159,12 @@ async function uploadAndBuildRows(filenames: string[]): Promise<ResultRow[]> {
 
   const messages = (await res.text())
     .split("\n")
-    .filter((l) => l.trim())
-    .map((l) => JSON.parse(l) as any);
+    .filter((l: string) => l.trim())
+    .map((l: string) => JSON.parse(l) as any);
 
   // Exactly what components/BatchUpload does with each "result" line.
   const rows = filenames.map((name, i) => pendingRow(name, i));
-  for (const msg of messages.filter((m) => m.type === "result")) {
+  for (const msg of messages.filter((m: any) => m.type === "result")) {
     rows[msg.index] = {
       index: msg.index,
       filename: msg.filename,
@@ -191,7 +191,7 @@ async function runPlan(rows: ResultRow[], indexes: number[]): Promise<ResultRow[
     const req = new Request("http://test/api/approve/bulk", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ documentIds: plan.queued.map((q) => q.documentId) }),
+      body: JSON.stringify({ documentIds: plan.queued.map((q: any) => q.documentId) }),
     });
     const body = (await (await bulkRoute(req as unknown as NextRequest)).json()) as any;
     const byId = new Map(body.results.map((r: any) => [r.documentId, r]));
@@ -307,9 +307,9 @@ describe("five files: 3 clean, 1 flagged, 1 failed", () => {
     // document through on the strength of the clean ones next to it.
     const plan = planApproval(rows, [0, 1, 2, 3, 4]);
 
-    expect(plan.queued.map((q) => q.index)).toEqual([0, 1, 2]);
+    expect(plan.queued.map((q: any) => q.index)).toEqual([0, 1, 2]);
     expect(plan.direct).toHaveLength(0);
-    expect(plan.skipped.map((s) => s.index)).toEqual([3, 4]);
+    expect(plan.skipped.map((s: any) => s.index)).toEqual([3, 4]);
     expect(plan.skipped[0].reason).toContain("Merchant");
   });
 });

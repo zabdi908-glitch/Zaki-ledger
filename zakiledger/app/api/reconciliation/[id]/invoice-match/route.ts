@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireUser } from "@/lib/auth";
 import { saveInvoiceMatch } from "@/lib/invoice-match-store";
 import { recordDecision } from "@/lib/decision-store";
+import { isReconciliationWriteFrozen, reconciliationFreezeResponse } from "@/lib/reconciliation-freeze";
+import { resolveTenantClientEntityIdForWrite } from "@/lib/tenant-context";
 import { z } from "zod/v4";
 
 const BodySchema = z.object({
@@ -22,6 +24,7 @@ const BodySchema = z.object({
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const user = await requireUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (isReconciliationWriteFrozen()) return reconciliationFreezeResponse();
 
   try {
     const { id } = await params;
@@ -37,7 +40,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     // A decision-log failure must never fail the confirmation itself — the
     // invoice match is already committed by the time we get here.
     try {
-      await recordDecision(user.id, {
+      const clientEntityId = await resolveTenantClientEntityIdForWrite(user.id);
+      await recordDecision(user.id, clientEntityId, {
         statementId: id,
         matchId: null,
         bankTransactionId: body.bankTransactionId,

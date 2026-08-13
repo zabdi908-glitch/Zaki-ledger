@@ -56,12 +56,12 @@ async function uploadBatch(filenames: string[]) {
   const res = await batchRoute(req as unknown as NextRequest);
   const messages = (await res.text())
     .split("\n")
-    .filter((l) => l.trim())
-    .map((l) => JSON.parse(l) as any);
+    .filter((l: string) => l.trim())
+    .map((l: string) => JSON.parse(l) as any);
 
   return {
-    results: messages.filter((m) => m.type === "result"),
-    summary: messages.find((m) => m.type === "summary"),
+    results: messages.filter((m: any) => m.type === "result"),
+    summary: messages.find((m: any) => m.type === "summary"),
   };
 }
 

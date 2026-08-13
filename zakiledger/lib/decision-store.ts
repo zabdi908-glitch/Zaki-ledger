@@ -89,7 +89,11 @@ function mapPreferenceRow(row: Record<string, unknown>): MerchantPreference {
 
 // --- Decision log -----------------------------------------------------
 
-export async function recordDecision(userId: string, d: DecisionInput): Promise<void> {
+export async function recordDecision(
+  userId: string,
+  clientEntityId: string | null,
+  d: DecisionInput,
+): Promise<void> {
   const db = getSupabase();
   if (!db) {
     mem.decisions.push({
@@ -101,6 +105,10 @@ export async function recordDecision(userId: string, d: DecisionInput): Promise<
     return;
   }
 
+  // On pre-012 schemas the client_entity_id column does not exist, so the
+  // payload must omit it (clientEntityId === null). On canonical-012 the
+  // caller resolved the tenant first; the stamp is mandatory and any
+  // resolution failure already failed closed upstream.
   const { error } = await db.from("reconciliation_decisions").insert({
     id: newId(),
     user_id: userId,
@@ -111,6 +119,7 @@ export async function recordDecision(userId: string, d: DecisionInput): Promise<
     merchant_name: d.merchantName,
     suggested_category: d.suggestedCategory,
     user_choice_category: d.userChoiceCategory,
+    ...(clientEntityId ? { client_entity_id: clientEntityId } : {}),
   });
   if (error) throw new Error(`Failed to record decision: ${error.message}`);
 }

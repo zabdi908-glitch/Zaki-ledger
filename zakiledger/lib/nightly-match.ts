@@ -6,6 +6,7 @@ import {
 } from "./reconciliation-store";
 import { getValidQboAccess, listQuickBooksPurchases } from "./quickbooks";
 import { getValidXeroAccess, listXeroBankTransactions } from "./xero";
+import { isReconciliationWriteFrozen } from "./reconciliation-freeze";
 
 export interface NightlyResult {
   statementsProcessed: number;
@@ -30,6 +31,16 @@ export interface NightlyResult {
  * Returns a summary of what happened across all statements.
  */
 export async function runNightlyMatch(userId: string): Promise<NightlyResult> {
+  if (isReconciliationWriteFrozen()) {
+    return {
+      statementsProcessed: 0,
+      matchesFound: 0,
+      greenCount: 0,
+      yellowCount: 0,
+      redCount: 0,
+      errors: ["Reconciliation writes are frozen — nightly match aborted."],
+    };
+  }
   const errors: string[] = [];
   let statementsProcessed = 0;
   let totalMatchesFound = 0;

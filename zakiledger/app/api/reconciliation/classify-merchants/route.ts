@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireUser } from "@/lib/auth";
+import { isReconciliationWriteFrozen, reconciliationFreezeResponse } from "@/lib/reconciliation-freeze";
 import { classifyMerchant, type MerchantAiCategory } from "@/lib/merchant-ai";
 import { cacheCategory, getCachedCategories } from "@/lib/merchant-ai-cache";
 import { z } from "zod/v4";
@@ -24,6 +25,7 @@ const BodySchema = z.object({
 export async function POST(req: NextRequest) {
   const user = await requireUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (isReconciliationWriteFrozen()) return reconciliationFreezeResponse();
 
   let names: string[];
   try {

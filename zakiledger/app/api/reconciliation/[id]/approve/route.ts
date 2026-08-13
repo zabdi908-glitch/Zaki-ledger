@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { approveMatches, listBankTransactions, listMatchesForStatement } from "@/lib/reconciliation-store";
 import { bumpMerchantPreference, recordDecision } from "@/lib/decision-store";
 import { requireUser } from "@/lib/auth";
+import { isReconciliationWriteFrozen, reconciliationFreezeResponse } from "@/lib/reconciliation-freeze";
+import { resolveTenantClientEntityIdForWrite } from "@/lib/tenant-context";
 import { z } from "zod/v4";
 
 const BodySchema = z.object({
@@ -20,6 +22,7 @@ const BodySchema = z.object({
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const user = await requireUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (isReconciliationWriteFrozen()) return reconciliationFreezeResponse();
 
   try {
     const { id } = await params;
@@ -30,6 +33,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     // A decision-log failure must never fail the approval itself — the
     // reconciliation is already committed by the time we get here.
     try {
+      const clientEntityId = await resolveTenantClientEntityIdForWrite(user.id);
       const [matches, bankTxns] = await Promise.all([
         listMatchesForStatement(user.id, id),
         listBankTransactions(user.id, id),
@@ -42,7 +46,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         const bank = bankById.get(match.bankTransactionId);
         const merchant = bank?.merchant ?? bank?.description ?? null;
         const category = body.categories?.[matchId] ?? null;
-        await recordDecision(user.id, {
+        await recordDecision(user.id, clientEntityId, {
           statementId: id,
           matchId,
           bankTransactionId: match.bankTransactionId,

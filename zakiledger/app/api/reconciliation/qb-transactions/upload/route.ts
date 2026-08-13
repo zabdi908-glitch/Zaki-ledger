@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { parseCsvStatement, parsedTransactionsToQbInputs } from "@/lib/bank-parsers";
 import { saveQbTransactions } from "@/lib/reconciliation-store";
 import { requireUser } from "@/lib/auth";
+import { isReconciliationWriteFrozen, reconciliationFreezeResponse } from "@/lib/reconciliation-freeze";
 import { sha256Hex } from "@/lib/financial-identity";
 
 /**
@@ -17,6 +18,7 @@ import { sha256Hex } from "@/lib/financial-identity";
 export async function POST(req: NextRequest) {
   const user = await requireUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (isReconciliationWriteFrozen()) return reconciliationFreezeResponse();
 
   try {
     const form = await req.formData();
