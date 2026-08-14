@@ -636,17 +636,30 @@ export async function saveQbTransactions(
  * each side, since a transaction can legitimately match across that window —
  * see the matching algorithm's pending-clearance case). Falls back to every
  * QB transaction the user has when the statement carries no period.
+ *
+ * `scope` narrows the pool to one canonical client entity + ledger book
+ * (hardening invariant G). Auto-matching passes it; manual matching
+ * deliberately does not, so a human can override anything.
  */
+export interface QbPeriodScope {
+  clientEntityId: string;
+  ledgerBookId: string;
+}
+
 export async function listQbTransactionsForPeriod(
   userId: string,
   periodStart: string | null,
   periodEnd: string | null,
+  scope?: QbPeriodScope | null,
 ): Promise<QbTransaction[]> {
   const db = getSupabase();
   const paddedStart = periodStart ? addDays(periodStart, -DATE_PENDING_DAYS) : null;
   const paddedEnd = periodEnd ? addDays(periodEnd, DATE_PENDING_DAYS) : null;
 
   if (!db) {
+    // The in-memory fallback has no tenant stamps on its rows, so scope is a
+    // no-op here — tenant isolation is a Postgres-layer concern (see the
+    // migration 012 tenant-isolation tests).
     return mem.qbTxns
       .filter((t) => {
         if (t.userId !== userId) return false;
@@ -660,6 +673,7 @@ export async function listQbTransactionsForPeriod(
   let query = db.from("qb_transactions").select().eq("user_id", userId);
   if (paddedStart) query = query.gte("posted_date", paddedStart);
   if (paddedEnd) query = query.lte("posted_date", paddedEnd);
+  if (scope) query = query.eq("client_entity_id", scope.clientEntityId).eq("ledger_book_id", scope.ledgerBookId);
 
   const { data, error } = await query.order("posted_date", { ascending: true });
   if (error) throw new Error(`Failed to load QB transactions: ${error.message}`);
@@ -692,6 +706,32 @@ export async function listMatchesForStatement(userId: string, statementId: strin
 }
 
 /**
+ * QB ids already consumed by any live reconciliation match for this user.
+ * A match row — auto or manual, approved or not — consumes its QB row
+ * (hardening invariants A/B: one QB row, one live match). `rejectMatch`
+ * deletes the row, which frees the QB row again.
+ */
+async function listMatchedQbIds(userId: string): Promise<Set<string>> {
+  const db = getSupabase();
+  if (!db) {
+    return new Set(
+      mem.matches
+        .filter((m) => m.userId === userId)
+        .map((m) => m.qbTransactionId)
+        .filter((id): id is string => id !== null),
+    );
+  }
+
+  const { data, error } = await db.from("reconciliation_matches").select("qb_transaction_id").eq("user_id", userId);
+  if (error) throw new Error(`Failed to load matched QB ids: ${error.message}`);
+  return new Set(
+    (data ?? [])
+      .map((r) => r.qb_transaction_id as string)
+      .filter((id): id is string => id !== null),
+  );
+}
+
+/**
  * Run the matching algorithm for a statement and persist the results as
  * `matched_by: 'auto'` rows, then return the full picture (bank + QB
  * transactions, matches, unmatched ids).
@@ -719,19 +759,32 @@ export async function computeAndPersistMatches(
   const statement = await getBankStatement(userId, statementId);
   if (!statement) throw new Error("Statement not found.");
 
+  // Canonical-012 tenant scope + matched-QB exclusion both narrow the
+  // candidate pool before scoring (hardening invariants A/B/G).
+  const db = getSupabase();
+  const capability = db ? await detectReconciliationSchemaCapability(db) : null;
+  const tenantCtx =
+    db && capability?.version === "canonical-012" ? await resolveTenantContextForUser(userId) : null;
+
   const bankTransactions = await listBankTransactions(userId, statementId);
-  const qbTransactions = await listQbTransactionsForPeriod(userId, statement.periodStart, statement.periodEnd);
+  const qbTransactions = await listQbTransactionsForPeriod(
+    userId,
+    statement.periodStart,
+    statement.periodEnd,
+    tenantCtx ? { clientEntityId: tenantCtx.clientEntityId, ledgerBookId: tenantCtx.internalLedgerBookId } : null,
+  );
   const existing = await listMatchesForStatement(userId, statementId);
   const alreadyMatchedBankIds = new Set(existing.map((m) => m.bankTransactionId));
+  const consumedQbIds = await listMatchedQbIds(userId);
 
   const toScore = bankTransactions.filter((b) => !alreadyMatchedBankIds.has(b.id));
-  const result = matchTransactions(toScore, qbTransactions);
+  const eligibleQbTransactions = qbTransactions.filter((q) => !consumedQbIds.has(q.id));
+  const result = matchTransactions(toScore, eligibleQbTransactions);
 
   // Generate audit memos for new auto-matches before persisting
   const auditMemos = await generateAuditMemos(result.matches, bankTransactions, qbTransactions);
   const memoByBankId = new Map(auditMemos.map((m) => [m.matchId, m]));
 
-  const db = getSupabase();
   const nowIso = new Date().toISOString();
 
   if (result.matches.length > 0) {
@@ -754,11 +807,6 @@ export async function computeAndPersistMatches(
         });
       }
     } else {
-      const capability = await detectReconciliationSchemaCapability(db);
-      const tenantCtx =
-        capability.version === "canonical-012"
-          ? await resolveTenantContextForUser(userId)
-          : null;
       const { error } = await db.from("reconciliation_matches").upsert(
         result.matches.map((m) => ({
           id: newId(),
