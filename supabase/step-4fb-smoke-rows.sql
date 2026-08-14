@@ -1,0 +1,7 @@
+SELECT '== S stmt' AS k, client_entity_id::text || ' | ' || ledger_book_id::text AS v FROM public.bank_statements WHERE id = 'e6a2b535-afd2-4ed2-9302-3a857db3d044'
+UNION ALL SELECT '== S bt count/stamp', count(*)::text || ' | ' || min(client_entity_id::text) FROM public.bank_transactions WHERE statement_id = 'e6a2b535-afd2-4ed2-9302-3a857db3d044'
+UNION ALL SELECT '== S qb count/stamp', count(*)::text || ' | ' || min(client_entity_id::text) || ' | ' || min(ledger_book_id::text) FROM public.qb_transactions WHERE user_id = '38832e8e-fa0f-45a3-96ce-3cb6da270cbe' AND description ILIKE '4FB-CANONICAL-TEST%'
+UNION ALL SELECT '== S match count/stamp', count(*)::text || ' | ' || min(client_entity_id::text) FROM public.reconciliation_matches WHERE statement_id = 'e6a2b535-afd2-4ed2-9302-3a857db3d044'
+UNION ALL SELECT '== S decision count/stamp', count(*)::text || ' | ' || min(client_entity_id::text) FROM public.reconciliation_decisions WHERE statement_id = 'e6a2b535-afd2-4ed2-9302-3a857db3d044'
+UNION ALL SELECT '== S report count/stamp', count(*)::text || ' | ' || min(client_entity_id::text) FROM public.reconciliation_reports WHERE statement_id = 'e6a2b535-afd2-4ed2-9302-3a857db3d044'
+UNION ALL SELECT '== S audit count', count(*)::text || ' | ' || min(user_id::text) || ' | ' || min(client_entity_id::text) FROM public.reconciliation_audit_log WHERE reconciliation_match_id IN (SELECT id FROM public.reconciliation_matches WHERE statement_id = 'e6a2b535-afd2-4ed2-9302-3a857db3d044');

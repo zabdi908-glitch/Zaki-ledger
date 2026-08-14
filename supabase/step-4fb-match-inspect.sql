@@ -1,0 +1,1 @@
+SELECT rm.id::text, rm.bank_transaction_id::text, COALESCE(rm.qb_transaction_id::text,'NULL') AS qb_txn, rm.client_entity_id::text, COALESCE(rm.confidence::text,'n/a') AS confidence FROM public.reconciliation_matches rm WHERE rm.statement_id = '025f99b8-22f6-496f-898e-eaca64f48411';
