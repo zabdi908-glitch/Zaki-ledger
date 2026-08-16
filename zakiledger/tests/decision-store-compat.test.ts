@@ -5,7 +5,7 @@
  * (resolveTenantClientEntityIdForWrite); recordDecision must never invent
  * or fake the stamp itself.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 interface InsertCall {
   table: string;
@@ -36,7 +36,10 @@ vi.mock("../lib/supabase", () => ({
   isSupabaseConfigured: () => true,
 }));
 
-import { recordDecision } from "../lib/decision-store";
+import {
+  bumpMerchantPreference, recordDecision, setMerchantDefault,
+} from "../lib/decision-store";
+import { ReconciliationWriteFrozenError } from "../lib/reconciliation-freeze";
 
 const INPUT = {
   statementId: "st-1",
@@ -64,5 +67,35 @@ describe("recordDecision schema compatibility", () => {
     await recordDecision("user-1", "client-1", INPUT);
     expect(calls).toHaveLength(1);
     expect(calls[0].payload).toMatchObject({ client_entity_id: "client-1" });
+  });
+});
+
+describe("freeze ON — decision/preference writers fail closed before any DB call", () => {
+  beforeEach(() => {
+    process.env.ZAKI_RECONCILIATION_WRITE_FREEZE = "1";
+  });
+  afterEach(() => {
+    delete process.env.ZAKI_RECONCILIATION_WRITE_FREEZE;
+  });
+
+  it("recordDecision throws frozen without touching the database", async () => {
+    await expect(recordDecision("user-1", "client-1", INPUT)).rejects.toBeInstanceOf(
+      ReconciliationWriteFrozenError,
+    );
+    expect(calls).toHaveLength(0);
+  });
+
+  it("bumpMerchantPreference throws frozen without touching the database", async () => {
+    await expect(bumpMerchantPreference("user-1", "SHELL", "Motor Expenses")).rejects.toBeInstanceOf(
+      ReconciliationWriteFrozenError,
+    );
+    expect(calls).toHaveLength(0);
+  });
+
+  it("setMerchantDefault throws frozen without touching the database", async () => {
+    await expect(setMerchantDefault("user-1", "SHELL", "Motor Expenses")).rejects.toBeInstanceOf(
+      ReconciliationWriteFrozenError,
+    );
+    expect(calls).toHaveLength(0);
   });
 });

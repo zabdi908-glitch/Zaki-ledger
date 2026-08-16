@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../lib/supabase", () => ({
   getSupabase: () => null,
@@ -9,6 +9,7 @@ import {
   bumpMerchantPreference, getMerchantPreferences, listDecisionsForStatement,
   recordDecision, setMerchantDefault, __clearDecisionMemForTests,
 } from "../lib/decision-store";
+import { ReconciliationWriteFrozenError } from "../lib/reconciliation-freeze";
 
 const U = "user-1";
 
@@ -49,5 +50,43 @@ describe("merchant preferences", () => {
     await setMerchantDefault(U, "wise transfer", "Transfer");
     const prefs = await getMerchantPreferences(U);
     expect(prefs[0].approvalCount).toBe(3);
+  });
+});
+
+describe("freeze ON — decision/preference writers fail closed", () => {
+  beforeEach(() => {
+    process.env.ZAKI_RECONCILIATION_WRITE_FREEZE = "1";
+  });
+  afterEach(() => {
+    delete process.env.ZAKI_RECONCILIATION_WRITE_FREEZE;
+  });
+
+  it("recordDecision throws frozen and mutates nothing (direct store invocation)", async () => {
+    await expect(
+      recordDecision(U, "00000000-0000-0000-0000-000000000001", {
+        statementId: "s1", matchId: "m1", bankTransactionId: "b1",
+        decisionType: "approve", merchantName: "SHELL", suggestedCategory: null, userChoiceCategory: null,
+      }),
+    ).rejects.toBeInstanceOf(ReconciliationWriteFrozenError);
+    expect(await listDecisionsForStatement(U, "s1")).toHaveLength(0);
+  });
+
+  it("bumpMerchantPreference throws frozen and mutates nothing", async () => {
+    await expect(bumpMerchantPreference(U, "shell", "Motor Expenses")).rejects.toBeInstanceOf(
+      ReconciliationWriteFrozenError,
+    );
+    expect(await getMerchantPreferences(U)).toHaveLength(0);
+  });
+
+  it("setMerchantDefault throws frozen and mutates nothing", async () => {
+    await expect(setMerchantDefault(U, "wise", "Transfer")).rejects.toBeInstanceOf(
+      ReconciliationWriteFrozenError,
+    );
+    expect(await getMerchantPreferences(U)).toHaveLength(0);
+  });
+
+  it("reads stay available while frozen", async () => {
+    await expect(listDecisionsForStatement(U, "s1")).resolves.toEqual([]);
+    await expect(getMerchantPreferences(U)).resolves.toEqual([]);
   });
 });
