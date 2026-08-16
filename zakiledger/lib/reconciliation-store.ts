@@ -1,8 +1,17 @@
 import { getSupabase } from "./supabase";
-import { matchTransactions, scorePair, DATE_PENDING_DAYS } from "./reconciliation-matching";
+import {
+  matchTransactions,
+  scorePair,
+  DATE_PENDING_DAYS,
+  reservesQbClaim,
+  shouldSupersedeAutoMatch,
+} from "./reconciliation-matching";
 import { generateAuditMemos } from "./audit-memo-generator";
 import { resolveTenantContextForUser } from "./tenant-context";
-import { detectReconciliationSchemaCapability } from "./reconciliation-schema-capability";
+import {
+  detectReconciliationSchemaCapability,
+  detectReconciliationClaimGuardCapability,
+} from "./reconciliation-schema-capability";
 import { assertReconciliationWritesNotFrozen } from "./reconciliation-freeze";
 import type { AuditMemo } from "./audit-memo-schema";
 import type {
@@ -175,6 +184,11 @@ function mapMatchRow(row: Record<string, unknown>): ReconciliationMatch {
     approvedBy: (row.approved_by as string) ?? null,
     approvedAt: (row.approved_at as string) ?? null,
     auditMemo: (row.audit_memo as AuditMemo | null) ?? null,
+    // 013 supersession columns — absent on pre-013 schemas, mapped to null.
+    supersededAt: (row.superseded_at as string) ?? null,
+    supersededByMatchId: (row.superseded_by_match_id as string) ?? null,
+    supersedeReason: (row.supersede_reason as string) ?? null,
+    supersedeOperationId: (row.supersede_operation_id as string) ?? null,
   };
 }
 
@@ -706,27 +720,35 @@ export async function listMatchesForStatement(userId: string, statementId: strin
 }
 
 /**
- * QB ids already consumed by any live reconciliation match for this user.
- * A match row — auto or manual, approved or not — consumes its QB row
- * (hardening invariants A/B: one QB row, one live match). `rejectMatch`
- * deletes the row, which frees the QB row again.
+ * Every match row belonging to this user, live and superseded.
+ *
+ * QB ids consumed by live matches: `listMatchedQbIds` below. On canonical-013
+ * schemas the claim classes are split by `reservesQbClaim` — a sub-green
+ * unapproved auto suggestion does NOT permanently reserve its QB row (defect
+ * D2) — while approved/manual/green rows keep the hardening invariants A/B
+ * (one QB row, one live claim). On pre-013 schemas every live match consumes
+ * its QB row, exactly as before.
  */
-async function listMatchedQbIds(userId: string): Promise<Set<string>> {
+async function listAllMatchesForUser(userId: string): Promise<ReconciliationMatch[]> {
   const db = getSupabase();
   if (!db) {
-    return new Set(
-      mem.matches
-        .filter((m) => m.userId === userId)
-        .map((m) => m.qbTransactionId)
-        .filter((id): id is string => id !== null),
-    );
+    return mem.matches
+      .filter((m) => m.userId === userId)
+      .map(({ userId: _u, ...rest }) => rest);
   }
 
-  const { data, error } = await db.from("reconciliation_matches").select("qb_transaction_id").eq("user_id", userId);
-  if (error) throw new Error(`Failed to load matched QB ids: ${error.message}`);
+  const { data, error } = await db.from("reconciliation_matches").select().eq("user_id", userId);
+  if (error) throw new Error(`Failed to load matches: ${error.message}`);
+  return (data ?? []).map((r) => mapMatchRow(r as Record<string, unknown>));
+}
+
+async function listMatchedQbIds(userId: string, claimGuard: "pre-013" | "canonical-013"): Promise<Set<string>> {
+  const all = await listAllMatchesForUser(userId);
+  const live = all.filter((m) => m.supersededAt === null);
   return new Set(
-    (data ?? [])
-      .map((r) => r.qb_transaction_id as string)
+    live
+      .filter((m) => (claimGuard === "canonical-013" ? reservesQbClaim(m) : true))
+      .map((m) => m.qbTransactionId)
       .filter((id): id is string => id !== null),
   );
 }
@@ -760,9 +782,14 @@ export async function computeAndPersistMatches(
   if (!statement) throw new Error("Statement not found.");
 
   // Canonical-012 tenant scope + matched-QB exclusion both narrow the
-  // candidate pool before scoring (hardening invariants A/B/G).
+  // candidate pool before scoring (hardening invariants A/B/G). On
+  // canonical-013 the exclusion follows the claim classes
+  // (reservesQbClaim), and persistence goes through the atomic RPC whose
+  // exclusive-claim index + lock scan make the pre-read an optimization
+  // rather than the safety mechanism (defects D1/D2).
   const db = getSupabase();
   const capability = db ? await detectReconciliationSchemaCapability(db) : null;
+  const claimGuard = await detectReconciliationClaimGuardCapability(db);
   const tenantCtx =
     db && capability?.version === "canonical-012" ? await resolveTenantContextForUser(userId) : null;
 
@@ -774,12 +801,55 @@ export async function computeAndPersistMatches(
     tenantCtx ? { clientEntityId: tenantCtx.clientEntityId, ledgerBookId: tenantCtx.internalLedgerBookId } : null,
   );
   const existing = await listMatchesForStatement(userId, statementId);
-  const alreadyMatchedBankIds = new Set(existing.map((m) => m.bankTransactionId));
-  const consumedQbIds = await listMatchedQbIds(userId);
+  const alreadyMatchedBankIds = new Set(
+    existing.filter((m) => m.supersededAt === null).map((m) => m.bankTransactionId),
+  );
+
+  // Canonical-013: split the user's live matches into reserved claims and
+  // sub-green unapproved auto holders that stay re-scorable (D2).
+  const allUserMatches = await listAllMatchesForUser(userId);
+  const liveUserMatches = allUserMatches.filter((m) => m.supersededAt === null);
+  const consumedQbIds = new Set(
+    liveUserMatches
+      .filter((m) => (claimGuard.version === "canonical-013" ? reservesQbClaim(m) : true))
+      .map((m) => m.qbTransactionId)
+      .filter((id): id is string => id !== null),
+  );
+  const holdersByQb = new Map<string, ReconciliationMatch>();
+  if (claimGuard.version === "canonical-013") {
+    for (const m of liveUserMatches) {
+      const qbId = m.qbTransactionId;
+      if (m.matchedBy === "auto" && m.approvedAt === null && qbId && !reservesQbClaim(m)) {
+        holdersByQb.set(qbId, m);
+      }
+    }
+  }
 
   const toScore = bankTransactions.filter((b) => !alreadyMatchedBankIds.has(b.id));
   const eligibleQbTransactions = qbTransactions.filter((q) => !consumedQbIds.has(q.id));
-  const result = matchTransactions(toScore, eligibleQbTransactions);
+  let result = matchTransactions(toScore, eligibleQbTransactions);
+
+  // Deterministic claim resolution: QB ids whose holder may not be
+  // superseded are removed from the pool and the assignment is recomputed.
+  // Supersedable holders stay in the proposal — the persist RPC performs
+  // the supersession itself under row locks, so the app never mutates
+  // historical rows directly.
+  if (claimGuard.version === "canonical-013") {
+    const blockedQbIds = new Set<string>();
+    for (const m of result.matches) {
+      const qbId = m.qbTransactionId;
+      const holder = qbId ? holdersByQb.get(qbId) : undefined;
+      if (holder && !shouldSupersedeAutoMatch(holder, Math.round(m.confidence * 100)) && qbId) {
+        blockedQbIds.add(qbId);
+      }
+    }
+    if (blockedQbIds.size > 0) {
+      result = matchTransactions(
+        toScore,
+        eligibleQbTransactions.filter((q) => !blockedQbIds.has(q.id)),
+      );
+    }
+  }
 
   // Generate audit memos for new auto-matches before persisting
   const auditMemos = await generateAuditMemos(result.matches, bankTransactions, qbTransactions);
@@ -804,9 +874,39 @@ export async function computeAndPersistMatches(
           approvedBy: null,
           approvedAt: null,
           auditMemo: memoByBankId.get(m.bankTransactionId) ?? null,
+          supersededAt: null,
+          supersededByMatchId: null,
+          supersedeReason: null,
+          supersedeOperationId: null,
         });
       }
+    } else if (claimGuard.version === "canonical-013" && tenantCtx) {
+      // Atomic persistence with exclusive-claim resolution (D1/D2). The RPC
+      // re-checks every claim under row locks and the partial unique index —
+      // a concurrent writer loses deterministically ('conflicted'), never
+      // corrupting state. Supersession is audit-logged inside the RPC.
+      const payload = result.matches.map((m) => ({
+        id: newId(),
+        bank_transaction_id: m.bankTransactionId,
+        qb_transaction_id: m.qbTransactionId,
+        confidence: m.confidence,
+        match_reason: m.matchReason,
+        flagged_level: m.flaggedLevel,
+        matched_at: nowIso,
+        audit_memo: memoByBankId.get(m.bankTransactionId) ?? null,
+      }));
+      const { data, error } = await db.rpc("persist_auto_matches_v1", {
+        p_user_id: userId,
+        p_statement_id: statementId,
+        p_client_entity_id: tenantCtx.clientEntityId,
+        p_matches: payload,
+      });
+      if (error) throw new Error(`Failed to persist auto matches: ${error.message}`);
+      // Deterministic review result for concurrent losers: their proposed
+      // bank rows land back in the unmatched pool below (no row persisted).
+      void data;
     } else {
+      // Pre-013 write path — unchanged legacy semantics.
       const { error } = await db.from("reconciliation_matches").upsert(
         result.matches.map((m) => ({
           id: newId(),
@@ -829,8 +929,9 @@ export async function computeAndPersistMatches(
   }
 
   const allMatches = await listMatchesForStatement(userId, statementId);
-  const matchedBankIds = new Set(allMatches.map((m) => m.bankTransactionId));
-  const matchedQbIds = new Set(allMatches.map((m) => m.qbTransactionId).filter((id): id is string => id !== null));
+  const liveMatches = allMatches.filter((m) => m.supersededAt === null);
+  const matchedBankIds = new Set(liveMatches.map((m) => m.bankTransactionId));
+  const matchedQbIds = new Set(liveMatches.map((m) => m.qbTransactionId).filter((id): id is string => id !== null));
 
   return {
     bankTransactions,
@@ -846,6 +947,19 @@ export async function computeAndPersistMatches(
  * overwrite any existing row for the bank transaction — the whole point of a
  * manual match is overriding whatever the algorithm decided (see the brief's
  * "Create Manual Match (User Override)" endpoint).
+ *
+ * Defect remediation semantics:
+ *  - D4: an APPROVED row is never silently rewritten — the manual override
+ *    refuses with a controlled error; the accountant must go through the
+ *    audited unapprove path first.
+ *  - D6: the human override may search the whole tenant client/book pool —
+ *    the ±5-day window is an auto-matching heuristic, not an accounting
+ *    boundary. Tenant/client/book checks are still enforced at write time
+ *    by the 012 composite FKs, the same-client trigger, and the 013
+ *    book-alignment trigger.
+ *  - D2: creating the manual row supersedes (audit-logged) any live
+ *    unapproved auto suggestion holding the same QB row — a human decision
+ *    outranks a machine suggestion.
  */
 export async function createManualMatch(
   userId: string,
@@ -860,7 +974,21 @@ export async function createManualMatch(
   if (!bank) throw new Error("Bank transaction not found on this statement.");
 
   const statement = await getBankStatement(userId, statementId);
-  const qbTxns = await listQbTransactionsForPeriod(userId, statement?.periodStart ?? null, statement?.periodEnd ?? null);
+
+  const db = getSupabase();
+  const capability = db ? await detectReconciliationSchemaCapability(db) : null;
+  const tenantCtx =
+    db && capability?.version === "canonical-012" ? await resolveTenantContextForUser(userId) : null;
+
+  // D6: no date window for a manual override — search the full pool. On
+  // canonical-012 the pool is additionally narrowed to the user's canonical
+  // client + ledger book (invariant G's tenant scope stays intact).
+  const qbTxns = await listQbTransactionsForPeriod(
+    userId,
+    null,
+    null,
+    tenantCtx ? { clientEntityId: tenantCtx.clientEntityId, ledgerBookId: tenantCtx.internalLedgerBookId } : null,
+  );
   const qb = qbTxns.find((t) => t.id === qbTransactionId);
   if (!qb) throw new Error("QB transaction not found.");
 
@@ -880,7 +1008,6 @@ export async function createManualMatch(
   };
   const [manualMemo] = await generateAuditMemos([manualProposedMatch], [bank], [qb]);
 
-  const db = getSupabase();
   if (!db) {
     const existingIdx = mem.matches.findIndex((m) => m.statementId === statementId && m.bankTransactionId === bankTransactionId);
     const row: MemMatch = {
@@ -897,6 +1024,10 @@ export async function createManualMatch(
       approvedBy: null,
       approvedAt: null,
       auditMemo: manualMemo ?? null,
+      supersededAt: null,
+      supersededByMatchId: null,
+      supersedeReason: null,
+      supersedeOperationId: null,
     };
     if (existingIdx >= 0) mem.matches[existingIdx] = row;
     else mem.matches.push(row);
@@ -904,11 +1035,22 @@ export async function createManualMatch(
     return rest;
   }
 
-  const capability = await detectReconciliationSchemaCapability(db);
-  const tenantCtx =
-    capability.version === "canonical-012"
-      ? await resolveTenantContextForUser(userId)
-      : null;
+  // D4: an approved row is immutable-by-default — refuse the override with a
+  // controlled error instead of letting the DB guard fire opaquely.
+  const { data: existingRow, error: existingError } = await db
+    .from("reconciliation_matches")
+    .select("approved_at, matched_by, confidence, qb_transaction_id")
+    .eq("statement_id", statementId)
+    .eq("bank_transaction_id", bankTransactionId)
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (existingError) throw new Error(`Failed to load existing match: ${existingError.message}`);
+  if (existingRow?.approved_at) {
+    throw new Error(
+      "This match is already approved. Clear its approval (unapprove) before overriding it.",
+    );
+  }
+
   const { data, error } = await db
     .from("reconciliation_matches")
     .upsert(
@@ -930,7 +1072,45 @@ export async function createManualMatch(
     .select()
     .single();
   if (error) throw new Error(`Failed to save manual match: ${error.message}`);
-  return mapMatchRow(data as Record<string, unknown>);
+  const saved = mapMatchRow(data as Record<string, unknown>);
+
+  // D2 sweep: the human decision supersedes live unapproved auto suggestions
+  // holding the same QB row (audit-logged inside the RPC). Approved rows are
+  // untouched by construction of the RPC.
+  const claimGuard = await detectReconciliationClaimGuardCapability(db);
+  if (claimGuard.version === "canonical-013" && tenantCtx) {
+    const { error: sweepError } = await db.rpc("supersede_auto_claims_v1", {
+      p_user_id: userId,
+      p_client_entity_id: tenantCtx.clientEntityId,
+      p_qb_transaction_id: qbTransactionId,
+      p_reason: "manual_override",
+      p_operation_id: crypto.randomUUID(),
+    });
+    if (sweepError) throw new Error(`Failed to sweep auto claims: ${sweepError.message}`);
+  }
+
+  // Audit the override itself when it replaced an automatic suggestion —
+  // same append-only log the approval transitions use.
+  if (existingRow && existingRow.matched_by === "auto") {
+    const { error: auditError } = await db.from("reconciliation_audit_log").insert({
+      id: newId(),
+      reconciliation_match_id: saved.id,
+      action: "match_manual_override",
+      action_by: userId,
+      action_at: nowIso,
+      old_confidence: existingRow.confidence ?? null,
+      new_confidence: confidence,
+      ...(tenantCtx
+        ? {
+            user_id: userId,
+            client_entity_id: tenantCtx.clientEntityId,
+          }
+        : {}),
+    });
+    if (auditError) throw new Error(`Failed to write audit log: ${auditError.message}`);
+  }
+
+  return saved;
 }
 
 /**
@@ -955,7 +1135,7 @@ export async function rejectMatch(userId: string, statementId: string, matchId: 
 
   const { data: existing, error: fetchError } = await db
     .from("reconciliation_matches")
-    .select("approved_at")
+    .select("approved_at, superseded_at")
     .eq("id", matchId)
     .eq("statement_id", statementId)
     .eq("user_id", userId)
@@ -963,6 +1143,9 @@ export async function rejectMatch(userId: string, statementId: string, matchId: 
   if (fetchError) throw new Error(`Failed to load match: ${fetchError.message}`);
   if (!existing) throw new Error("Match not found.");
   if (existing.approved_at) throw new Error("Cannot reject an already-approved match.");
+  // Superseded rows are preserved historical evidence; the DB guard refuses
+  // the delete anyway — surface the same rule with a readable message.
+  if (existing.superseded_at) throw new Error("Match is already superseded.");
 
   const { error } = await db
     .from("reconciliation_matches")
@@ -1012,7 +1195,10 @@ export async function approveMatches(
   assertReconciliationWritesNotFrozen();
 
   const allMatches = await listMatchesForStatement(userId, statementId);
-  const toApprove = allMatches.filter((m) => matchIds.includes(m.id));
+  // Superseded rows are historical evidence — they can never be approved.
+  const toApprove = allMatches.filter(
+    (m) => matchIds.includes(m.id) && m.supersededAt === null,
+  );
   if (toApprove.length === 0) throw new Error("None of the given match ids belong to this statement.");
 
   const nowIso = new Date().toISOString();
@@ -1035,6 +1221,26 @@ export async function approveMatches(
       });
     }
   } else {
+    const claimGuardApprove = await detectReconciliationClaimGuardCapability(db);
+    if (claimGuardApprove.version === "canonical-013") {
+      // Controlled approval (invariant L): the DB guard makes approval-field
+      // transitions impossible through raw UPDATE, and this RPC is the only
+      // way into the approved state. It applies the transition and its audit
+      // evidence in one transaction, ownership- and eligibility-checked, and
+      // skips already-approved/superseded ids deterministically.
+      const { data, error } = await db.rpc("approve_reconciliation_matches_service_v1", {
+        p_user_id: userId,
+        p_statement_id: statementId,
+        p_match_ids: toApprove.map((m) => m.id),
+        p_approved_by: approvedBy,
+        p_operation_id: crypto.randomUUID(),
+      });
+      if (error) throw new Error(`Failed to approve matches: ${error.message}`);
+      void data;
+      return generateReport(userId, statementId);
+    }
+
+    // Pre-013 write path — unchanged legacy semantics (no DB approval gate).
     // Scoped by statement_id + user_id, not just id — the ids in `toApprove`
     // are already filtered to this statement/user by listMatchesForStatement
     // above, but the write itself must enforce that too: an .update().in("id", ...)
@@ -1092,7 +1298,9 @@ export async function unapproveMatches(userId: string, statementId: string, matc
   assertReconciliationWritesNotFrozen();
 
   const allMatches = await listMatchesForStatement(userId, statementId);
-  const toRevert = allMatches.filter((m) => matchIds.includes(m.id) && m.approvedAt !== null);
+  const toRevert = allMatches.filter(
+    (m) => matchIds.includes(m.id) && m.approvedAt !== null && m.supersededAt === null,
+  );
   if (toRevert.length === 0) return 0;
 
   const nowIso = new Date().toISOString();
@@ -1115,6 +1323,22 @@ export async function unapproveMatches(userId: string, statementId: string, matc
       });
     }
   } else {
+    const claimGuard = await detectReconciliationClaimGuardCapability(db);
+    if (claimGuard.version === "canonical-013") {
+      // Controlled correction path (D4): the DB guard makes approved rows
+      // immutable to raw DML, and this RPC is the only way to clear
+      // approval. It writes the audit event itself, inside the same
+      // transaction as the update.
+      const { data, error } = await db.rpc("unapprove_reconciliation_matches_v1", {
+        p_user_id: userId,
+        p_match_ids: toRevert.map((m) => m.id),
+      });
+      if (error) throw new Error(`Failed to unapprove matches: ${error.message}`);
+      const unapproved = (data as { unapproved?: string[] } | null)?.unapproved ?? [];
+      return unapproved.length;
+    }
+
+    // Pre-013 write path — unchanged legacy semantics.
     // Same statement_id + user_id scoping as approveMatches above — an id-only
     // .in() filter on a mutating update is never enough on its own.
     const { error: updateError } = await db

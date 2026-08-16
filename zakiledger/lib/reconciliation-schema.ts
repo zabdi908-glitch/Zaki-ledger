@@ -149,6 +149,12 @@ export interface ReconciliationMatch {
   approvedBy: string | null;
   approvedAt: string | null;
   auditMemo: AuditMemo | null;
+  /** Supersession evidence (migration 013): non-null only on rows that were
+   * superseded by materially stronger evidence or a manual decision. */
+  supersededAt: string | null;
+  supersededByMatchId: string | null;
+  supersedeReason: string | null;
+  supersedeOperationId: string | null;
 }
 
 export interface ReconciliationReport {

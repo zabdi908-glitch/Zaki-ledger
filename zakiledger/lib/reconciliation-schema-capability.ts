@@ -50,6 +50,9 @@ export type ReconciliationSchemaCapability =
 /** The 012-only canonical tenant RPC used as the capability probe. */
 export const CAPABILITY_PROBE_FUNCTION = "canonical_default_tenant_ids_v1";
 
+/** The 013-only claim-hardening RPC used as the claim-guard capability probe. */
+export const CLAIM_GUARD_PROBE_FUNCTION = "persist_auto_matches_v1";
+
 /**
  * A UUID that is guaranteed not to exist in auth.users, so on a 012 schema
  * the probe exercises only function resolution (raising the RPC's own
@@ -125,4 +128,66 @@ export async function detectReconciliationSchemaCapability(
   // The probe executed successfully — the function exists.
   void data;
   return { version: "canonical-012" };
+}
+
+export type ReconciliationClaimGuardCapability =
+  | { version: "pre-013" }
+  | { version: "canonical-013" };
+
+/**
+ * Detect whether migration 013's claim-hardening surface (exclusive-claim
+ * index + atomic persist RPC + controlled correction RPC) is present.
+ *
+ * Same deterministic contract as the 012 probe: exactly one condition may
+ * produce pre-013 — the dedicated probe RPC returning PGRST202 naming
+ * `persist_auto_matches_v1` (PostgREST's deterministic "function absent"
+ * signal). Every other defined error proves the function exists (canonical-
+ * 013), and transport/malformed failures throw. No cache, no silent
+ * downgrade.
+ */
+export async function detectReconciliationClaimGuardCapability(
+  db: SupabaseClient | null,
+): Promise<ReconciliationClaimGuardCapability> {
+  if (!db) {
+    return { version: "pre-013" };
+  }
+
+  let error: ProbeError | null;
+  try {
+    ({ error } = await db.rpc(CLAIM_GUARD_PROBE_FUNCTION, {
+      p_user_id: CAPABILITY_PROBE_USER_ID,
+      p_statement_id: CAPABILITY_PROBE_USER_ID,
+      p_client_entity_id: CAPABILITY_PROBE_USER_ID,
+      p_matches: [],
+    }));
+  } catch (err) {
+    throw new Error(
+      `Reconciliation claim-guard capability probe failed: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
+
+  if (error) {
+    const isKnownAbsence =
+      error.code === "PGRST202" &&
+      typeof error.message === "string" &&
+      error.message.includes(CLAIM_GUARD_PROBE_FUNCTION);
+
+    if (isKnownAbsence) {
+      return { version: "pre-013" };
+    }
+
+    if (error.code) {
+      // A defined error for a function that exists and executed (unknown
+      // probe ids, role checks...) — the 013 surface is present.
+      return { version: "canonical-013" };
+    }
+
+    throw new Error(
+      `Reconciliation claim-guard capability probe failed: ${error.message ?? "unknown error"}`,
+    );
+  }
+
+  return { version: "canonical-013" };
 }

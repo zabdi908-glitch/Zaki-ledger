@@ -1,6 +1,7 @@
 import type {
   BankTransaction,
   FlaggedLevel,
+  MatchedBy,
   MatchResult,
   ProposedMatch,
   QbTransaction,
@@ -43,6 +44,66 @@ export const MERCHANT_MEDIUM_SCORE = 10;
  * 95%+ auto-match, 70-95% review, below 70% manual review. */
 export const GREEN_MIN_SCORE = 95;
 export const YELLOW_MIN_SCORE = 70;
+
+/**
+ * Deterministic supersession rule (defect D2). An unapproved auto suggestion
+ * is superseded only when a later auto candidate for the same QB row scores
+ * at least SUPERSEDE_MIN_NEW_SCORE and beats the holder by at least
+ * SUPERSEDE_MIN_DELTA points. Pure constants — no model judgment anywhere in
+ * the transition. The SQL in migration 013 (persist_auto_matches_v1) mirrors
+ * these numbers exactly; keep them in lock-step (see
+ * tests/reconciliation-supersession-rule.test.ts).
+ */
+export const SUPERSEDE_MIN_NEW_SCORE = GREEN_MIN_SCORE;
+export const SUPERSEDE_MIN_DELTA = 20;
+
+/** Confidence (0-1, possibly null) to integer score points, rounded — the
+ * same expression the SQL side uses (round(confidence * 100)). */
+export function supersedeScoreFor(confidence: number | null): number {
+  return confidence === null || confidence === undefined
+    ? 0
+    : Math.round(confidence * 100);
+}
+
+/** One live match row as far as the claim rules are concerned. */
+export interface ClaimRowView {
+  matchedBy: MatchedBy;
+  approvedAt: string | null;
+  confidence: number | null;
+}
+
+/**
+ * Does a live match row reserve its QB row against new automatic claims?
+ *   - approved rows: always (invariant B — accountant decision);
+ *   - manual rows: always (a human decision outranks the engine);
+ *   - auto rows: only when green (score >= 95). Sub-green unapproved auto
+ *     suggestions stay re-scorable so weak evidence can never permanently
+ *     block materially stronger evidence (D2).
+ */
+export function reservesQbClaim(row: ClaimRowView): boolean {
+  if (row.approvedAt !== null) return true;
+  if (row.matchedBy === "manual") return true;
+  return supersedeScoreFor(row.confidence) >= GREEN_MIN_SCORE;
+}
+
+/**
+ * May a new auto candidate (score `newScore`) supersede an existing live
+ * unapproved auto suggestion? Deterministic: old must be an unapproved auto
+ * row, the new score must be auto-approve-grade, and the improvement must be
+ * at least SUPERSEDE_MIN_DELTA points. Equal candidates never supersede —
+ * the first claim wins.
+ */
+export function shouldSupersedeAutoMatch(
+  old: ClaimRowView,
+  newScore: number,
+): boolean {
+  if (old.matchedBy !== "auto" || old.approvedAt !== null) return false;
+  const oldScore = supersedeScoreFor(old.confidence);
+  return (
+    newScore >= SUPERSEDE_MIN_NEW_SCORE &&
+    newScore - oldScore >= SUPERSEDE_MIN_DELTA
+  );
+}
 
 function normalizeMerchantTokens(s: string): string[] {
   return s

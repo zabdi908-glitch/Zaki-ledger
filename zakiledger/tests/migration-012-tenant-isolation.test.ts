@@ -262,7 +262,10 @@ run("Two-tenant isolation (real local Auth + PostgREST)", () => {
         flagged_level: "green",
       });
       expect(error).not.toBeNull();
-      expect(error!.message).toMatch(/same client|23514/i);
+      // Either guard may fire first (013's book-alignment trigger rejects a
+      // cross-book endpoint before the 012 same-client trigger runs) — both
+      // are fail-closed rejections of the same cross-tenant attack.
+      expect(error!.message).toMatch(/same client|ledger book|23514/i);
     });
   });
 

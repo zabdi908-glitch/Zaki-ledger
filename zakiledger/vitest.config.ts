@@ -10,7 +10,19 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["tests/**/*.test.ts"],
-    exclude: ["node_modules", ".claude/**"],
+    // Local-DB suites are deliberately excluded from the unit command. They
+    // run under vitest.local.config.ts with fixed localhost credentials.
+    exclude: [
+      "node_modules",
+      ".claude/**",
+      "tests/migration-012-contract.test.ts",
+      "tests/migration-012-tenant-isolation.test.ts",
+      "tests/migration-013-contract.test.ts",
+      "tests/reconciliation-approval-control.test.ts",
+      "tests/reconciliation-defect-regression.test.ts",
+      "tests/reconciliation-manual-override-attacks.test.ts",
+      "tests/reconciliation-schema-compat-staging.test.ts",
+    ],
     // Route-level tests share a process-wide in-memory store, so each file gets
     // its own worker and a clean module registry. Without this, one file's
     // approved documents leak into another's duplicate checks.

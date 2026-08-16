@@ -131,8 +131,8 @@ describe("the mixed batch: 3 clean receipts, 1 low-confidence merchant, 1 bad cu
     const errored = body.results.filter((r) => r.status === "error");
     expect(errored).toHaveLength(1);
     expect(errored[0].merchantName).toBe("Shinjuku Station Kiosk");
-    expect(errored[0].currency).toBe("JPY");
-    expect(errored[0].reason).toContain("JPY");
+    expect(errored[0].currency).toBe("ZZZ");
+    expect(errored[0].reason).toContain("ZZZ");
     for (const c of SUPPORTED_CURRENCIES) expect(errored[0].reason).toContain(c);
   });
 

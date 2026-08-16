@@ -1,33 +1,37 @@
 # Reconciliation Matching Invariants
 
-Adopted 2026-08-14 as the correctness contract for the bank->QB auto-matching
-pipeline. Each invariant is either already enforced, or enforced by the
-hardening change described under "Mechanism".
+Adopted 2026-08-14 and amended 2026-08-16. This is the canonical correctness
+contract for reconciliation matching and approval. The mechanisms below
+describe the current migration-013 and application-store semantics.
 
-| # | Invariant | Mechanism |
-|---|-----------|-----------|
-| A | **One-to-one.** A QB transaction may belong to at most one live reconciliation match at a time, across statements. | Auto-matching excludes QB ids that already appear in any live `reconciliation_matches` row for the user. `rejectMatch` deletes the row, which frees the QB row again. |
-| B | **Approved-match immunity.** A QB row used by an approved match is never eligible for a new automatic match. Approved matches are immutable (`rejectMatch` refuses them), so exclusion follows from A. | Same exclusion as A — approved rows are live rows. |
-| C | **Strongest evidence wins.** A weak speculative match must never consume a QB row that has a materially stronger candidate elsewhere. | Candidates are claimed in descending score order (global sort, then greedy claim). Deliberately NOT maximum-weight bipartite matching: max-weight can sacrifice a 100-point pair to unlock two weaker pairs, which is the opposite of accounting safety. Fewer, stronger matches beat more, weaker matches. |
-| D | **Order independence.** Same candidate graph, same assignment, regardless of bank input order. | Full deterministic sort key: `score desc, bankId asc, qbId asc`. Ties no longer resolve by input position. |
-| E | **Minimum evidence floor.** A candidate with no amount signal and no merchant signal (date proximity only) is not evidence of an accounting match and is never proposed/persisted. | `matchTransactions` drops candidates whose reasons contain neither `amount` nor a `merchant*` reason. |
-| F | **Amount safety.** Gross amount/sign mismatch earns no amount credit (existing 1% / £0.01 tolerance, unchanged), and can never reach green without a human. | Unchanged scoring; verified by regression tests (Tesco, Software, sign-mismatch cases). |
-| G | **Scope.** Only QB rows relevant to the user, canonical client entity, and canonical ledger book participate in auto-matching, inside the statement's ±5-day padded window. | Canonical-012 stores: `listQbTransactionsForPeriod` gains optional client/ledger-book filters; `computeAndPersistMatches` passes the resolved tenant context. Manual override intentionally bypasses scope so a human can fix anything. Pre-012 stores keep legacy behavior. |
-| H | **Explanation truthfulness.** UI copy and factor breakdowns must reflect the actual scoring factors and partial scores. | `plainEnglishReason` renders full factor phrases (`merchant partially matches`, `date is close (pending clearance)`); `factorBreakdown` credits partial weights (10 for partial merchant, 15 for pending date) instead of max weights. |
+| # | Invariant | Implemented mechanism |
+|---|-----------|-----------------------|
+| A | **Exclusive automatic 1:1 claim.** A QB transaction may belong to at most one **live exclusive automatic 1:1 claim** at a time. This restriction applies only to that automatic claim class. It does not prohibit explicit manual many:1, 1:many, many:1, partial-settlement, allocation, fee, refund, combined-settlement, or richer canonical relationships. | Migration 013 creates the partial unique index `uk_matches_auto_live_qb` on `reconciliation_matches(qb_transaction_id)` for rows satisfying `matched_by = 'auto' AND qb_transaction_id IS NOT NULL AND superseded_at IS NULL`. Automatic rows are persisted through `persist_auto_matches_v1`; manual rows are outside the index predicate. |
+| B | **Approved relationship immunity.** An approved/accountant-confirmed relationship may not be automatically stolen, superseded, deleted, repointed, or rewritten. A correction requires an explicit, controlled, audited transition. | `reconciliation_match_guard_v1` makes approved rows immutable to raw DML. Automatic persistence blocks an approved holder. `unapprove_reconciliation_matches_v1` is the controlled service correction path and writes `match_unapproved` audit evidence atomically before the relationship can later be changed. |
+| C | **Strongest evidence within a candidate graph.** Within one candidate graph/run, stronger evidence is processed before weaker evidence using deterministic ordering. This local ordering does not, by itself, promise temporal or global strongest-evidence behavior; invariant I defines the supported later-run supersession rule. | `matchTransactions` builds the eligible graph, sorts candidates by `score desc, bankId asc, qbId asc`, then greedily claims endpoints in that order. |
+| D | **Order independence.** The same candidate graph produces the same assignment regardless of input order. | The complete tie-break key is `score desc, bankId asc, qbId asc`; input position is not a tie-breaker. |
+| E | **Minimum evidence floor.** Date proximity alone is insufficient. A pair needs an amount signal or merchant signal to enter the matching candidate set. This floor decides candidate eligibility; it does not grant autonomous approval permission. | `matchTransactions` excludes pairs whose scoring reasons contain neither `amount` nor a `merchant*` reason. Approval remains a separate controlled transition under invariant L. |
+| F | **Amount/sign safety.** Gross amount or sign mismatch receives no amount credit. A weak pair may remain an honestly labelled review suggestion, but it may not be represented as exact. Currency semantics must remain truthful. | `scorePair` awards amount credit only within the existing tolerance and keeps partial evidence partial. Persisted reason/confidence and the insights representation do not invent exact-amount or same-currency evidence. |
+| G | **Automatic matching scope.** Automatic candidates are limited to the authorized tenant/user, canonical client, canonical ledger book, and relevant automatic date window. Manual override may widen heuristic/date search scope, but it may never bypass tenant ownership, client ownership, ledger-book ownership, authorization, or DB integrity constraints. | On canonical schema 012+, `computeAndPersistMatches` resolves the tenant context and passes client/book filters to `listQbTransactionsForPeriod`; automatic matching uses the statement period padded by ±5 days. `createManualMatch` removes the date window only, while retaining the same tenant/client/book filters. Migration-012 ownership constraints/RLS and migration-013 book alignment fail closed at persistence. |
+| H | **Explanation truthfulness.** Persisted confidence, scoring factors, API representation, and UI explanation must agree. Partial signals remain partial. | `matchReason`, `plainEnglishReason`, and `factorBreakdown` use the actual scoring reasons and partial weights (including partial merchant and pending-clearance date signals) rather than upgrading them to full evidence. |
+| I | **Temporal stronger-evidence supersession.** A weak unresolved automatic suggestion must not permanently reserve a QB row against materially stronger later evidence. The current deterministic rule requires incoming score ≥ 95, improvement ≥ 20 points, an existing live automatic holder, and an unapproved holder. Approved and manual relationships are never auto-superseded. Supersession preserves history and creates audit evidence. | `persist_auto_matches_v1` locks the current live automatic holder, applies the ≥95/≥20 rule, stamps `superseded_at`, `superseded_by_match_id`, reason, and operation id through a one-shot transition capability, and appends `match_superseded` audit evidence in the same transaction. Application candidate filtering mirrors the same thresholds. |
+| J | **DB-enforced exclusive auto claim.** Exclusive automatic uniqueness is enforced by the database, not only by application pre-read filtering. Concurrent writers produce one live winner. | The authoritative partial-index predicate is `matched_by = 'auto' AND qb_transaction_id IS NOT NULL AND superseded_at IS NULL`. `persist_auto_matches_v1` performs the atomic persistence/claim resolution; `uk_matches_auto_live_qb` is the final concurrency boundary. |
+| K | **Ledger-book alignment.** Both reconciliation endpoints must belong to the same ledger book wherever book identity is defined. Same-client, cross-book relationships fail closed, including manual overrides. | `match_book_alignment_v1` checks the bank statement's `ledger_book_id` against the QB transaction's `ledger_book_id` on match insert/repoint. The approval core independently rechecks non-null, same-book endpoint integrity before approval. |
+| L | **Controlled audited approval.** An unresolved suggestion becomes approved/accountant-confirmed only through a controlled authorized DB transition. Raw authenticated table `UPDATE` cannot approve. Approval and audit are atomic; actor identity, transition state, operation identity, and relationship evidence are preserved. A retry does not create duplicate approval audit evidence. | `approve_reconciliation_matches_v1` derives the authenticated actor from `auth.uid()`; `approve_reconciliation_matches_service_v1` is service-role-only. Both call the private approval core, which validates ownership/client/book/state, consumes a one-shot capability, changes approval state, and inserts `match_approved` evidence in one transaction. Already-approved rows are skipped idempotently. The guard rejects raw approval-field changes. |
 
 ## Non-goals
 
-- Maximizing match count. Fewer matches with honest review flags is the goal.
-- Re-scoring bank rows that already carry a live match (frozen-match upgrade is
-  a separate, explicitly scoped task; the floor rule prevents junk matches from
-  ever freezing in the first place).
-- Retuning similarity thresholds or score weights (no arbitrary threshold
-  changes without production evidence).
-- Touching migrations 010/011/012, production data, or tenant-isolation
-  triggers.
+- Maximizing match count. Fewer matches with honest review flags are preferable.
+- General automatic rewriting of live matches. Only invariant I's narrow,
+  deterministic unresolved-auto supersession rule is supported.
+- Treating the automatic 1:1 storage model as the complete accounting
+  relationship model. Explicit richer canonical relationships remain valid.
+- Retuning similarity thresholds or score weights without production evidence.
+- Changing migrations 010, 011, or 012, or repairing production data in this
+  hardening task.
 
-## Known production consequences (read-only classification, no repair here)
+## Known production consequences
 
-Rows persisted before this change may include: QB reuse across statements, and
-date-only junk matches (e.g. `4FB-CANONICAL-TEST` rows). Those are data-repair
-candidates classified in the production impact scan — not touched by this work.
+Rows persisted before these controls may contain duplicate automatic QB claims
+or date-only suggestions. They remain production-impact classification and
+reviewed-repair candidates; this contract update performs no production repair.

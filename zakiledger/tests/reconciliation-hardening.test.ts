@@ -226,6 +226,10 @@ describe("R12: explanation truthfulness", () => {
       approvedBy: null,
       approvedAt: null,
       auditMemo: null,
+      supersededAt: null,
+      supersededByMatchId: null,
+      supersedeReason: null,
+      supersedeOperationId: null,
     };
     const text = plainEnglishReason(match);
     expect(text.toLowerCase()).not.toContain("merchant all match");
@@ -246,6 +250,10 @@ describe("R12: explanation truthfulness", () => {
       approvedBy: null,
       approvedAt: null,
       auditMemo: null,
+      supersededAt: null,
+      supersededByMatchId: null,
+      supersedeReason: null,
+      supersedeOperationId: null,
     };
     const factors = factorBreakdown(match);
     const total = factors.reduce((s, f) => s + f.score, 0);
@@ -268,6 +276,10 @@ describe("R12: explanation truthfulness", () => {
       approvedBy: null,
       approvedAt: null,
       auditMemo: null,
+      supersededAt: null,
+      supersededByMatchId: null,
+      supersedeReason: null,
+      supersedeOperationId: null,
     };
     const text = plainEnglishReason(match);
     expect(text.toLowerCase()).toContain("pending");
