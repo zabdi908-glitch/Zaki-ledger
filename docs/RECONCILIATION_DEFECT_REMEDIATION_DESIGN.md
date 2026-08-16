@@ -311,9 +311,9 @@ Trigger `reconciliation_match_approved_guard` (function
   evidence is not deletable). Unapproved live rows remain deletable
   (`rejectMatch`).
 - **UPDATE** of a superseded row → 42806 raise (supersession is final).
-- **UPDATE** that changes any `superseded_*` column → allowed only when the
-  session GUC `zaki.reconciliation_supersede = 'on'` (set exclusively by the
-  013 RPCs; raw PostgREST DML can never set it).
+- **UPDATE** that changes any `superseded_*` column → allowed only when a
+  controlled 013 RPC has minted the matching one-shot transaction capability;
+  raw PostgREST DML cannot mint one.
 - **UPDATE** of an approved row → allowed only when
   `zaki.reconciliation_correction = 'on'` (set exclusively by the unapprove
   RPC), **and** the only changed columns are `approved_by`/`approved_at`,
@@ -330,8 +330,8 @@ absolute irreversibility. The controlled path is
 1. caller is `service_role` (auth guard like the 008 RPCs);
 2. per id: lock the row, verify `user_id = p_user_id` (tenant ownership) and
    the row is live;
-3. set the correction GUC, clear approval, write
-   `reconciliation_audit_log` `action='match_unapproved'`, reset GUC;
+3. mint a one-shot correction capability, clear approval, and write
+   `reconciliation_audit_log` `action='match_unapproved'` atomically;
 4. idempotent: already-unapproved rows are reported as skipped.
 
 After unapproval the row is an ordinary live row again — it can be re-matched
@@ -406,3 +406,36 @@ every boundary at write time.
 
 Migration hashes for 010/011/012 re-verified before any change:
 `ad609305…`, `84138bb4…`, `a7e25fa3…` — all match the authoritative values.
+
+---
+
+## 9. Atomic manual/automatic correction (invariant M)
+
+Artifact review found that the original canonical-013 application path still
+performed manual upsert, automatic-claim sweep, and manual audit insertion as
+three PostgREST transactions. Its automatic holder scan also locked only rows
+that already existed, so an empty endpoint had no shared serialization object.
+A stale automatic decision could therefore insert after a completed manual
+transition.
+
+The corrected migration uses the stable endpoint rows as the lock objects.
+All controlled reconciliation transitions acquire locks in this order:
+
+1. distinct bank transaction rows, UUID ascending;
+2. distinct QB transaction rows, UUID ascending;
+3. relationship rows required by the transition.
+
+`persist_auto_matches_v1` locks the complete batch endpoint set before any
+manual/automatic relationship read. `create_manual_match_v1` is the single
+service-only manual operation: it validates actor, statement, bank and QB
+ownership plus client/book alignment; locks and revalidates the endpoints;
+fails on protected approved automatic state; supersedes eligible unapproved
+automatic state; writes the manual relationship; and appends manual and
+supersession audit evidence in one transaction. The approval core uses the
+same endpoint locks and refuses to protect an automatic row if a live manual
+relationship already exists for that QB endpoint. It does not repair history.
+
+The partial `uk_matches_auto_live_qb` index is unchanged and remains an
+additional auto-vs-auto guarantee. No global `UNIQUE(qb_transaction_id)` is
+introduced, so manual many:1 and canonical allocation relationships remain
+valid.

@@ -1035,6 +1035,31 @@ export async function createManualMatch(
     return rest;
   }
 
+  const claimGuard = await detectReconciliationClaimGuardCapability(db);
+  if (claimGuard.version === "canonical-013" && tenantCtx) {
+    // Invariant M: the database owns the entire financial transition. The
+    // RPC revalidates actor/ownership/client/book scope, acquires the same
+    // deterministic endpoint locks as automatic persistence, resolves any
+    // eligible automatic claim, writes the manual relationship and appends
+    // its audit evidence in one transaction.
+    const { data, error } = await db.rpc("create_manual_match_v1", {
+      p_user_id: userId,
+      p_statement_id: statementId,
+      p_bank_transaction_id: bankTransactionId,
+      p_qb_transaction_id: qbTransactionId,
+      p_confidence: confidence,
+      p_match_reason: matchReason,
+      p_flagged_level: flaggedLevel,
+      p_matched_at: nowIso,
+      p_audit_memo: manualMemo ?? null,
+      p_operation_id: crypto.randomUUID(),
+    });
+    if (error) throw new Error(`Failed to save manual match: ${error.message}`);
+    return mapMatchRow(data as Record<string, unknown>);
+  }
+
+  // Pre-013 compatibility path. Canonical-013 never performs these separate
+  // requests; its branch above is the only supported hardened write path.
   // D4: an approved row is immutable-by-default — refuse the override with a
   // controlled error instead of letting the DB guard fire opaquely.
   const { data: existingRow, error: existingError } = await db
@@ -1077,7 +1102,6 @@ export async function createManualMatch(
   // D2 sweep: the human decision supersedes live unapproved auto suggestions
   // holding the same QB row (audit-logged inside the RPC). Approved rows are
   // untouched by construction of the RPC.
-  const claimGuard = await detectReconciliationClaimGuardCapability(db);
   if (claimGuard.version === "canonical-013" && tenantCtx) {
     const { error: sweepError } = await db.rpc("supersede_auto_claims_v1", {
       p_user_id: userId,

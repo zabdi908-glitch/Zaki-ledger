@@ -1,14 +1,15 @@
 # Reconciliation Hardening — Defect Remediation Report
 
-Branch: `fix/reconciliation-candidate-hardening` (base `b67bc99`).
+Branch: `fix/reconciliation-candidate-hardening` (atomicity correction based on
+`c912e0b378eb781e78441f6980ccc48dfc381218`).
 Design doc: `docs/RECONCILIATION_DEFECT_REMEDIATION_DESIGN.md`.
 Date: 2026-08-16. Scope: DESIGN + IMPLEMENTATION + LOCAL VALIDATION only.
-No production access, no production repair, no edits to 010/011/012, no push,
-no merge.
+No production access, no production repair, no edits to 010/011/012, and no
+merge to `main`.
 
 ## 1. Verdict
 
-**READY FOR ADVERSARIAL STAGING RE-RUN**
+**ARTIFACT FROZEN — READY FOR PRODUCTION PREFLIGHT**
 
 ## 2. Root-cause confirmation
 
@@ -70,13 +71,18 @@ Key decisions:
   `reconciliation_match_guard_v1`) — approved rows immutable to raw
   UPDATE/DELETE/repoint; superseded rows immutable (maintenance deletes only
   for direct admin sessions via `session_user`); supersession columns
-  writable only under the controlled GUCs. Controlled correction path:
+  writable only under one-shot private transaction capabilities. Controlled correction path:
   `unapprove_reconciliation_matches_v1` (service_role-only, ownership-checked,
   audited, idempotent).
 - D5: same-ledger-book alignment trigger (`match_book_alignment`); no new
   column (the book is derivable from both endpoints; see §11).
 - D6: manual override searches the full tenant client/book pool (no date
   window); all tenant/client/book boundaries remain enforced at write time.
+- M: manual and automatic paths share deterministic endpoint-row locks
+  (bank UUID order, then QB UUID order). `create_manual_match_v1` owns manual
+  validation, eligible automatic resolution, manual persistence, and audit
+  evidence in one transaction. Automatic approval fails closed on an
+  inconsistent live manual relationship for the same QB endpoint.
 
 ## 4. Accounting-model compatibility
 
@@ -111,9 +117,11 @@ claim class:
   approve/reject/unapprove, row mapping)
 - `zakiledger/tests/reconciliation-supersession-rule.test.ts` (new, 15 pure
   rule tests)
-- `zakiledger/tests/reconciliation-defect-regression.test.ts` (new, 24
+- `zakiledger/tests/reconciliation-defect-regression.test.ts` (25
   DB-gated regression tests — the 13 mandatory tests)
-- `zakiledger/tests/migration-013-contract.test.ts` (new, 19 structural
+- `zakiledger/tests/reconciliation-manual-auto-atomicity.test.ts` (new, 11
+  DB-gated invariant-M concurrency/rollback tests)
+- `zakiledger/tests/migration-013-contract.test.ts` (26 structural
   contract tests)
 - `zakiledger/tests/reconciliation-hardening.test.ts`,
   `zakiledger/tests/reconciliation-insights.test.ts`,
@@ -132,24 +140,28 @@ claim class:
 ## 6. Migration 013
 
 - **Filename**: `supabase/migrations/013_reconciliation_claim_hardening.sql`
-- **SHA-256**: `f7128b1d23c5f3f7ea26a4545b4ca14bfc96699a3a9fc71ac147f89af1e886a4`
+- **SHA-256**: `42b12ebb4cee9057161c376b6873630407d7479b32e2407acec2446a02b2527a`
 - **Purpose**: D1 exclusive auto claim + D2 supersession evidence + D3 grant
-  lineage + D4 approved-match DB immutability + D5 book alignment.
+  lineage + D4 approved-match DB immutability + D5 book alignment + invariant
+  M manual/automatic serialization and manual audit atomicity.
 - **Grants/revokes**: REVOKE ALL FROM PUBLIC/anon/authenticated/service_role
   on `reconciliation_matches`, `reconciliation_reports`,
   `reconciliation_decisions`, `reconciliation_audit_log`,
   `user_merchant_preferences`; GRANT SELECT/INSERT/UPDATE/DELETE to
   service_role on the four reconciliation tables; same to authenticated on
   matches/reports/decisions; SELECT-only for authenticated on the audit log;
-  SELECT/INSERT/UPDATE on `user_merchant_preferences` to both. EXECUTE on
-  the three new RPCs: service_role only.
+  SELECT/INSERT/UPDATE on `user_merchant_preferences` to both. Manual,
+  automatic, sweep, correction, and service-approval RPCs are service-role
+  only; the authenticated approval RPC is authenticated-only.
 - **Constraints/triggers/functions**: `uk_matches_auto_live_qb` partial
   unique index; `fk_matches_superseded_by` (DEFERRABLE INITIALLY DEFERRED,
   ON DELETE SET NULL); guard trigger `reconciliation_match_approved_guard`;
   `match_book_alignment` trigger; functions `reconciliation_match_guard_v1`,
-  `match_book_alignment_v1`, `persist_auto_matches_v1`,
-  `supersede_auto_claims_v1`, `unapprove_reconciliation_matches_v1`; C1–C5
-  end-of-migration invariant assertions; `NOTIFY pgrst` reload.
+  `match_book_alignment_v1`, private bank/QB endpoint lock helpers,
+  `persist_auto_matches_v1`, `create_manual_match_v1`,
+  `supersede_auto_claims_v1`, `unapprove_reconciliation_matches_v1`, and the
+  controlled approval functions; C1–C5 end-of-migration invariant
+  assertions; `NOTIFY pgrst` reload.
 - **Rollback/recovery**: all DDL is additive and re-runnable (idempotent
   REVOKE/GRANT, IF NOT EXISTS, CREATE OR REPLACE). Recovery = restore the
   pre-013 snapshot; in place, the index can be dropped, grants re-revoked,
@@ -163,8 +175,9 @@ claim class:
 
 ## 7. Concurrency implementation
 
-`persist_auto_matches_v1` per item: `SELECT ... FOR UPDATE` scan of live
-manual/auto holders of the QB row → deterministic resolution (manual
+`persist_auto_matches_v1` locks all distinct bank rows and then all distinct
+QB rows in UUID order before reading relationships. Per item it scans live
+manual/auto holders of the locked QB row → deterministic resolution (manual
 holder → `blocked`; approved holder → `blocked`; green holder → `blocked`;
 sub-green unapproved holder → rule check → supersede (audited) or
 `blocked`; no holder → insert) → `INSERT ... ON CONFLICT
@@ -174,7 +187,9 @@ sub-green unapproved holder → rule check → supersede (audited) or
 unique index is the final backstop. Results are returned as
 `{inserted, superseded, conflicted, blocked, operation_id}`; the app maps
 conflicted/blocked proposals back to the unmatched pool. Retry is
-idempotent by construction.
+idempotent by construction. `create_manual_match_v1` uses the same lock order,
+so an empty relationship set is still serialized through the stable QB row.
+Its automatic resolution, manual write, and audit inserts commit once.
 
 ## 8. Temporal stronger-evidence implementation
 
@@ -184,20 +199,25 @@ scores them anyway and hands proposals to the RPC, which applies the
 deterministic rule (new ≥ 95, delta ≥ 20, old unapproved auto) under row
 locks. Superseded rows keep all original fields plus the four supersession
 columns; the audit log records `match_superseded` with old/new confidence,
-actor, and timestamp; nothing is deleted or rewritten. Manual decisions run
-`supersede_auto_claims_v1` (reason `manual_override`). The same constants
-exist in TS and SQL, kept in lock-step by the rule test suite.
+actor, and timestamp; nothing is deleted or rewritten. Canonical-013 manual
+decisions run entirely inside `create_manual_match_v1`; the older sweep RPC is
+retained as a service-only compatibility surface and now participates in the
+same QB serialization mechanism. The same constants exist in TS and SQL,
+kept in lock-step by the rule test suite.
 
 ## 9. Approved-match DB protection
 
 Guard trigger (BEFORE UPDATE OR DELETE): approved rows — no DELETE, no
-UPDATE except the correction-GUC unapprove transition (approval columns
+UPDATE except the one-shot-capability unapprove transition (approval columns
 only, cleared to NULL); superseded rows — no UPDATE ever, no DELETE from
-application roles; supersession columns — GUC-gated. Controlled path:
+application roles; supersession columns — one-shot-capability-gated. Controlled path:
 `unapprove_reconciliation_matches_v1` (ownership-checked, audited,
 idempotent); the app's `unapproveMatches` uses it on canonical-013 schemas
 and the legacy path otherwise; `createManualMatch` refuses approved rows
-with a controlled error instead of hitting the trigger.
+with a controlled error instead of hitting the trigger. Before an automatic
+row is approved, the approval core holds the same endpoint lock and fails
+closed if a live manual relationship exists for that QB endpoint; it never
+repairs historical inconsistency automatically.
 
 ## 10. Privilege lineage
 
@@ -231,41 +251,48 @@ book-alignment trigger.
 - `tests/reconciliation-supersession-rule.test.ts` — 15 pure tests of the
   deterministic rule (floors, delta boundaries, equal candidates, fp-noise
   guard, constant lock-step).
-- `tests/reconciliation-defect-regression.test.ts` — 24 DB-gated tests: all
+- `tests/reconciliation-defect-regression.test.ts` — 25 DB-gated tests: all
   13 mandatory tests plus boundary cases (green-holder reservation,
   sub-green floor, manual sweep, superseded-row immutability, index-level
-  rejection, manual-override refusal).
-- `tests/migration-013-contract.test.ts` — 19 structural contract tests
-  (columns, index + exact predicate, triggers, RPC ACLs, 012 invariants
-  preserved).
+  rejection, manual-override refusal, stale AUTO/manual race).
+- `tests/reconciliation-manual-auto-atomicity.test.ts` — 11 DB-gated tests
+  covering both start orders (three repeats each), two AUTO plus one MANUAL
+  (three repeats), weak override, approved-auto protection, manual many:1,
+  three rollback boundaries, deterministic retry, and approval fail-closed.
+- `tests/migration-013-contract.test.ts` — 26 structural contract tests
+  (columns, partial index + exact predicate, no global QB unique index,
+  triggers, shared lock calls, RPC ACLs, and preserved 012 invariants).
 - Test-first evidence: rule suite 15/15 red; 013 contract 13/19 red;
   regression suite 17–20/24 red with the D1 race literally reproduced
   ("expected 2 to be 1") and D2 weak-blocking reproduced — all before
-  implementation.
+  the original implementation. For the atomicity correction, the new suite
+  was run before migration/store changes: 6/11 failed, including manual-first
+  non-serialization, approved-auto displacement, non-atomic audit failure,
+  missing retry audit, and unsafe automatic approval; the stale AUTO/manual
+  regression separately failed with one unexpected live AUTO row.
 
 ## 14. Local Supabase fresh-reset proof
 
 `supabase db reset` (migrations 001–013, base `postgres:17.6.1.147`, CLI
 2.114.0) with **zero manual grants or harness patches**. Post-reset grant
 inspection matches the 013 contract exactly (service_role full DML;
-authenticated ALL+RLS / audit SELECT-only; anon nothing). The DB-gated set
-(defect-regression 24 + 013-contract 19 + 012-contract 62 +
-tenant-isolation 23 = 128 tests) passes 128/128 on a fresh reset, and the
-regression suite passes 24/24 again on warm reruns.
+authenticated ALL+RLS / audit SELECT-only; anon nothing). The complete local
+DB matrix passes **182/182**, with 8 intentional schema-compatibility skips:
+defect regression 25, invariant-M atomicity 11, approval control 20, direct
+manual attacks 7, migration-012 contract 62, migration-013 contract 26,
+tenant isolation 23, and the 8 applicable schema-compatibility cases.
 
 ## 15. Regression results
 
-Full local suite: **610 passed, 16 skipped, 9 failed** — all 9 failures are
-pre-existing and unrelated to this work (proven by running them on the clean
-HEAD with the remediation changes stashed): `batch-results` (1),
-`bulk-approve` (6), `supabase-session-cookie-clear` (2, an artifact of the
-local config's `SUPABASE_URL` host — passes 2/2 under the default config).
-Reconciliation-relevant suites: hardening 24/24, matching 12/12, store 5/5,
-store-compat 17/17 (incl. the 5 freeze tests), insights 47/47, detectors
-30/30, nightly 13/13, tenant isolation 23/23, user isolation 6/6, migration
-008–013 contracts all green (8+4+10+6+62+19), capability 8/8, decisions 6/6,
-supersession-rule 15/15, defect-regression 24/24. Typecheck clean; Next.js
-build succeeds.
+Required command results: `npm run test:unit` **491 passed, 11 intentionally
+skipped**; `npm run test:local-db` **182 passed, 8 intentionally skipped**;
+`npm run typecheck` clean; `npm run build` succeeds. Reconciliation-relevant
+suites are green: hardening 24/24, matching 12/12, store 5/5, store-compat
+17/17, insights 47/47, detectors 30/30, nightly 11/11, tenant isolation
+23/23, user isolation 6/6, migration 008–013 contracts
+(8+4+10+6+62+26), capability 8/8, decision suites 6/6,
+supersession-rule 15/15, defect-regression 25/25, invariant-M atomicity
+11/11, approval control 20/20, and manual override attacks 7/7.
 
 ## 16. Known-answer result
 
@@ -277,11 +304,12 @@ determinism, and the adversarial matcher cases.
 
 ## 17. Concurrency result
 
-PASS — two genuinely concurrent workers (parallel `computeAndPersistMatches`
-calls, two statements, one shared QB row): exactly one live auto claim
-survives, the loser receives a clean unmatched result (no throw, no
-corruption), retry creates no duplicate, and a direct second live auto
-insert is rejected by the index (23505 / `uk_matches_auto_live_qb`).
+PASS — automatic-vs-automatic still produces exactly one live auto claim and
+the partial index rejects a direct duplicate. AUTO-first/MANUAL-second,
+MANUAL-first/AUTO-second, and two-AUTO-plus-one-MANUAL interleavings were each
+run three times using real local transactions and deterministic gates. Every
+case converged to the protected manual final state with zero live automatic
+claims; the manual-first cases proved AUTO waited behind the shared QB lock.
 
 ## 18. Tenant/client/book security
 
@@ -296,27 +324,23 @@ insert is rejected by the index (23505 / `uk_matches_auto_live_qb`).
 
 ## 19. Remaining risks
 
-1. Pre-existing failures outside the reconciliation scope (batch-results,
-   bulk-approve, cookie under local config) — flagged, untouched.
-2. The invoice-side tables (`invoices`, `corrections`, `confirmations`,
+1. The invoice-side tables (`invoices`, `corrections`, `confirmations`,
    `pending_documents`, `oauth_connections`) have the same privilege-lineage
    gap on the new base — recommend a follow-up migration mirroring 013's Z4.
-3. Raw authenticated self-approval of one's own match writes no audit row
-   (pre-existing ALL+RLS contract) — candidate for a future approval RPC.
-4. Green unapproved auto rows reserve their QB row by design; release is by
+2. Green unapproved auto rows reserve their QB row by design; release is by
    human reject/override only (documented, deterministic).
-5. Production apply of 013 requires the Z2 duplicate-live-auto-claim check
+3. Historical manual/automatic coexistence is not repaired automatically;
+   automatic approval fails closed until an operator performs a reviewed
+   correction.
+4. Production apply of 013 requires the Z2 duplicate-live-auto-claim check
    to pass; if historical duplicates exist the apply fails loudly and a
    reviewed dedup must precede it.
-6. `supabase/config.toml` remains an untracked local file (pre-existing;
+5. `supabase/config.toml` remains an untracked local file (pre-existing;
    not part of this change set).
 
 ## 20. Exact next gate
 
-Adversarial staging re-run against this branch (same battery as before:
-fresh reset, concurrency attack, temporal attack, permission attack,
-immutability attack, tenant isolation, 012 + 013 contracts, known-answer
-and two-phase re-runs). On a clean verdict, the next gate is production
-apply planning for 013 (hash-verified file, Z2 pre-check, freeze window),
-still requiring explicit operator authorization. No push and no merge of
-`main` has been performed.
+Production preflight planning for migration 013: verify the recorded SHA-256,
+run the Z2 historical duplicate/protected-state diagnostics, take the required
+backup, define the freeze/rollback window, and obtain explicit operator
+authorization. No hosted environment was accessed and `main` was not merged.

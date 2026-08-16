@@ -372,6 +372,142 @@ run("Reconciliation defect remediation regression (local Supabase)", () => {
       expect(live).toHaveLength(1);
     }, 60000);
 
+    it("01c: a stale AUTO decision cannot commit after a concurrent MANUAL transition wins", async () => {
+      const autoStatementId = await newStatement(a.id, "d1-manual-race-auto", [
+        parsedTxn("2026-07-16", "Manual Race Co", 77),
+      ]);
+      const manualStatementId = await newStatement(a.id, "d1-manual-race-manual", [
+        parsedTxn("2026-07-16", "Manual Race Co", 77),
+      ]);
+      createdStatementIds.push(autoStatementId, manualStatementId);
+      const qbId = await seedQbRow(
+        a.id,
+        a.client_entity_id,
+        a.ledger_book_id,
+        "2026-07-16",
+        77,
+        "Manual Race Co",
+      );
+      const banks = await q(
+        `SELECT statement_id, id
+         FROM public.bank_transactions
+         WHERE statement_id = ANY($1::uuid[])`,
+        [[autoStatementId, manualStatementId]],
+      );
+      const autoBankId = banks.find((row) => row.statement_id === autoStatementId)!.id as string;
+      const manualBankId = banks.find((row) => row.statement_id === manualStatementId)!.id as string;
+      const advisoryKey = 91301301;
+
+      // Test-only gate: pause the automatic transaction at its INSERT. With
+      // the defective implementation this point is after its unlocked
+      // "no manual holder" read, which makes the stale-decision interleaving
+      // deterministic instead of relying on scheduler luck.
+      await sql.query(`
+        DROP TRIGGER IF EXISTS reconciliation_test_auto_insert_gate
+          ON public.reconciliation_matches;
+        DROP FUNCTION IF EXISTS public.reconciliation_test_auto_insert_gate_v1();
+        DROP TABLE IF EXISTS public.reconciliation_test_race_gate;
+        CREATE TABLE public.reconciliation_test_race_gate (
+          qb_transaction_id uuid PRIMARY KEY,
+          advisory_key bigint NOT NULL
+        );
+        INSERT INTO public.reconciliation_test_race_gate
+          (qb_transaction_id, advisory_key)
+        VALUES ('${qbId}'::uuid, ${advisoryKey});
+        CREATE FUNCTION public.reconciliation_test_auto_insert_gate_v1()
+        RETURNS trigger
+        LANGUAGE plpgsql
+        SECURITY DEFINER
+        SET search_path = public, pg_temp
+        AS $gate$
+        DECLARE v_key bigint;
+        BEGIN
+          IF NEW.matched_by = 'auto' THEN
+            SELECT advisory_key INTO v_key
+            FROM public.reconciliation_test_race_gate
+            WHERE qb_transaction_id = NEW.qb_transaction_id;
+            IF v_key IS NOT NULL THEN
+              PERFORM pg_advisory_xact_lock(v_key);
+            END IF;
+          END IF;
+          RETURN NEW;
+        END;
+        $gate$;
+        CREATE TRIGGER reconciliation_test_auto_insert_gate
+          BEFORE INSERT ON public.reconciliation_matches
+          FOR EACH ROW EXECUTE FUNCTION public.reconciliation_test_auto_insert_gate_v1();
+      `);
+
+      await sql.query(`SELECT pg_advisory_lock($1)`, [advisoryKey]);
+      let autoRequest: PromiseLike<{ data: unknown; error: { message: string } | null }> | undefined;
+      try {
+        autoRequest = Promise.resolve(svc.rpc("persist_auto_matches_v1", {
+          p_user_id: a.id,
+          p_statement_id: autoStatementId,
+          p_client_entity_id: a.client_entity_id,
+          p_matches: [
+            {
+              id: crypto.randomUUID(),
+              bank_transaction_id: autoBankId,
+              qb_transaction_id: qbId,
+              confidence: 1,
+              match_reason: "forced manual/auto race",
+              flagged_level: "green",
+              matched_at: new Date().toISOString(),
+              audit_memo: null,
+            },
+          ],
+        }));
+
+        let blockedAtInsert = false;
+        for (let attempt = 0; attempt < 200; attempt += 1) {
+          const waiting = await q(
+            `SELECT 1 FROM pg_locks
+             WHERE locktype = 'advisory' AND granted = false
+             LIMIT 1`,
+          );
+          if (waiting.length > 0) {
+            blockedAtInsert = true;
+            break;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        expect(blockedAtInsert, "AUTO did not reach the gated insert").toBe(true);
+
+        const manualRequest = createManualMatch(
+          a.id,
+          manualStatementId,
+          manualBankId,
+          qbId,
+        );
+        // Under invariant M the manual RPC waits behind AUTO's QB-endpoint
+        // lock. On the defective implementation it completes immediately,
+        // leaving AUTO's earlier decision stale. Either way, release the
+        // test-only insert gate before awaiting it so the corrected locking
+        // order cannot deadlock the harness.
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        await sql.query(`SELECT pg_advisory_unlock($1)`, [advisoryKey]);
+        const manual = await manualRequest;
+        expect(manual.matchedBy).toBe("manual");
+      } finally {
+        await sql.query(`SELECT pg_advisory_unlock($1)`, [advisoryKey]);
+      }
+
+      const autoResult = await autoRequest!;
+      expect(autoResult.error).toBeNull();
+
+      const live = await liveMatchesForQb(qbId);
+      expect(live.filter((row) => row.matched_by === "manual")).toHaveLength(1);
+      expect(live.filter((row) => row.matched_by === "auto")).toHaveLength(0);
+
+      await sql.query(`
+        DROP TRIGGER IF EXISTS reconciliation_test_auto_insert_gate
+          ON public.reconciliation_matches;
+        DROP FUNCTION IF EXISTS public.reconciliation_test_auto_insert_gate_v1();
+        DROP TABLE IF EXISTS public.reconciliation_test_race_gate;
+      `);
+    }, 60000);
+
     it("13: explicit manual many:1 (two bank rows -> one QB row) is not blocked", async () => {
       const stmt1 = await newStatement(a.id, "d1-many1a", [
         parsedTxn("2026-07-17", "Split Co", 300),
@@ -729,17 +865,17 @@ run("Reconciliation defect remediation regression (local Supabase)", () => {
         `SELECT bt.id FROM public.bank_transactions bt WHERE bt.statement_id = $1`,
         [stmtId],
       );
-      const { error } = await svc.from("reconciliation_matches").insert({
-        id: crypto.randomUUID(),
-        user_id: a.id,
-        statement_id: stmtId,
-        bank_transaction_id: bankRows.rows[0].id as string,
-        qb_transaction_id: qbInBookB,
-        confidence: 1.0,
-        flagged_level: "green",
-        matched_by: "manual",
-        matched_at: new Date().toISOString(),
-        client_entity_id: a.client_entity_id,
+      const { error } = await svc.rpc("create_manual_match_v1", {
+        p_user_id: a.id,
+        p_statement_id: stmtId,
+        p_bank_transaction_id: bankRows.rows[0].id as string,
+        p_qb_transaction_id: qbInBookB,
+        p_confidence: 1.0,
+        p_match_reason: "cross-book attack",
+        p_flagged_level: "green",
+        p_matched_at: new Date().toISOString(),
+        p_audit_memo: null,
+        p_operation_id: crypto.randomUUID(),
       });
       expect(error).not.toBeNull();
       expect(error!.message).toMatch(/ledger book|23514/i);

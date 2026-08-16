@@ -365,15 +365,15 @@ run("Two-tenant isolation (real local Auth + PostgREST)", () => {
       expect(data).toHaveLength(1);
     });
 
-    it("A can create own match", async () => {
-      const { data, error } = await aClient.from("reconciliation_matches").insert({
+    it("A cannot bypass the controlled atomic manual path with raw table INSERT", async () => {
+      const { error } = await aClient.from("reconciliation_matches").insert({
         id: uuid(9601), user_id: a.id, statement_id: aStmtId,
         bank_transaction_id: aBtId, qb_transaction_id: aQtId,
         matched_by: "manual", client_entity_id: a.client_entity_id,
         flagged_level: "green",
-      }).select().single();
-      expect(error).toBeNull();
-      expect(data.id).toBe(uuid(9601));
+      });
+      expect(error).not.toBeNull();
+      expect(error!.message).toMatch(/controlled atomic path/i);
     });
 
     it("A self-context RPC returns A's own client/ledger", async () => {

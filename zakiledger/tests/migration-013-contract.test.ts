@@ -203,6 +203,7 @@ run("Migration 013 — reconciliation claim hardening contract", () => {
   describe("C4 — claim/correction/approval RPCs", () => {
     const RPC_NAMES = [
       "persist_auto_matches_v1",
+      "create_manual_match_v1",
       "supersede_auto_claims_v1",
       "unapprove_reconciliation_matches_v1",
       "approve_reconciliation_matches_v1",
@@ -253,6 +254,33 @@ run("Migration 013 — reconciliation claim hardening contract", () => {
       // Either the ACL denies (42501) or — under service_role — the guard
       // rejects the bogus ids; both prove the RPC is not an open door.
       expect(error).not.toBeNull();
+    }, 10000);
+
+    it("manual and automatic RPCs call the same private endpoint-lock helpers", async () => {
+      const rows = await q(
+        `SELECT p.proname, pg_get_functiondef(p.oid) AS def
+         FROM pg_proc p
+         JOIN pg_namespace n ON n.oid = p.pronamespace
+         WHERE n.nspname = 'public'
+           AND p.proname IN ('persist_auto_matches_v1', 'create_manual_match_v1')`,
+      );
+      expect(rows).toHaveLength(2);
+      for (const row of rows) {
+        expect(row.def).toMatch(/reconciliation_private\.lock_bank_endpoints_v1/i);
+        expect(row.def).toMatch(/reconciliation_private\.lock_qb_endpoints_v1/i);
+      }
+    }, 10000);
+
+    it("no global QB uniqueness was introduced", async () => {
+      const rows = await q(
+        `SELECT indexname, indexdef FROM pg_indexes
+         WHERE schemaname = 'public'
+           AND tablename = 'reconciliation_matches'
+           AND indexdef ILIKE '%UNIQUE%'
+           AND indexname <> 'uk_matches_auto_live_qb'
+           AND indexdef ~* '\\(qb_transaction_id\\)'`,
+      );
+      expect(rows).toHaveLength(0);
     }, 10000);
   });
 

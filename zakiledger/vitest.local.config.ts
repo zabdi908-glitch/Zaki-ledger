@@ -12,6 +12,7 @@ export default defineConfig({
       "tests/migration-013-contract.test.ts",
       "tests/reconciliation-approval-control.test.ts",
       "tests/reconciliation-defect-regression.test.ts",
+      "tests/reconciliation-manual-auto-atomicity.test.ts",
       "tests/reconciliation-manual-override-attacks.test.ts",
       "tests/reconciliation-schema-compat-staging.test.ts",
     ],
