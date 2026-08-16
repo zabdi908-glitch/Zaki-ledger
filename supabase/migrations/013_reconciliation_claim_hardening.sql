@@ -25,6 +25,8 @@
 --       the same locked bank/QB endpoint rows, in deterministic order. The
 --       manual financial transition and its audit evidence are one database
 --       transaction.
+--   Z1b Repair/transition evidence columns on the audit log are immutable to
+--       UPDATE for every role, matching the 012 evidence-immutability model.
 --
 -- Never modifies migrations 010/011/012. Additive only. One transaction.
 
@@ -45,6 +47,36 @@ ALTER TABLE public.reconciliation_audit_log
   ADD COLUMN IF NOT EXISTS previous_state jsonb,
   ADD COLUMN IF NOT EXISTS resulting_state jsonb,
   ADD COLUMN IF NOT EXISTS evidence jsonb;
+
+-- =========================================================================
+-- Z1b. Repair-evidence immutability for the four new audit columns
+-- =========================================================================
+-- 012's audit_log_evidence_immutable_v1 covers action, action_by, action_at
+-- and the confidence columns. The four columns added above hold repair and
+-- transition evidence and must enjoy the same protection: they are written
+-- only at INSERT time and can never be changed by any role afterwards
+-- (mirrors 012 Z9d — no role exception, same as the existing model). The
+-- historical-repair prep (supabase/repair-013-pre/13-repair-prep.sql) installs
+-- the identical trigger so the protection exists from prep time onward; this
+-- copy makes the protection part of the deployed 013 invariant surface.
+CREATE OR REPLACE FUNCTION public.audit_log_repair_evidence_immutable_v1()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+  RAISE EXCEPTION 'reconciliation repair audit evidence is immutable'
+    USING ERRCODE = '42806';
+END;
+$$;
+
+DROP TRIGGER IF EXISTS audit_log_repair_evidence_immutable
+  ON public.reconciliation_audit_log;
+CREATE TRIGGER audit_log_repair_evidence_immutable
+  BEFORE UPDATE OF operation_id, previous_state, resulting_state, evidence
+  ON public.reconciliation_audit_log
+  FOR EACH ROW EXECUTE FUNCTION public.audit_log_repair_evidence_immutable_v1();
 
 -- One-shot, transaction-bound capabilities used by the row guard.  Unlike a
 -- custom GUC these rows cannot be minted by an API caller: the schema and
@@ -1381,6 +1413,19 @@ BEGIN
   END IF;
 END;
 $c2$;
+
+-- C2b: repair-evidence immutability trigger attached (Z1b)
+DO $c2b$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.triggers
+    WHERE trigger_name = 'audit_log_repair_evidence_immutable'
+      AND event_object_table = 'reconciliation_audit_log'
+  ) THEN
+    RAISE EXCEPTION 'C2b FAIL: audit_log_repair_evidence_immutable missing';
+  END IF;
+END;
+$c2b$;
 
 -- C3: service_role holds the full store surface
 DO $c3$

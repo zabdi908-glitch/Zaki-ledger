@@ -1,0 +1,83 @@
+{
+  "package": {
+    "stage1_operation_id": "0a1a1a01-4a5e-4b1a-8c01-013000000001",
+    "stage2_operation_id": "0a1a1a01-4a5e-4b1a-8c01-013000000002",
+    "snapshot_provenance": {
+      "04-endpoints.json": {
+        "sha256": "e2c4923897de6227013055a3d9abb6f731a6a0a8cd3e8b7d353345c3f6517445"
+      },
+      "05-matches.json": {
+        "sha256": "c9389b8420db802e9e04e88ccd7a38720fde50252dd5ba8cbff590f13d84b6bc"
+      },
+      "06-audit.json": {
+        "sha256": "83e344e09ff04127f21301f6ed2b99d97bae85720b87f188901b533f053120f6"
+      },
+      "10-approvals.json": {
+        "sha256": "6b05157fc80b7ff1917c0bd56a3d7ee722db633280031a12c51e48d57b2305e8"
+      }
+    },
+    "accepted_classification": {
+      "endpoints": {
+        "R2": 14,
+        "R3": 87,
+        "R5": 2,
+        "R6": 4,
+        "R7": 0
+      },
+      "rows": {
+        "R2": [
+          14,
+          14
+        ],
+        "R3": [
+          180,
+          130
+        ],
+        "R5": [
+          1,
+          4
+        ],
+        "R6": [
+          8,
+          6
+        ]
+      },
+      "stage1_targets": 154,
+      "stage2_candidates": 98,
+      "stage2_guards": 91,
+      "stage1_guards": 101,
+      "total_matches": 573,
+      "total_approved": 409,
+      "total_manual": 0,
+      "dup_endpoints": 107,
+      "dup_endpoints_after_stage1": 91,
+      "live_unapproved_after_stage1": 10
+    }
+  },
+  "manifests": {
+    "duplicate-endpoints.csv": {
+      "sha256": "73aea8a2452d894264952c60bdb09421bd5140d6afd664ba4f0d86cc9d55a402",
+      "rows": 107
+    },
+    "stage1-unapproved-targets.csv": {
+      "sha256": "c182b4a64148ad697a9a4e7561f3ea38aa14f9193ca790beee9dfafa1c6b61fb",
+      "rows": 255
+    },
+    "stage2-approved-candidates.csv": {
+      "sha256": "0e8bccc1f683a6a3a59c7200586b7a102a9bfd00ddb5a17b6982afb912c66486",
+      "rows": 98
+    },
+    "r6-review.csv": {
+      "sha256": "5c1603aa30d3b546ffde12435d116b4dc5efbebee4dd0ab556a9900a1ec33ff0",
+      "rows": 4
+    },
+    "stage2-authorization-manifest-template.csv": {
+      "sha256": "93909c1996ff949fb50d95c16daa5f6598444c8fe5f5f2149aad5255448711a5",
+      "rows": 189
+    },
+    "stage2-test-authorization-manifest.csv": {
+      "sha256": "0ff013d452e4893d018fe9bea79b49a5ecc91a85f738812fd70528c1df273dd2",
+      "rows": 189
+    }
+  }
+}

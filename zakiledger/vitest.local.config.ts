@@ -15,6 +15,7 @@ export default defineConfig({
       "tests/reconciliation-manual-auto-atomicity.test.ts",
       "tests/reconciliation-manual-override-attacks.test.ts",
       "tests/reconciliation-schema-compat-staging.test.ts",
+      "tests/repair-audit-evidence-immutability.test.ts",
     ],
     exclude: ["node_modules", ".claude/**"],
     isolate: true,
