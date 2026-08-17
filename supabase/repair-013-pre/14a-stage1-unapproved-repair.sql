@@ -31,12 +31,20 @@
 --        repair window (see execution-window.md); this REHEARSAL file
 --        cannot run against production.
 --
--- Writer exclusion (P0a): ACCESS EXCLUSIVE table locks, taken in the
+-- Writer exclusion (P0c): ACCESS EXCLUSIVE table locks, taken in the
 --        controlled writers' natural order (statements -> bank -> qb ->
 --        client_entities -> matches -> audit), after the shared advisory
 --        lock. Details and the exclusion analysis: execution-window.md.
 --
--- Semantic idempotency (P0c): re-running after success proves every target
+-- Finite timeouts (P0a): SET LOCAL lock_timeout/statement_timeout BEFORE
+--        any blocking lock — a timeout rolls the transaction back
+--        (SQLSTATE 55P03/57014) and the runbook treats it as STOP.
+--
+-- Artifact-sha gate (P0b): the exact frozen artifact sha256 is supplied by
+--        the execution driver (PGOPTIONS GUC) and recorded verbatim into
+--        the immutable audit evidence.
+--
+-- Semantic idempotency (P0e): re-running after success proves every target
 --        already carries THIS operation id with correct reason/survivor and
 --        a byte-exact audit row (action, actor, action_at, previous_state,
 --        resulting_state, evidence), then exits as a verified no-op. Altered
@@ -49,10 +57,8 @@ BEGIN;
 SET LOCAL TIME ZONE 'UTC';  -- deterministic timestamptz rendering in the
                             -- exact audit-evidence comparisons below
 
--- Serialize repair attempts. Both stages share this key, so stage 1 and
--- stage 2 also serialize against each other.
-SELECT pg_advisory_xact_lock(0x5A414B49);  -- 'ZAKI'
-
+-- Environment identity validation FIRST — a wrong-database invocation must
+-- abort before taking (or waiting on) any lock.
 -- =============================================================================
 -- P0.0 Environment-mode identity gate (mechanical, not a warning)
 -- =============================================================================
@@ -70,7 +76,41 @@ END;
 $mode_gate$;
 
 -- ===========================================================================
--- P0a. Writer exclusion: database-side execution locks
+-- P0a. Finite execution timeouts (transaction-local; timeout -> rollback)
+-- ===========================================================================
+-- lock_timeout:      30s — no indefinite wait on any lock
+--                    (advisory, table, or row). SQLSTATE 55P03 on timeout.
+-- statement_timeout: 120s — bounds every single statement.
+--                    SQLSTATE 57014 on timeout.
+-- Both are reviewed values (execution-window.md §1.4), not arbitrary:
+-- against a frozen, verified-quiescent app lock acquisition is immediate
+-- (rehearsal-verified) and every repair statement is millisecond-scale.
+SET LOCAL lock_timeout = '30s';
+SET LOCAL statement_timeout = '120s';
+
+-- ===========================================================================
+-- P0b. Frozen-artifact sha gate (driver-supplied, evidence-bound)
+-- ===========================================================================
+-- The execution driver verifies the artifact SHA-256 against its freeze
+-- record and passes it via PGOPTIONS="-c zaki.repair_artifact_sha256=<sha>".
+-- The value is recorded verbatim into every repair audit row's evidence
+-- (the audit-evidence immutability triggers protect it from UPDATE/DELETE).
+DO $artifact_sha_gate$
+DECLARE
+  v_sha text := current_setting('zaki.repair_artifact_sha256', true);
+BEGIN
+  IF v_sha IS NULL OR v_sha !~ '^[0-9a-f]{64}$' THEN
+    RAISE EXCEPTION 'STOP: zaki.repair_artifact_sha256 is missing or malformed (got %) — the execution driver must verify the artifact sha256 against its freeze record and pass it via PGOPTIONS', COALESCE(v_sha, '<unset>');
+  END IF;
+END;
+$artifact_sha_gate$;
+
+-- Serialize repair attempts. Both stages share this key, so stage 1 and
+-- stage 2 also serialize against each other.
+SELECT pg_advisory_xact_lock(0x5A414B49);  -- 'ZAKI'
+
+-- ===========================================================================
+-- P0c. Writer exclusion: database-side execution locks
 -- ===========================================================================
 LOCK TABLE public.bank_statements IN ACCESS EXCLUSIVE MODE;
 LOCK TABLE public.bank_transactions IN ACCESS EXCLUSIVE MODE;
@@ -80,7 +120,7 @@ LOCK TABLE public.reconciliation_matches IN ACCESS EXCLUSIVE MODE;
 LOCK TABLE public.reconciliation_audit_log IN ACCESS EXCLUSIVE MODE;
 
 -- ===========================================================================
--- P0b. Manifest load (targets + survivor guards + committed-basis candidates)
+-- P0d. Manifest load (targets + survivor guards + committed-basis candidates)
 -- ===========================================================================
 CREATE TEMP TABLE zaki_manifest (
   match_id     uuid PRIMARY KEY,
@@ -635,7 +675,7 @@ BEGIN
 END $$;
 
 -- ===========================================================================
--- P0c. Stage dispatcher (semantic idempotency on THIS operation id)
+-- P0e. Stage dispatcher (semantic idempotency on THIS operation id)
 -- ===========================================================================
 -- A row superseded by this operation counts as DONE only if its audit row
 -- carries the byte-exact expected evidence (actor, action_at, previous_state,
@@ -713,7 +753,8 @@ BEGIN
        'stage1_manifest_sha256', 'c182b4a64148ad697a9a4e7561f3ea38aa14f9193ca790beee9dfafa1c6b61fb',
        'stage2_basis_sha256', '751d9b04ac3695da82821af311a20de7b45fd8bcfd7633f4cd4eb813793bf271',
        'environment_mode', 'REHEARSAL',
-       'artifact_identity', '6e36e7ad0b0b61385b2fffe604a0a8b2a0fbd8fc9f40a65dc9493b1dcfafbff1');
+       'artifact_identity', '6e36e7ad0b0b61385b2fffe604a0a8b2a0fbd8fc9f40a65dc9493b1dcfafbff1',
+       'artifact_sha256', current_setting('zaki.repair_artifact_sha256', true));
 
   -- Targets superseded by a different operation (foreign state).
   SELECT count(*) INTO v_other
@@ -737,7 +778,7 @@ BEGIN
 END $$;
 
 -- ===========================================================================
--- P0d. Exact drift preconditions (every manifest row vs live DB state)
+-- P0f. Exact drift preconditions (every manifest row vs live DB state)
 -- ===========================================================================
 DO $$
 DECLARE
@@ -979,7 +1020,8 @@ BEGIN
        'stage1_manifest_sha256', 'c182b4a64148ad697a9a4e7561f3ea38aa14f9193ca790beee9dfafa1c6b61fb',
        'stage2_basis_sha256', '751d9b04ac3695da82821af311a20de7b45fd8bcfd7633f4cd4eb813793bf271',
        'environment_mode', 'REHEARSAL',
-       'artifact_identity', '6e36e7ad0b0b61385b2fffe604a0a8b2a0fbd8fc9f40a65dc9493b1dcfafbff1')
+       'artifact_identity', '6e36e7ad0b0b61385b2fffe604a0a8b2a0fbd8fc9f40a65dc9493b1dcfafbff1',
+       'artifact_sha256', current_setting('zaki.repair_artifact_sha256', true))
   FROM zaki_manifest t
   JOIN public.reconciliation_matches m ON m.id = t.match_id
   WHERE t.role = 'target'
@@ -1107,7 +1149,8 @@ BEGIN
        'stage1_manifest_sha256', 'c182b4a64148ad697a9a4e7561f3ea38aa14f9193ca790beee9dfafa1c6b61fb',
        'stage2_basis_sha256', '751d9b04ac3695da82821af311a20de7b45fd8bcfd7633f4cd4eb813793bf271',
        'environment_mode', 'REHEARSAL',
-       'artifact_identity', '6e36e7ad0b0b61385b2fffe604a0a8b2a0fbd8fc9f40a65dc9493b1dcfafbff1'))
+       'artifact_identity', '6e36e7ad0b0b61385b2fffe604a0a8b2a0fbd8fc9f40a65dc9493b1dcfafbff1',
+       'artifact_sha256', current_setting('zaki.repair_artifact_sha256', true)))
   ) THEN
     RAISE EXCEPTION 'FAIL: a stage-1 repair audit row carries altered evidence (action/actor/action_at/previous_state/resulting_state/evidence mismatch)';
   END IF;

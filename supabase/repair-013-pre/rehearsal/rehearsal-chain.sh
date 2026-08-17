@@ -27,6 +27,16 @@ DB="${DB:-repair_drill}"
 ARTIFACT_DIR="$ROOT/artifacts"
 GEN_DIR="$ROOT/rehearsal/generated"
 LOG_DIR="${LOG_DIR:-/tmp/zaki-repair-rehearsal}"
+# Rehearsal dumps (explicit, never defaulted — blocker 8: no dated dump
+# defaults anywhere; restore-scratch.sh requires both paths and the chain
+# FAILS here if they are not supplied). Hashes are recorded in
+# rehearsal/EVIDENCE.md.
+SCHEMA_DUMP="${SCHEMA_DUMP:-}"
+DATA_DUMP="${DATA_DUMP:-}"
+[ -n "$SCHEMA_DUMP" ] && [ -n "$DATA_DUMP" ] \
+  || { echo "error: this chain requires explicit SCHEMA_DUMP and DATA_DUMP env vars (no defaults — fresh dumps only)" >&2; exit 2; }
+[ -f "$SCHEMA_DUMP" ] && [ -f "$DATA_DUMP" ] \
+  || { echo "error: dump file not found (SCHEMA_DUMP=$SCHEMA_DUMP DATA_DUMP=$DATA_DUMP)" >&2; exit 2; }
 
 # Rehearsal-only barrier at the entry point.
 [ "$(docker inspect --format '{{.Name}}' "$CONTAINER" 2>/dev/null || true)" = "/$CONTAINER" ] \
@@ -45,7 +55,8 @@ mkdir -p "$ARTIFACT_DIR" "$GEN_DIR" "$LOG_DIR"
 PSQL="docker exec -i $CONTAINER psql -v ON_ERROR_STOP=1 -U supabase_admin -d $DB"
 
 echo "== fresh scratch restore =="
-"$ROOT/rehearsal/restore-scratch.sh" >/dev/null
+"$ROOT/rehearsal/restore-scratch.sh" \
+  --schema-dump "$SCHEMA_DUMP" --data-dump "$DATA_DUMP" >/dev/null
 
 echo "== restore parity =="
 $PSQL < "$ROOT/rehearsal/parity-check.sql" | tee "$LOG_DIR/00-parity.log"
@@ -102,7 +113,14 @@ print(json.load(open(records[-1]))["artifact_file"])
 PY
 )"
 STAGE2_RECORD="$ARTIFACT_DIR/freeze-$(basename "$STAGE2_ARTIFACT" .sql).json"
-python3 "$BUILDER" verify --artifact "$STAGE2_RECORD"
+# Independent verification with full regeneration: expected stage-2 bytes
+# are rebuilt from the committed basis + authorization manifest + stage-1
+# proof in a temporary location and must be byte-identical to the frozen
+# artifact (blocker 3).
+python3 "$BUILDER" verify --artifact "$STAGE2_RECORD" \
+  --stage1-artifact "$STAGE1_ARTIFACT" \
+  --auth-manifest "$REHEARSAL_MANIFEST" \
+  --stage1-execution-proof "$STAGE1_PROOF"
 
 echo "== stage 2 apply (rehearsal authorization manifest) =="
 "$RUNNER" --stage 2 --artifact "$STAGE2_ARTIFACT" --freeze-record "$STAGE2_RECORD" \

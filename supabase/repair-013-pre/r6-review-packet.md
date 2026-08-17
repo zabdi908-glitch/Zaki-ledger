@@ -14,8 +14,22 @@ DO_NOT_REPAIR — after migration 013 the second side can be represented as a
 manual row (`create_manual_match_v1`) or a canonical relationship.
 
 Machine-readable twin of this packet: `manifests/r6-review.csv`.
-Decisions are recorded there and then carried into the signed authorization
-manifest (`authorization-manifest-schema.md` §4–§5).
+Decisions are recorded there and then carried into the signed stage-2
+authorization manifest — a **JSON** document
+(`manifests/stage2-authorization-manifest-template.json`; format in
+`authorization-manifest-schema.md` §3–§6). The executable tooling accepts
+ONLY this JSON format:
+
+```bash
+python3 bin/build_repair_package.py freeze --stage 2 \
+  --environment-mode PRODUCTION --auth-manifest <signed-manifest.json> \
+  --stage1-artifact <window-artifacts>/14a-*.sql \
+  --stage1-execution-proof <proof.json> \
+  --project-ref fqvekbzwghjurkcawpgg --out-dir <window-artifacts>
+```
+
+There is NO CSV authorization format — `--auth-manifest` takes a JSON file
+only, and the builder rejects CSV input.
 
 ---
 
@@ -112,6 +126,21 @@ retire the later one.
 - [ ] Endpoint 3 (43be2941) decided
 - [ ] Endpoint 4 (41adbcf4) decided
 
-Signed: `accountant_identity` / `confirmation_timestamp` recorded in
-`manifests/r6-review.csv` and carried into the signed stage-2 authorization
-manifest before `build_repair_package.py sql --auth-manifest <signed.csv>`.
+Signed: each decided endpoint becomes one entry in the JSON authorization
+manifest `decisions` array — `match_id` (the member chosen for RETIRE, or
+the pair members for DO_NOT_REPAIR), `decision` (`RETIRE` or
+`DO_NOT_REPAIR`), `accountant_identity`, `confirmation_timestamp` (after the
+recorded stage-1 execution), optional `note`. Example entry:
+
+```json
+{
+  "match_id": "2524f1b3-80b6-4862-905e-af9758544d37",
+  "decision": "RETIRE",
+  "accountant_identity": "<accountant>",
+  "confirmation_timestamp": "2026-08-17T12:00:00+00:00",
+  "note": "keep abcdfc04-deeb-46c5-9451-52ee3ad65b31"
+}
+```
+
+The builder (`build_repair_package.py`) validates every entry against the
+committed immutable basis before any artifact can be frozen.

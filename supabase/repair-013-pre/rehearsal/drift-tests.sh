@@ -11,8 +11,10 @@
 #   4. create unexpected duplicate endpoint
 #   5. change survivor
 #
-# Each case: fresh restore -> prep -> inject -> stage 1 (expect abort) ->
-# verify zero partial changes. Evidence tee'd to $LOG_DIR.
+# Each case: fresh restore -> prep -> inject -> capture FULL-STATE digest ->
+# stage 1 (expect abort) -> capture digest again -> digests must be equal
+# (blocker 6: full state preservation, not just repair row counts).
+# Evidence tee'd to $LOG_DIR.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -22,6 +24,16 @@ DB="${DB:-repair_drill}"
 ARTIFACT_DIR="$ROOT/artifacts/drift-tests"   # private to this test run
 LOG_DIR="${LOG_DIR:-/tmp/zaki-repair-rehearsal}"
 RESTORE="$ROOT/rehearsal/restore-scratch.sh"
+DIGEST="$ROOT/rehearsal/state-digest.sh"
+# No dated dump defaults (blocker 8): the driver must be pointed at the
+# explicit dump files to restore — omitted env vars FAIL, never silently
+# substitute an old snapshot.
+SCHEMA_DUMP="${SCHEMA_DUMP:-}"
+DATA_DUMP="${DATA_DUMP:-}"
+[ -n "$SCHEMA_DUMP" ] && [ -n "$DATA_DUMP" ] \
+  || { echo "error: this driver requires explicit SCHEMA_DUMP and DATA_DUMP env vars (no defaults — fresh dumps only)" >&2; exit 2; }
+[ -f "$SCHEMA_DUMP" ] && [ -f "$DATA_DUMP" ] \
+  || { echo "error: dump file not found (SCHEMA_DUMP=$SCHEMA_DUMP DATA_DUMP=$DATA_DUMP)" >&2; exit 2; }
 
 rm -rf "$ARTIFACT_DIR"
 mkdir -p "$ARTIFACT_DIR" "$LOG_DIR"
@@ -41,6 +53,10 @@ PY
 )"
 STAGE1_RECORD="$ARTIFACT_DIR/freeze-$(basename "$STAGE1_ARTIFACT" .sql).json"
 python3 "$BUILDER" verify --artifact "$STAGE1_RECORD"
+STAGE1_SHA="$(sha256sum "$STAGE1_ARTIFACT" | awk '{print $1}')"
+# The execution driver's artifact-sha GUC (recorded into the audit evidence
+# by the SQL; the gate aborts if missing/malformed).
+GUC="-czaki.repair_artifact_sha256=$STAGE1_SHA"
 
 # Fixed targets (from manifests/stage1-unapproved-targets.csv, first row):
 #   target 00d77a13-2a24-4fb9-a760-70761628a85c  (R3 unapproved)
@@ -63,7 +79,7 @@ run_case() {
   local name="$1"
   local inject="$2"
   echo "=== drift case: $name ==="
-  "$RESTORE" >/dev/null
+  "$RESTORE" --schema-dump "$SCHEMA_DUMP" --data-dump "$DATA_DUMP" >/dev/null
   $PSQL_STRICT < "$ROOT/13-repair-prep.sql" >/dev/null
   echo "injecting: $name"
   $PSQL_STRICT <<SQL >/dev/null
@@ -72,12 +88,17 @@ $inject
 COMMIT;
 SQL
 
+  # FULL-STATE digest AFTER injection, BEFORE the repair attempt.
+  local before after
+  before="$("$DIGEST")"
+
   # Stage 1 must abort. psql's exit status does NOT reflect SQL errors
   # without ON_ERROR_STOP, so the abort is detected from the diagnosis
   # output (every fail-closed precondition raises a STOP/FAIL exception)
-  # and proven by the zero-partial-change verification below.
+  # and proven by the full-state digest equality below.
   local out
-  out=$($PSQL < "$STAGE1_ARTIFACT" 2>&1) || true
+  out=$(docker exec -e "PGOPTIONS=$GUC" -i "$CONTAINER" psql -U supabase_admin -d "$DB" \
+    < "$STAGE1_ARTIFACT" 2>&1) || true
   echo "$out" | tee "$LOG_DIR/drift-$name.log"
   if echo "$out" | grep -q "STAGE 1: superseded 154 rows"; then
     echo "FAIL: stage 1 applied despite the injection ($name)"
@@ -88,17 +109,16 @@ SQL
     exit 1
   fi
 
-  # Zero partial changes: the repair must have written nothing.
-  local superseded repair_audits
-  superseded=$($PSQL_STRICT -tAc \
-    "SELECT count(*) FROM public.reconciliation_matches WHERE superseded_at IS NOT NULL AND supersede_operation_id = '0a1a1a01-4a5e-4b1a-8c01-013000000001'")
-  repair_audits=$($PSQL_STRICT -tAc \
-    "SELECT count(*) FROM public.reconciliation_audit_log WHERE action = 'match_repair_superseded'")
-  if [ "$superseded" != "0" ] || [ "$repair_audits" != "0" ]; then
-    echo "FAIL: partial changes detected after abort ($name): superseded=$superseded audit=$repair_audits"
+  # FULL-STATE preservation: the repair must have written nothing anywhere
+  # (all 11 tables digest-identical, including the injected state).
+  after="$("$DIGEST")"
+  if [ "$before" != "$after" ]; then
+    echo "FAIL: full-state digest changed after abort ($name)"
+    echo "before: $before"
+    echo "after:  $after"
     exit 1
   fi
-  echo "PASS: $name aborted with zero partial changes"
+  echo "PASS: $name aborted with zero partial changes (full-state digest identical)"
   echo
 }
 

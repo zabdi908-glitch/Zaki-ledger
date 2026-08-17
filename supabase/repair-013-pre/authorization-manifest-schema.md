@@ -142,8 +142,14 @@ stage-2 postconditions.
 ## 6. Production signing flow (post-stage-1 by construction)
 
 1. Stage 1 executes and its exact postconditions verify; the operator
-   records the stage-1 execution proof (artifact SHA + executed_at + result)
-   and **stops** — this is the authorization checkpoint.
+   generates the **schema-v2 stage-1 checkpoint proof** with the builder
+   (`stage1-proof` subcommand — binds the package git sha, the frozen
+   artifact sha + byte-identity regeneration, the committed manifest/basis
+   hashes, the exact 154 target ids, survivor mappings, the postcondition
+   digest, the audit digest, and the execution-log hash) and **stops** —
+   this is the authorization checkpoint. The stage-2 freeze independently
+   revalidates every derivable field of the proof; caller-created JSON is
+   not accepted.
 2. The accountant reviews `r6-review-packet.md` and the post-stage-1 state,
    and signs the decision-only manifest (a copy of the template with
    `environment_mode = PRODUCTION` and `basis_sha256` of the committed
@@ -158,7 +164,16 @@ stage-2 postconditions.
    emits the exact stage-2 SQL to an immutable path, and records its
    SHA-256 + identity in the freeze record.
 4. `python3 bin/build_repair_package.py verify --artifact
-   <window-artifacts>/freeze-14b-*.json` independently re-proves the frozen
-   bytes (hash, embedded identity, gates, binding hashes).
+   <window-artifacts>/freeze-14b-*.json --stage1-artifact <frozen-14a.sql>
+   --auth-manifest <signed.json> --stage1-execution-proof <proof.json>`
+   independently re-proves the frozen bytes: it REGENERATES the expected
+   stage-2 SQL into a temporary location from the committed basis + the
+   authorization inputs and requires byte-identity + SHA-256 match with the
+   freeze record. A coordinated modification of the SQL and the freeze
+   record fails this check.
 5. Only that hash-verified artifact is executed, exactly once, inside the
-   authorized repair window (`execution-window.md`).
+   authorized repair window (`execution-window.md`), with the production
+   driver that verifies the artifact sha against the freeze record and
+   passes it via PGOPTIONS (`zaki.repair_artifact_sha256`). Every stage-2
+   repair audit row then records the exact frozen artifact SHA-256 inside
+   immutable evidence.

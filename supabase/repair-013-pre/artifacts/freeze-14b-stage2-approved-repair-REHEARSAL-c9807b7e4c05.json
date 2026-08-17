@@ -1,0 +1,20 @@
+{
+  "package": "repair-013-pre",
+  "freeze_schema_version": 1,
+  "stage": 2,
+  "environment_mode": "REHEARSAL",
+  "artifact_file": "14b-stage2-approved-repair-REHEARSAL-c9807b7e4c05.sql",
+  "artifact_sha256": "f3d1b68f8dc045be8f1a860bb5abc2070446537d18eec7fd6e5b9ef778e404f3",
+  "artifact_identity": "8ad61d4d6d5e19156bd7d4591f9925b407e83ba941c1c4dee1197da5702a086e",
+  "stage1_operation_id": "0a1a1a01-4a5e-4b1a-8c01-013000000001",
+  "stage2_operation_id": "0a1a1a01-4a5e-4b1a-8c01-013000000002",
+  "stage1_manifest_sha256": "c182b4a64148ad697a9a4e7561f3ea38aa14f9193ca790beee9dfafa1c6b61fb",
+  "stage2_basis_sha256": "751d9b04ac3695da82821af311a20de7b45fd8bcfd7633f4cd4eb813793bf271",
+  "project_ref": "-",
+  "frozen_at": "2026-08-17T02:45:19+00:00",
+  "authorization_manifest_sha256": "c9807b7e4c053539707969c9195d123dee2608a51ae436f0065d1b05a16e27e8",
+  "stage1_artifact_sha256": "6f8170082db14cd221e568bf9b0f5fa9d8ba529120359c1a19c59ea86200f24a",
+  "stage1_execution_proof_sha256": "fb6a3ffda3ff5bf1f60934cdfc787395729334b539e9e3722cf25767ca911489",
+  "stage1_postcondition_digest_sha256": "414f2a2450f2c3babde8b750252fcc5199082f137ba69339a9e36b5dd8e5dd81",
+  "stage1_audit_digest_sha256": "d17f409dc2674cf35dd174619bbce4c9a7a4ea46d671cdd6638143bbc5731ff3"
+}

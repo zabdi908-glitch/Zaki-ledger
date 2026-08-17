@@ -7,16 +7,26 @@
 # rehearsal driver additionally hard-pins the target to the scratch
 # restore database.
 #
+# The verified artifact sha256 is passed into the repair transaction via
+# PGOPTIONS (zaki.repair_artifact_sha256) so it is recorded verbatim into
+# the immutable audit evidence — the artifact itself cannot know its own
+# file hash at build time (self-reference), so the driver is the binding
+# mechanism, and the SQL gate refuses a missing/malformed value.
+#
 # Usage:
 #   run-stage.sh --stage 1|2 --artifact <frozen.sql> --freeze-record <freeze.json> \
 #                [--expect apply|noop] [--stage1-proof <proof.json> (stage 2)]
 #
 # Stage 1 writes its execution proof to artifacts/stage1-proof-<sha8>.json
-# (artifact sha + executed_at + result + log sha) — the stage-2 freeze
+# via the builder's stage1-proof subcommand (schema v2: binds the package
+# git sha, artifact sha + byte-identity regeneration, committed manifest/
+# basis hashes, the exact 154 target ids, survivor mappings, postcondition
+# digest, audit digest, and the execution-log hash) — the stage-2 freeze
 # requires it, so stage-2 authorization is mechanically post-stage-1.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+BUILDER="$ROOT/bin/build_repair_package.py"
 CONTAINER="${CONTAINER:-supabase_db_Zaki-ledger}"
 DB="${DB:-repair_drill}"
 GEN_DIR="${GEN_DIR:-$ROOT/rehearsal/generated}"
@@ -78,11 +88,18 @@ fi
 
 mkdir -p "$GEN_DIR"
 LOG="$GEN_DIR/run-stage${STAGE}-$(basename "$ARTIFACT" .sql)-${EXPECT}.log"
-PSQL="docker exec -i $CONTAINER psql -v ON_ERROR_STOP=1 -U supabase_admin -d $DB"
+
+# Driver-side artifact-sha binding: the verified sha goes in via PGOPTIONS
+# (libpq startup packet -> server-side SET), which the repair transaction
+# records into the immutable audit evidence.
+run_artifact() {
+  docker exec -e "PGOPTIONS=-czaki.repair_artifact_sha256=$ARTIFACT_SHA" \
+    -i "$CONTAINER" psql -v ON_ERROR_STOP=1 -U supabase_admin -d "$DB"
+}
 
 echo "== stage $STAGE ($EXPECT) =="
 echo "artifact:  $(basename "$ARTIFACT")  sha256=$ARTIFACT_SHA"
-$PSQL < "$ARTIFACT" 2>&1 | tee "$LOG"
+run_artifact < "$ARTIFACT" 2>&1 | tee "$LOG"
 
 if [ "$EXPECT" = "apply" ]; then
   grep -q "superseded .* rows" "$LOG" || { echo "FAIL: stage $STAGE did not apply" >&2; exit 1; }
@@ -91,32 +108,16 @@ else
 fi
 
 if [ "$STAGE" = "1" ] && [ "$EXPECT" = "apply" ]; then
+  # Stage-1 checkpoint proof (builder-generated, schema v2): binds the exact
+  # frozen artifact (byte-identity regeneration + sha), the committed
+  # manifest/basis hashes, the exact 154 target ids + survivor mappings, the
+  # postcondition/audit digests, the package git sha, and the execution log.
   PROOF="$ARTIFACT_DIR/stage1-proof-REHEARSAL-${ARTIFACT_SHA:0:12}.json"
-  RESULT="APPLIED"
-  [ "$EXPECT" = "noop" ] && RESULT="NOOP"
   EXECUTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  python3 - "$PROOF" "$ARTIFACT" "$ARTIFACT_SHA" "$EXECUTED_AT" "$RESULT" "$LOG" <<'PY'
-import json, hashlib, sys
-proof_path, artifact, artifact_sha, executed_at, result, log_path = sys.argv[1:]
-log_sha = hashlib.sha256(open(log_path, "rb").read()).hexdigest()
-doc = {
-    "package": "repair-013-pre",
-    "proof_schema_version": 1,
-    "stage": 1,
-    "artifact_file": artifact.split("/")[-1],
-    "artifact_sha256": artifact_sha,
-    "environment_mode": "REHEARSAL",
-    "database": "repair_drill",
-    "executed_at": executed_at,
-    "result": result,
-    "log_file": log_path.split("/")[-1],
-    "log_sha256": log_sha,
-}
-with open(proof_path, "w") as f:
-    json.dump(doc, f, indent=2)
-    f.write("\n")
-print(f"stage-1 execution proof: {proof_path}")
-PY
+  python3 "$BUILDER" stage1-proof \
+    --artifact "$ARTIFACT" --environment-mode REHEARSAL \
+    --database repair_drill --executed-at "$EXECUTED_AT" \
+    --result APPLIED --execution-log "$LOG" --out "$PROOF"
 fi
 
 echo "stage $STAGE ($EXPECT) complete"

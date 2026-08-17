@@ -13,3 +13,8 @@ supabase/config.toml
 # committed under repair-013-pre/artifacts/ when they are the recorded
 # evidence). Per-run generated manifests/logs are not committed.
 supabase/repair-013-pre/rehearsal/generated/
+# Per-run private test dirs of the drift/failure suites (run products, not
+# committed evidence — recorded evidence lives in artifacts/ top level and
+# rehearsal/EVIDENCE.md).
+supabase/repair-013-pre/artifacts/auth-tests/
+supabase/repair-013-pre/artifacts/drift-tests/

@@ -54,24 +54,35 @@ repair-013-pre/
                                    queries (see extract/README.md)
   authorization-manifest-schema.md committed basis + decision-only manifest
   r6-review-packet.md              R6 human review evidence + decisions
-  execution-window.md              REPAIR-ONLY production runbook (18 steps;
-                                   no migration/deploy/unfreeze)
+  execution-window.md              REPAIR-ONLY production runbook (23 steps,
+                                   STOP after stage 1 and at the end; no
+                                   migration/deploy/unfreeze)
   artifacts/                       committed rehearsal evidence: frozen stage
                                    artifacts + freeze records + stage-1
                                    execution proof + executed rehearsal
                                    authorization manifest
   rehearsal/                       drivers + evidence (sanitized)
-    restore-scratch.sh             scratch restore (explicit dump paths +
-                                   hash verification)
+    restore-scratch.sh             scratch restore (REQUIRED --schema-dump/
+                                   --data-dump — no defaults + hash
+                                   verification)
     run-stage.sh                   hash-verified frozen-artifact runner
+                                   (passes the artifact sha GUC; generates
+                                   the schema-v2 stage-1 proof)
+    state-digest.sh                deterministic FULL-STATE digest of all
+                                   11 relevant tables
     rehearsal-chain.sh             REHEARSAL-ONLY chain: prep -> freeze/verify/
-                                   execute stage 1 -> checkpoint -> sign
-                                   manifest -> freeze/verify/execute stage 2
-                                   -> reruns (NO migration 013)
+                                   execute stage 1 -> checkpoint proof ->
+                                   sign manifest -> freeze/verify/execute
+                                   stage 2 -> reruns (NO migration 013)
     run-migration-013.sh           REHEARSAL-ONLY separate migration check
-    drift-tests.sh                 5 stage-1 drift injections (abort + zero
-                                   partial changes)
-    authorization-drift-tests.sh   9 authorization/identity/failure cases
+    drift-tests.sh                 5 stage-1 drift injections (abort + FULL-
+                                   STATE digest equality)
+    authorization-drift-tests.sh   18 authorization/identity/failure cases:
+                                   G1-G9 drift + G10-G14 post-checkpoint
+                                   stage-1 mutations (stage-2 abort) + G15
+                                   candidate/survivor substitution + G16
+                                   lock timeout 55P03 + G17 statement
+                                   timeout 57014 + G18 missing-sha GUC
     parity-check.sql               restore parity assertions
     make-local-auth-bootstrap.sh   local auth-schema bootstrap generator
     EVIDENCE.md                    committed rehearsal evidence
@@ -105,13 +116,46 @@ repair-013-pre/
   checkpoint.
 - **Environment-mode barrier.** Every artifact carries
   `environment_mode = REHEARSAL | PRODUCTION`, bound into the SQL (a hard
-  in-transaction identity gate executed before any lock or write), the audit
-  evidence, the freeze record, and the artifact identity hash. REHEARSAL
-  artifacts execute only against the scratch restore database `repair_drill`;
-  PRODUCTION artifacts execute only against database `postgres` on
-  PostgreSQL 17 with the session GUC `zaki.repair_project_ref =
-  fqvekbzwghjurkcawpgg`. A rehearsal artifact can never run against
-  production, and production rejects rehearsal manifests.
+  in-transaction identity gate executed FIRST — before timeouts, the
+  artifact-sha gate, and any lock), the audit evidence, the freeze record,
+  and the artifact identity hash. REHEARSAL artifacts execute only against
+  the scratch restore database `repair_drill`; PRODUCTION artifacts execute
+  only against database `postgres` on PostgreSQL 17 with the session GUC
+  `zaki.repair_project_ref = fqvekbzwghjurkcawpgg`. A rehearsal artifact can
+  never run against production, and production rejects rehearsal manifests.
+- **Finite lock/statement timeouts.** Every artifact sets transaction-local
+  `lock_timeout = 30s` / `statement_timeout = 120s` (reviewed values —
+  execution-window.md §1.4) BEFORE any blocking lock. A timeout aborts the
+  whole transaction (SQLSTATE 55P03 / 57014); the runbook treats it as
+  STOP, never a blind retry.
+- **Artifact-sha audit binding.** The execution driver verifies the
+  artifact SHA-256 against its freeze record and passes it via PGOPTIONS
+  (`zaki.repair_artifact_sha256`); the SQL gate refuses a missing/malformed
+  value, and every repair audit row records the exact frozen artifact
+  SHA-256 inside immutable evidence. The no-op/idempotency revalidation
+  compares it byte-exactly — a rerun verifies as a no-op only with the
+  exact frozen artifact sha.
+- **Exact stage-1 checkpoint revalidation (stage 2).** Stage 2 embeds the
+  FULL committed stage-1 manifest and revalidates EVERY one of the 154
+  stage-1 targets against the exact committed stage-1 result: operation id,
+  reason, survivor link, original unapproved state, accounting identity
+  fingerprints, and byte-exact audit rows (incl. the stage-1 artifact sha).
+  "Superseded and has an audit row" is never sufficient — any drift aborts
+  stage 2 with zero stage-2 changes.
+- **Schema-v2 stage-1 checkpoint proof.** The proof is BUILDER-GENERATED
+  (stage1-proof subcommand) and binds: the package git sha, the frozen
+  artifact sha + byte-identity regeneration, the committed manifest/basis
+  hashes, the exact 154 target ids, survivor mappings, the postcondition
+  digest, the audit digest, and the execution-log hash where retained.
+  Caller-created JSON is rejected unless every derivable field matches the
+  builder's independent recomputation. What the proof does NOT prove
+  (driver-recorded execution facts) is documented in execution-window.md §5
+  step 15.
+- **Independent frozen-artifact verification.** `verify --artifact`
+  REGENERATES the expected artifact bytes into a temporary location from
+  the committed basis + authorization inputs and requires byte-identity +
+  SHA-256 match with the freeze record — a coordinated modification of the
+  SQL AND the freeze record still fails (builder test B25).
 - **Fail closed on missing authorization.** `sql`, `freeze`, and `verify`
   have NO default authorization input: omitting `--auth-manifest` is a hard
   error.
@@ -163,8 +207,20 @@ python3 bin/build_repair_package.py freeze --stage 2 \
   --stage1-execution-proof <proof.json> \
   --project-ref fqvekbzwghjurkcawpgg --out-dir <window-artifacts>
 
-# independently re-prove a frozen artifact before execution
-python3 bin/build_repair_package.py verify --artifact artifacts/freeze-14b-*.json
+# generate the stage-1 checkpoint execution proof (schema v2) after the run
+python3 bin/build_repair_package.py stage1-proof \
+  --artifact <frozen-14a.sql> --environment-mode REHEARSAL \
+  --database repair_drill --executed-at <iso> --result APPLIED \
+  --execution-log <run.log> --out <proof.json>
+
+# independently re-prove a frozen stage-1 artifact before execution
+python3 bin/build_repair_package.py verify --artifact artifacts/freeze-14a-*.json
+
+# independently re-prove a frozen stage-2 artifact (full regeneration +
+# byte-identity; explicit authorization inputs REQUIRED)
+python3 bin/build_repair_package.py verify --artifact artifacts/freeze-14b-*.json \
+  --stage1-artifact artifacts/14a-*.sql --auth-manifest <signed.json> \
+  --stage1-execution-proof <proof.json>
 
 # builder-level authorization-binding tests (no database)
 python3 bin/test_builder_binding.py
@@ -183,11 +239,19 @@ Rehearsed end-to-end on a faithful scratch restore of the production dumps:
 - restore parity (9/9 tables + reconciliation + canonical/audit) PASS;
 - stage 1 applies 154 and reruns as a byte-exact no-op; stage 2 (rehearsal
   authorization manifest, signed post-stage-1) applies 98 and reruns as a
-  byte-exact no-op; stage 1 after stage 2 verifies its own state;
+  byte-exact no-op; stage 1 after stage 2 verifies its own state; every
+  audit row carries the exact frozen artifact sha256;
 - migration 013 then applies cleanly (separate rehearsal-only check);
-- five stage-1 drift injections and nine authorization/identity/failure
-  injections each abort with zero partial changes;
+- five stage-1 drift injections and eighteen
+  authorization/identity/failure injections each abort with zero partial
+  changes — every case proven by FULL-STATE digest equality across all 11
+  relevant tables, including the post-checkpoint stage-1 mutations
+  (reason/survivor/operation/approval/audit drift aborts stage 2), the
+  candidate/survivor substitution, the held-lock timeout (55P03), the
+  statement-timeout contract (57014), and the missing-artifact-sha gate;
 - builder-level binding tests (reversal, replacement, smuggling, missing
-  manifest, mode barrier, R6 ordering, freeze immutability) all pass.
+  manifest, mode barrier, R6 ordering, freeze immutability, schema-v2 proof
+  tampering, coordinated SQL+freeze-record tamper, independent
+  regeneration verification) all pass.
 
 Evidence: `rehearsal/EVIDENCE.md`.

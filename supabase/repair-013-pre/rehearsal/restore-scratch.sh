@@ -5,9 +5,10 @@
 # NEVER runs against production — it only talks to the local container
 # ($CONTAINER, default supabase_db_Zaki-ledger).
 #
-# Dump inputs are explicit parameters (no hardcoded dated filenames):
-#   --schema-dump <file>    schema dump (default $DUMP_DIR/prod-schema-2026-08-16.sql)
-#   --data-dump <file>      data dump (default $DUMP_DIR/prod-data-2026-08-16.sql)
+# Dump inputs are MANDATORY explicit parameters (no defaults, no dated
+# filenames — omitting either is a hard failure):
+#   --schema-dump <file>    schema dump (REQUIRED)
+#   --data-dump <file>      data dump (REQUIRED)
 #   --schema-sha256 <sha>   optional: verify the schema dump hash before restore
 #   --data-sha256 <sha>     optional: verify the data dump hash before restore
 #
@@ -26,8 +27,8 @@ set -euo pipefail
 DUMP_DIR="${DUMP_DIR:-/tmp/zaki-repair-design/dumps}"
 CONTAINER="${CONTAINER:-supabase_db_Zaki-ledger}"
 DB="${DB:-repair_drill}"
-SCHEMA_DUMP="$DUMP_DIR/prod-schema-2026-08-16.sql"
-DATA_DUMP="$DUMP_DIR/prod-data-2026-08-16.sql"
+SCHEMA_DUMP=""
+DATA_DUMP=""
 SCHEMA_SHA256=""
 DATA_SHA256=""
 
@@ -38,10 +39,18 @@ while [ $# -gt 0 ]; do
     --schema-sha256) SCHEMA_SHA256="$2"; shift 2;;
     --data-sha256) DATA_SHA256="$2"; shift 2;;
     *) echo "unknown argument: $1" >&2
-       echo "usage: $0 [--schema-dump F] [--data-dump F] [--schema-sha256 S] [--data-sha256 S]" >&2
+       echo "usage: $0 --schema-dump <file> --data-dump <file> [--schema-sha256 S] [--data-sha256 S]" >&2
        exit 2;;
   esac
 done
+
+# No defaults: both dump paths must be supplied explicitly (dated defaults
+# would silently restore stale production dumps — rejected by design).
+if [ -z "$SCHEMA_DUMP" ] || [ -z "$DATA_DUMP" ]; then
+  echo "error: --schema-dump and --data-dump are REQUIRED (no defaults)" >&2
+  echo "usage: $0 --schema-dump <file> --data-dump <file> [--schema-sha256 S] [--data-sha256 S]" >&2
+  exit 2
+fi
 
 [ -f "$SCHEMA_DUMP" ] || { echo "error: schema dump not found: $SCHEMA_DUMP" >&2; exit 2; }
 [ -f "$DATA_DUMP" ] || { echo "error: data dump not found: $DATA_DUMP" >&2; exit 2; }

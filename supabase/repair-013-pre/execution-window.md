@@ -1,9 +1,10 @@
-# Execution Window — REPAIR ONLY Runbook
+# Execution Window — REPAIR ONLY Runbook (final)
 
 Production target: Supabase project `fqvekbzwghjurkcawpgg` (eu-central-1,
 PostgreSQL 17). This document defines the database-side execution exclusion,
-the mandatory backup/restore drill, and the exact production-window sequence
-for the **historical repair only** (prep, stage 1, stage 2).
+the finite lock/statement timeout policy, the mandatory backup/restore
+drill, and the exact production-window sequence for the **historical repair
+only** (prep, stage 1, stage 2).
 
 **This runbook ends at the repair.** Migration 013 application, app
 deployment, and unfreeze are SEPARATE, separately authorized future
@@ -30,10 +31,15 @@ verified writer quiescence (§2). Together:
 
 ### 1.1 Lock inventory (both stages, identical)
 
-Taken inside the repair transaction, after the shared advisory lock, in this
-exact order:
+Taken inside the repair transaction, in this exact order (environment
+identity validation and the finite timeouts come FIRST — a wrong-database
+invocation must abort before taking or waiting on any lock):
 
 ```sql
+-- P0.0 environment-mode identity gate (REHEARSAL vs PRODUCTION; aborts
+--      before anything else on a wrong database identity)
+-- P0a finite timeouts (SET LOCAL; see §1.4)
+-- P0b frozen-artifact sha gate (driver-supplied GUC; see §1.5)
 SELECT pg_advisory_xact_lock(0x5A414B49);                 -- 'ZAKI', shared by both stages
 LOCK TABLE public.bank_statements        IN ACCESS EXCLUSIVE MODE;
 LOCK TABLE public.bank_transactions      IN ACCESS EXCLUSIVE MODE;
@@ -87,6 +93,56 @@ on our locks are released at COMMIT/ROLLBACK.
 locked: they are not classification sources for the repair, and decision
 writes do not conflict with supersession correctness.
 
+### 1.4 Finite lock/statement timeout policy (reviewed values, not arbitrary)
+
+Before ANY potentially blocking lock, every repair artifact sets:
+
+```sql
+SET LOCAL lock_timeout      = '30s';
+SET LOCAL statement_timeout = '120s';
+```
+
+Analysis of the values (also documented in the artifact header):
+
+- **lock_timeout 30s** — against a frozen, verified-quiescent app every
+  ACCESS EXCLUSIVE acquisition is immediate (rehearsal-verified: the whole
+  lock set acquires in under a second). 30s is ~10x+ headroom for a stray
+  short writer and still strictly finite: a session holding a conflicting
+  lock longer than 30s means an unexcluded writer is active. Timeout →
+  SQLSTATE `55P03` (`lock_not_available`) → the whole transaction aborts
+  (rollback; zero partial changes). **The runbook treats it as STOP** —
+  investigate and re-run the window from §5, never retry blindly during
+  unknown writer activity.
+- **statement_timeout 120s** — every repair statement is millisecond-scale
+  on the snapshot population (573 matches, 409 audit rows; rehearsal-
+  verified). 120s is ~10³–10⁴× headroom and still finite: a statement
+  exceeding it means something pathological (bloat, trigger loop, index
+  corruption). Timeout → SQLSTATE `57014` (`query_canceled`) → transaction
+  aborts (rollback). **STOP**, never retry blindly.
+
+Both are transaction-local (`SET LOCAL`): an error in the transaction
+aborts it entirely, so a timeout can never leave partial repair state. The
+rehearsal suite proves the contract: `auth-g16-lock-timeout` (held
+conflicting lock → 55P03, full-state digest identical) and
+`auth-g17-statement-timeout` (57014 + rollback semantics, zero changes).
+
+### 1.5 Frozen-artifact sha binding (driver-supplied GUC)
+
+The execution driver verifies the artifact SHA-256 against its freeze
+record, then passes it into the repair transaction via PGOPTIONS:
+
+```bash
+PGOPTIONS="-c zaki.repair_project_ref=fqvekbzwghjurkcawpgg \
+           -c zaki.repair_artifact_sha256=<artifact-sha256>" \
+  psql "$PROD_CONN" -v ON_ERROR_STOP=1 -f <frozen.sql>
+```
+
+The SQL-side gate (P0b) aborts on a missing/malformed value, and the value
+is recorded verbatim into every repair audit row's immutable evidence —
+including the exact frozen stage-2 artifact SHA-256 (blocker 4). The
+no-op/idempotency revalidation compares it byte-exactly, so a rerun only
+verifies as a no-op when the exact frozen artifact sha is supplied.
+
 ---
 
 ## 2. Hard stop conditions on exclusion (verified before the window)
@@ -113,24 +169,15 @@ relies on the environment freeze alone.
 ## 3. Environment-mode identity barrier (mechanical, not a warning)
 
 Every generated artifact carries `environment_mode = REHEARSAL | PRODUCTION`
-bound into the SQL (a hard in-transaction identity gate executed before any
-lock or write), the audit evidence, the freeze record, and the artifact
-identity hash.
+bound into the SQL (a hard in-transaction identity gate executed FIRST —
+before timeouts, the artifact-sha gate, and any lock), the audit evidence,
+the freeze record, and the artifact identity hash.
 
 - **REHEARSAL artifacts** execute only against `current_database() =
   'repair_drill'` — they can never run against production.
 - **PRODUCTION artifacts** execute only against `current_database() =
   'postgres'` on PostgreSQL 17 with the session GUC
-  `zaki.repair_project_ref = 'fqvekbzwghjurkcawpgg'`. The production driver
-  must set it, e.g.:
-
-  ```bash
-  PGOPTIONS="-c zaki.repair_project_ref=fqvekbzwghjurkcawpgg" \
-    psql "$PROD_CONN" -v ON_ERROR_STOP=1 -f <frozen-14a.sql>
-  ```
-
-  If the GUC is unset, wrong, or the database identity differs, the artifact
-  aborts before touching anything.
+  `zaki.repair_project_ref = 'fqvekbzwghjurkcawpgg'` (§1.5 driver command).
 
 ---
 
@@ -158,7 +205,8 @@ never substitute.
      `rehearsal/restore-scratch.sh --schema-dump <window>/prod-schema-<date>.sql
      --data-dump <window>/prod-data-<date>.sql
      --schema-sha256 <sha> --data-sha256 <sha>`
-     (the driver verifies the supplied hashes before restoring).
+     (`--schema-dump` and `--data-dump` are REQUIRED — the tool has no
+     defaults; the driver verifies the supplied hashes before restoring).
 5. **Parity checks on the scratch copy** (all must pass before the window
    proceeds):
    - schema/table parity: objects, triggers, indexes present;
@@ -179,80 +227,117 @@ never substitute.
 
 ---
 
-## 5. Production-window sequence (REPAIR ONLY — exact order)
+## 5. Production-window sequence (REPAIR ONLY — exact order, 23 steps)
 
-1. **Verify package identity.** On the authorized operator machine, check out
-   the exact branch/commit recorded in the authorization; run
-   `git rev-parse HEAD` and
+1. **Verify the exact final Git SHA.** On the authorized operator machine,
+   check out the exact package commit recorded in the authorization; run
+   `git rev-parse HEAD` and record the FULL sha. It must equal the
+   `package_commit_sha256` recorded in `rehearsal/EVIDENCE.md` and the
+   authorization record. Then run
    `python3 bin/build_repair_package.py verify --auth-manifest
    manifests/stage2-rehearsal-authorization-manifest.json` (must print
-   `VERIFY OK`), and re-check the SHAs recorded in
-   `manifests/manifest-identities.json` against the authorization record.
-2. **Verify production environment identity.** Confirm the connection target
+   `VERIFY OK`) and `python3 bin/test_builder_binding.py` (all pass).
+2. **Verify all relevant artifact hashes.** Re-check the SHAs recorded in
+   `manifests/manifest-identities.json` and `rehearsal/EVIDENCE.md`
+   (manifests, immutable basis, migration 013
+   `d9086ad5…` — the migration file itself is NOT applied here, only its
+   identity is recorded) against the checked-out files.
+3. **Verify production environment identity.** Confirm the connection target
    is `db.fqvekbzwghjurkcawpgg.supabase.co` (explicit `--project-ref
    fqvekbzwghjurkcawpgg`; the legacy project `gzwtxebgevgapchoslmp` is never
    a target), PostgreSQL 17, database `postgres`. Record the verification.
-3. **Verify the deployed freeze-capable app.** Deployed commit includes
+4. **Verify the deployed freeze-capable app.** Deployed commit includes
    `ebeed9d`; freeze contract checks pass on the deployment.
-4. **Enable freeze everywhere.** `ZAKI_RECONCILIATION_WRITE_FREEZE=1` on the
+5. **Enable freeze everywhere.** `ZAKI_RECONCILIATION_WRITE_FREEZE=1` on the
    Render service; re-verify (§2.1).
-5. **Prove writer quiescence.** `pg_stat_activity` shows no reconciliation
+6. **Prove writer quiescence.** `pg_stat_activity` shows no reconciliation
    DML against the six locked tables; 13/13 route probes green; nightly
    matcher aborts (§2).
-6. **Fresh schema/data dumps.** §4 steps 1–2 against the frozen instance.
-7. **Hash the dumps.** §4 step 3; record in the window log.
-8. **Scratch restore.** §4 step 4 with explicit dump paths + hashes.
-9. **Full parity/recovery proof.** §4 step 5 — every parity check and the
-   restore-usability proof must pass on the fresh scratch copy.
-10. **Execute repair prep explicitly.** Run
+7. **Review the finite timeout policy.** Confirm §1.4 is understood by every
+   window participant: `lock_timeout 30s` (SQLSTATE 55P03),
+   `statement_timeout 120s` (SQLSTATE 57014); **timeout = STOP**, full
+   transaction rollback, no blind retry loop during unknown writer
+   activity.
+8. **Fresh schema/data dumps.** §4 steps 1–2 against the frozen instance.
+9. **Hash the dumps.** §4 step 3; record in the window log.
+10. **Scratch restore.** §4 step 4 with explicit dump paths + hashes.
+11. **Full parity/recovery proof.** §4 step 5 — every parity check and the
+    restore-usability proof must pass on the fresh scratch copy.
+12. **Execute repair prep explicitly.** Run
     `supabase/repair-013-pre/13-repair-prep.sql` against production (the
     additive supersession columns + audit-evidence immutability trigger;
     idempotent). Record its output.
-11. **Freeze the exact stage-1 artifact.**
+13. **Freeze + hash the exact stage-1 execution artifact.**
     `python3 bin/build_repair_package.py freeze --stage 1
     --environment-mode PRODUCTION --project-ref fqvekbzwghjurkcawpgg
     --out-dir <window-artifacts>`, then
     `python3 bin/build_repair_package.py verify --artifact
-    <window-artifacts>/freeze-14a-*.json` (must print `VERIFY OK`).
-    Execute ONLY that hash-verified artifact, with the production driver
-    (§3, GUC set), inside the window. Expected: `STAGE 1: superseded 154
-    rows`, `STAGE 1: wrote 154 audit rows`, all P2 postconditions pass,
-    COMMIT.
-12. **Verify the exact stage-1 postcondition.** Re-execute the identical
-    frozen file: the dispatcher must report a verified NO-OP with byte-exact
-    audit evidence. Record the stage-1 execution proof (artifact SHA,
-    executed_at, result) in the window log.
-13. **STOP — authorization checkpoint.** No stage-2 artifact exists or can
+    <window-artifacts>/freeze-14a-*.json` (must print `VERIFY OK` — the
+    verifier regenerates the expected bytes and requires byte-identity).
+    Record the artifact sha256.
+14. **Execute stage 1.** Only the hash-verified file, with the production
+    driver (§1.5, BOTH GUCs set), inside the window. Expected: `STAGE 1:
+    superseded 154 rows`, `STAGE 1: wrote 154 audit rows`, all P2
+    postconditions pass, COMMIT.
+15. **Stage-1 full-state + exact checkpoint proof.** (a) Re-execute the
+    identical frozen file once: the dispatcher must report a verified NO-OP
+    with byte-exact audit evidence. (b) Generate the schema-v2 checkpoint
+    proof with the builder (`stage1-proof --artifact <frozen-14a.sql>
+    --environment-mode PRODUCTION --database postgres --executed-at <iso>
+    --result APPLIED --execution-log <run.log> --out <proof.json>`) — it
+    binds the package git sha, the artifact sha + byte-identity
+    regeneration, the committed manifest/basis hashes, the exact 154 target
+    ids, survivor mappings, the postcondition digest, the audit digest, and
+    the execution-log hash. Record the proof sha. (What the proof proves:
+    artifact/commit/basis binding and the expected post-state. What it does
+    not prove: the driver-recorded execution facts — compensated by (a) and
+    by the stage-2 artifact's in-database revalidation of the EXACT stage-1
+    state, step 21.)
+16. **STOP — authorization checkpoint.** No stage-2 artifact exists or can
     be built before this point. Report the exact intermediate state: 573
     total, 154 superseded, 419 live, 91 duplicate live-auto endpoints, 154
     repair audit rows. End the session.
-14. **Accountant reviews and authorizes stage 2 (including R6).** The
+17. **Accountant reviews and authorizes stage 2 (including R6).** The
     accountant reviews `r6-review-packet.md` + the post-stage-1 state, and
-    signs the decision-only authorization manifest
+    signs the decision-only JSON authorization manifest
     (`authorization-manifest-schema.md` §3–§6) with `environment_mode =
     PRODUCTION` and confirmation timestamps after the recorded stage-1
     execution time. Record the signed manifest SHA in the window log.
-15. **Build + hash + independently verify the exact production stage-2
-    artifact.** `freeze --stage 2 --environment-mode PRODUCTION
-    --auth-manifest <signed.json> --stage1-artifact <window-artifacts
-    /14a-*.sql> --stage1-execution-proof <proof.json> --project-ref
-    fqvekbzwghjurkcawpgg --out-dir <window-artifacts>`, then
-    `verify --artifact <window-artifacts>/freeze-14b-*.json`. Review the
-    freeze record; the artifact is immutable and hash-bound.
-16. **Execute the exact stage-2 artifact.** Only the hash-verified file,
-    inside the window, with the production driver. Expected:
+18. **Build the exact production stage-2 artifact.** `freeze --stage 2
+    --environment-mode PRODUCTION --auth-manifest <signed.json>
+    --stage1-artifact <window-artifacts>/14a-*.sql
+    --stage1-execution-proof <proof.json> --project-ref
+    fqvekbzwghjurkcawpgg --out-dir <window-artifacts>` (the freeze
+    independently revalidates the proof and the frozen stage-1 artifact).
+19. **Regenerate + independently verify.** `verify --artifact
+    <window-artifacts>/freeze-14b-*.json --stage1-artifact
+    <window-artifacts>/14a-*.sql --auth-manifest <signed.json>
+    --stage1-execution-proof <proof.json>` (must print `VERIFY OK`): the
+    verifier REGENERATES the expected stage-2 bytes into a temporary
+    location and requires byte-identity + SHA-256 match with the freeze
+    record — a coordinated SQL+freeze-record modification fails here.
+20. **Hash/freeze record.** Record the freeze record sha and the frozen
+    artifact sha256 in the window log; the artifact is immutable and
+    hash-bound.
+21. **Execute the exact frozen stage-2 artifact.** Only the hash-verified
+    file, inside the window, with the production driver (§1.5). Expected:
     `STAGE 2: superseded <n> authorized rows` (n = signed RETIRE decisions),
     all P2 postconditions pass, COMMIT. Every stage-2 audit row records the
-    confirming accountant's identity. Re-execute once more: verified NO-OP
-    with byte-exact audit evidence (altered evidence would abort).
-17. **Verify the exact final repair state.** Report: 573 total,
+    confirming accountant's identity AND the exact frozen stage-2 artifact
+    SHA-256 in immutable evidence. The stage-2 artifact first revalidates
+    the EXACT stage-1 result (all 154 targets: operation id, reason,
+    survivor, original unapproved state, accounting identity, byte-exact
+    audit rows — any drift aborts). Re-execute once more: verified NO-OP
+    with byte-exact audit evidence (altered evidence aborts).
+22. **Verify the exact final repair state.** Report: 573 total,
     154 + n superseded, live count, remaining duplicate live-auto endpoints
     (0 if fully authorized), repair audit rows 154 + n, per-operation
     verification (154 rows carry the stage-1 operation id, n the stage-2
-    operation id). Record everything in the window log.
-18. **STOP.** Archive the window log: package commit SHA, artifact SHAs,
-    freeze records, manifest hashes, dump hashes, execution outputs, and
-    rerun outputs.
+    operation id). Capture the full-state digest
+    (`rehearsal/state-digest.sh` logic) and record it in the window log.
+23. **STOP.** Archive the window log: package commit SHA, artifact SHAs,
+    freeze records, proof sha, manifest hashes, dump hashes, execution
+    outputs, rerun outputs, and the final-state digest.
 
 Migration 013 application, app deployment, and unfreezing are NOT part of
 this runbook and require separate authorization.
@@ -262,6 +347,10 @@ this runbook and require separate authorization.
 ## 6. Rehearsal-verified timings and failure behavior
 
 See `rehearsal/EVIDENCE.md` for the committed evidence: restore parity,
-stage-1/stage-2 outputs, rerun no-ops, the drift/failure-injection cases,
-and the authorization-binding failure/substitution cases — every one aborts
-with zero partial changes (single transaction rollback).
+stage-1/stage-2 outputs, rerun no-ops, the drift/failure-injection cases
+(all with FULL-STATE digest equality), the post-checkpoint stage-1 mutation
+cases (reason/survivor/operation/approval/audit drift — stage 2 aborts with
+zero changes), the lock-timeout case (55P03), the statement-timeout contract
+(57014), the missing-sha-GUC gate, and the builder-level binding tests —
+every one fails closed with zero partial changes (single transaction
+rollback).

@@ -1,4 +1,4 @@
-# Rehearsal Evidence — Historical Repair Package, Authorization-Binding Hardening
+# Rehearsal Evidence — Historical Repair Package, Execution-Integrity Hardening
 
 Rehearsal executed 2026-08-17 against a **local scratch restore** of the
 production snapshot inside the local Supabase container
@@ -8,22 +8,25 @@ counts, and outputs sufficient to reproduce the conclusions. Raw logs live
 outside the repo (`/tmp/zaki-repair-rehearsal/`); the committed record below
 reproduces their meaningful content.
 
-Before every run: `bin/build_repair_package.py verify --auth-manifest
-manifests/stage2-rehearsal-authorization-manifest.json` reported `VERIFY OK`
+Before every run: `bin/build_repair_package.py verify` reported `VERIFY OK`
 (hashes, classification, committed basis byte-identical to a snapshot
-regeneration, SQL byte-identical to a fresh regeneration) and
-`bin/test_builder_binding.py` reported `18 passed, 0 failed`.
+regeneration, frozen SQL byte-identical to an independent regeneration) and
+`bin/test_builder_binding.py` reported `27 passed, 0 failed`.
 
 ## 0. Binding identity
 
+Rehearsed tree: `4d6ba9a707c69413d88cd5d320002249aef7b658` (the package
+commit whose working tree was rehearsed; the evidence commit recording this
+SHA follows immediately and its full SHA is recorded in the final report).
+
 | Artifact | SHA-256 |
 |---|---|
-| Package commit (this hardening release) | `4540346c46b40c46cec257ec21be265cf0c1c92a` |
+| Package commit (rehearsed tree) | `4d6ba9a707c69413d88cd5d320002249aef7b658` |
 | Migration 013 (`supabase/migrations/013_reconciliation_claim_hardening.sql`) | `d9086ad51b3cb9f5796c6f06f5b0bec338d3bb485c1f1f4c996a0d52c1b2cd93` |
-| Stage-1 SQL working copy (`14a-stage1-unapproved-repair.sql`) | `a91123dbdb8def4634163699a7c0701879c70dd9919c6c41b5d43f8b1f21903d` |
-| Stage-2 SQL working copy (`14b-stage2-approved-repair.sql`) | `847463baf847e0b6f37fa080f27a62bad143382b784223eb68b9741b2af835aa` |
-| Frozen stage-1 rehearsal artifact (`artifacts/14a-…-REHEARSAL-c182b4a64148.sql`) | `a91123dbdb8def4634163699a7c0701879c70dd9919c6c41b5d43f8b1f21903d` |
-| Frozen stage-2 rehearsal artifact (`artifacts/14b-…-REHEARSAL-70fcb23d7e0d.sql`) | `d6d98cbae344767752295d056ece2c4d415913cb03d39f0aeb544ff034a63315` |
+| Stage-1 SQL working copy (`14a-stage1-unapproved-repair.sql`) | `3eaa5525befa134502eda1200f521a48aadb2ad900d3909442029215c321af35` |
+| Stage-2 SQL working copy (`14b-stage2-approved-repair.sql`) | `e42d775cc6e24d0515041246a96724a70977ecfbdac7728d22c5eb61f2247a51` |
+| Frozen stage-1 rehearsal artifact (`artifacts/14a-…-REHEARSAL-c182b4a64148.sql`) | `6f8170082db14cd221e568bf9b0f5fa9d8ba529120359c1a19c59ea86200f24a` |
+| Frozen stage-2 rehearsal artifact (`artifacts/14b-…-REHEARSAL-c9807b7e4c05.sql`) | `f3d1b68f8dc045be8f1a860bb5abc2070446537d18eec7fd6e5b9ef778e404f3` |
 
 ## 1. Input dump identity (production snapshot, captured 2026-08-16)
 
@@ -34,11 +37,12 @@ regeneration, SQL byte-identical to a fresh regeneration) and
 | `local-auth-schema.sql` (local bootstrap) | `007540bbd1c20430706b9aab3c715b2c5977c4ed49b073a54e50d5e4559df97a` |
 
 Restore driver: `restore-scratch.sh` (explicit `--schema-dump` /
-`--data-dump` / optional hash flags). Prerequisites applied: `extensions` +
-`vault` schemas, cluster-wide publication `supabase_realtime`, Supabase
-`auth` schema (contains the snapshot's two user identity anchors —
-verified), schema then data as `supabase_admin`. Bootstrap regeneration
-tooling: `make-local-auth-bootstrap.sh` (local stack only).
+`--data-dump` / optional hash flags; **no dated dump defaults — missing
+arguments fail closed**). Prerequisites applied: `extensions` + `vault`
+schemas, cluster-wide publication `supabase_realtime`, Supabase `auth`
+schema (contains the snapshot's two user identity anchors — verified),
+schema then data as `supabase_admin`. Bootstrap regeneration tooling:
+`make-local-auth-bootstrap.sh` (local stack only).
 
 ## 2. Manifest identity (see manifests/manifest-identities.json)
 
@@ -52,6 +56,7 @@ tooling: `make-local-auth-bootstrap.sh` (local stack only).
 | `stage2-test-decisions.json` | 98 | `c38d19f3e21772fb61fb36177969a15b9eeae4c0d30280d7d8fcf140cdb87afe` |
 | `stage2-authorization-manifest-template.json` | 0 decisions | `3bee90c164c7c2267b171abd9ec869afb0b8b38e3f622b3a10f131d7c4cfb81d` |
 | `stage2-rehearsal-authorization-manifest.json` (**REHEARSAL ONLY**) | 98 test decisions | `940e9021d7a67a1ad4892e9712c35af0848fe85924a4a693baee01149e0bf7c4` |
+| `manifest-identities.json` | — | `e4c7ecc565c292d8320f798b05baacbb017f8ec5bf10c34330e0f8a2666caf9b` |
 
 Snapshot provenance (captured 2026-08-16, read-only wrapper): `04-endpoints.json`
 `e2c49238…`, `05-matches.json` `c9389b84…`, `06-audit.json` `83e344e0…`,
@@ -69,19 +74,19 @@ Freeze records committed under `artifacts/`:
 
 | Record | Value |
 |---|---|
-| Stage-1 freeze record | `artifacts/freeze-14a-stage1-unapproved-repair-REHEARSAL-c182b4a64148.json` (sha `177dc14d…`) |
+| Stage-1 freeze record | `artifacts/freeze-14a-stage1-unapproved-repair-REHEARSAL-c182b4a64148.json` (sha `2e78f065489aa78c4ce8be127af62a15cc7b1457fb8d8d1a2e088564366a79db`, frozen_at `2026-08-17T02:45:16Z`) |
 | Stage-1 artifact identity | `6e36e7ad0b0b61385b2fffe604a0a8b2a0fbd8fc9f40a65dc9493b1dcfafbff1` |
-| Stage-1 execution proof | `artifacts/stage1-proof-REHEARSAL-a91123dbdb8d.json` (sha `447002b5…`; `APPLIED` at `2026-08-17T01:13:22Z`) |
-| Executed rehearsal authorization manifest | `artifacts/rehearsal-authorization-manifest-2026-08-17T01:13:23Z.json` (sha `70fcb23d…`; confirmation `2026-08-17T01:13:23Z` — after the stage-1 proof) |
-| Stage-2 freeze record | `artifacts/freeze-14b-stage2-approved-repair-REHEARSAL-70fcb23d7e0d.json` (sha `f1a3e742…`) |
-| Stage-2 artifact identity | `cabe2952cfda9849a377942ea7c2db93f81d437c7be9f8e43bb1048299b7ce3f` |
+| Stage-1 execution proof | `artifacts/stage1-proof-REHEARSAL-6f8170082db1.json` (sha `fb6a3ffda3ff5bf1f60934cdfc787395729334b539e9e3722cf25767ca911489`; `APPLIED` at `2026-08-17T02:45:17Z`; stage-1 postcondition digest `414f2a2450f2c3babde8b750252fcc5199082f137ba69339a9e36b5dd8e5dd81`; stage-1 audit digest `d17f409dc2674cf35dd174619bbce4c9a7a4ea46d671cdd6638143bbc5731ff3`) |
+| Executed rehearsal authorization manifest | `artifacts/rehearsal-authorization-manifest-2026-08-17T02:45:18Z.json` (sha `c9807b7e4c053539707969c9195d123dee2608a51ae436f0065d1b05a16e27e8`; 98 decisions; confirmation `2026-08-17T02:45:18Z` — after the stage-1 proof's `executed_at`) |
+| Stage-2 freeze record | `artifacts/freeze-14b-stage2-approved-repair-REHEARSAL-c9807b7e4c05.json` (sha `1333ca8edd1d3e176eda3ab15d698a1ecde32928b1c3fa75b08ae40b68ab986a`, frozen_at `2026-08-17T02:45:19Z`; binds `authorization_manifest_sha256` `c9807b7e…`, `stage1_artifact_sha256` `6f817008…`, `stage1_execution_proof_sha256` `fb6a3ffd…`) |
+| Stage-2 artifact identity | `8ad61d4d6d5e19156bd7d4591f9925b407e83ba941c1c4dee1197da5702a086e` |
 
 | Step | Result |
 |---|---|
 | Prep (`13-repair-prep.sql`) | applied (idempotent) |
 | Stage 1 apply (frozen, hash-verified) | `STAGE 1: superseded 154 rows`, `STAGE 1: wrote 154 audit rows`, all P2 postconditions passed, COMMIT |
 | Stage 1 rerun | dispatcher → `noop`; `ALREADY APPLIED — verified 154 targets … byte-exact audit evidence; no-op commit` |
-| Authorization checkpoint | stage-1 proof recorded; rehearsal manifest signed with a post-stage-1 timestamp; stage-2 freeze validated the ordering against the proof |
+| Authorization checkpoint | stage-1 proof recorded; executed rehearsal manifest confirmed after the proof's `executed_at`; stage-2 freeze validated the ordering against the proof |
 | Stage 2 apply (frozen, hash-verified) | `STAGE 2: superseded 98 authorized rows`, `STAGE 2: wrote 98 audit rows`, all P2 postconditions passed, COMMIT |
 | Stage 2 rerun | dispatcher → `noop`; byte-exact audit evidence verified; no-op commit |
 | Stage 1 after stage 2 | dispatcher → `noop`; own-operation state verified (committed-basis candidates accepted only as pristine or stage-2-superseded); no-op commit |
@@ -89,7 +94,10 @@ Freeze records committed under `artifacts/`:
 
 Final state: **573 total / 252 superseded / 321 live / 0 duplicate live-auto
 endpoints / 252 repair audit rows**. Per-operation verification: 154 rows
-carry the stage-1 operation id, 98 the stage-2 operation id.
+carry the stage-1 operation id, 98 the stage-2 operation id; every stage-1
+audit row carries `artifact_sha256 = 6f817008…` and every stage-2 audit row
+carries `artifact_sha256 = f3d1b68f…` (the exact frozen artifact sha of its
+operation, one distinct sha per operation).
 
 ## 5. Failure / drift injections (all abort with zero partial changes)
 
@@ -97,7 +105,7 @@ Stage-1 drift cases (`drift-tests.sh`, 5/5 PASS): approval change, amount
 change, substituted match, new duplicate endpoint, survivor change.
 
 Authorization / identity / failure cases (`authorization-drift-tests.sh`,
-9/9 PASS):
+18/18 PASS):
 
 | Case | Injection | Result |
 |---|---|---|
@@ -110,16 +118,31 @@ Authorization / identity / failure cases (`authorization-drift-tests.sh`,
 | G7 | partial stage-2 (row superseded + altered audit row) | abort, zero new writes |
 | G8 | REHEARSAL artifact vs the local dev database identity (`postgres`) | REHEARSAL gate aborts before any write |
 | G9 | PRODUCTION artifact vs the scratch identity (repair_drill) | PRODUCTION gate aborts; before/after superseded counts equal |
+| G10 | stage-1 target `supersede_reason` changed after the stage-1 checkpoint | stage 2 revalidation aborts, zero writes |
+| G11 | stage-1 target survivor link changed after the checkpoint | stage 2 revalidation aborts, zero writes |
+| G12 | stage-1 target operation id changed after the checkpoint | stage 2 revalidation aborts, zero writes |
+| G13 | stage-1 target approval state (original unapproved basis) lost after the checkpoint | stage 2 revalidation aborts, zero writes |
+| G14 | second stage-1 audit row (tampered evidence) after the checkpoint | stage 2 revalidation aborts, zero writes |
+| G15 | candidate/survivor substitution at decision time | stage 2 aborts, zero writes |
+| G16 | deliberately held conflicting lock (`lock_timeout` 30s → SQLSTATE 55P03 `canceling statement due to lock timeout`) | abort, wait bounded, zero writes |
+| G17 | `statement_timeout` (SQLSTATE 57014) | rollback semantics, zero writes |
+| G18 | missing/malformed `zaki.repair_artifact_sha256` GUC | P0b gate aborts before any write |
 
-Builder-level binding tests (`bin/test_builder_binding.py`, 18/18 PASS):
-candidate/survivor reversal, arbitrary candidate replacement, identity
-smuggling at decision and top level, R6 swap legality (pair-partner survivor
-from the basis), both-members-retire, missing `--auth-manifest` (hard
-failure), rehearsal manifest in PRODUCTION mode, wrong project identity,
-R6 decision before the stage-1 checkpoint, wrong basis sha, legacy CSV
-manifest, missing stage-1 proof, proof bound to a different artifact,
-frozen-artifact immutability (overwrite refused), mode gates/binding hashes
-present in generated SQL, deterministic emission.
+Every case fails closed and is proven by full-state digest equality:
+`rehearsal/state-digest.sh` computes a deterministic JSON digest of all 11
+relevant tables; before/after digests are identical for every case.
+
+Builder-level binding tests (`bin/test_builder_binding.py`, 27/27 PASS):
+reversal (B1), candidate replacement (B2), identity smuggling (B3/B4), R6
+swap legality (B5), both-members-retire (B6), missing `--auth-manifest`
+(B7), rehearsal manifest in PRODUCTION (B8), wrong project identity (B9),
+pre-checkpoint R6 decision (B10), wrong basis sha (B11), legacy CSV
+manifest (B12), missing/wrong stage-1 proof (B13/B14), freeze
+immutability/gates/determinism (B15–B17, B27), proof tampering — survivor /
+target ids / digests / git sha (B18–B21), coordinated artifact+proof tamper
+(B22), schema-v1 proof rejection (B23), valid stage-2 freeze verification
+(B24), coordinated SQL+freeze-record tamper fails (B25), stale freeze-record
+sha fails (B26).
 
 ## 6. Validation suite
 
@@ -127,5 +150,10 @@ present in generated SQL, deterministic emission.
 - `npm run test:local-db` — 191 passed (8 skipped), 0 failed.
 - `npm run typecheck` — clean. `npm run build` — clean.
 - Fresh local `supabase db reset` 001→013 — clean apply, no errors.
-- Full scratch rehearsal repeated after the reset (chain → drift → auth
-  drift → migration check) — all pass, results above.
+- Full scratch rehearsal repeated after the reset (`--fresh`: chain → drift
+  → auth drift → migration-013 check) — all pass, results above; the
+  committed artifacts are the final per-run set of that run.
+- Independent verification of both committed frozen artifacts:
+  `verify` reports `VERIFY OK` for stage 1 and stage 2 (byte-identical
+  independent regeneration; stage 2 verified against the executed
+  rehearsal manifest bound by its freeze record).
