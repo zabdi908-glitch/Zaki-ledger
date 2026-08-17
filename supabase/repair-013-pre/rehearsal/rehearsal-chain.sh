@@ -96,12 +96,21 @@ print(json.load(open(sys.argv[1], encoding='utf-8'))['executed_at'])" "$STAGE1_R
 echo "stage-1 receipt: $(basename "$STAGE1_RECEIPT")  executed_at=$RECEIPT_TS"
 
 # The stage-2 authorization manifest is created only now, stamped with a
-# confirmation timestamp AFTER the recorded stage-1 execution — the freeze
-# below enforces the ordering against the receipt's executed_at. The
-# executed manifest is committed under artifacts/ as part of the rehearsal
+# confirmation timestamp STRICTLY AFTER the receipt's database-recorded
+# executed_at (receipt executed_at + 1s — the receipt carries
+# microseconds, so a same-second wall-clock stamp could truncate below it
+# and the ordering check would correctly reject it). The freeze below
+# enforces the ordering against the receipt's executed_at. The executed
+# manifest is committed under artifacts/ as part of the rehearsal
 # evidence.
 echo "== authorization checkpoint: sign the rehearsal stage-2 manifest =="
-CONFIRM_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+CONFIRM_TS="$(python3 - "$STAGE1_RECEIPT" <<'PY'
+import datetime, json, sys
+rec = json.load(open(sys.argv[1], encoding="utf-8"))
+ts = datetime.datetime.fromisoformat(rec["executed_at"].replace("Z", "+00:00"))
+print((ts + datetime.timedelta(seconds=1)).strftime("%Y-%m-%dT%H:%M:%SZ"))
+PY
+)"
 REHEARSAL_MANIFEST="$ARTIFACT_DIR/rehearsal-authorization-manifest-${CONFIRM_TS}.json"
 python3 "$BUILDER" rehearsal-manifest \
   --confirmation-timestamp "$CONFIRM_TS" \

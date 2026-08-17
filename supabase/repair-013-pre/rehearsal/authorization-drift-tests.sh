@@ -240,7 +240,16 @@ apply_stage1() {
 }
 
 freeze_stage2() {
-  CONFIRM_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  # Strictly post-stage-1 confirmation: receipt executed_at + 1s (the
+  # receipt carries microseconds, so a same-second wall-clock stamp could
+  # truncate below it and the ordering check would correctly reject it).
+  CONFIRM_TS="$(python3 - "$STAGE1_RECEIPT" <<'PY'
+import datetime, json, sys
+rec = json.load(open(sys.argv[1], encoding="utf-8"))
+ts = datetime.datetime.fromisoformat(rec["executed_at"].replace("Z", "+00:00"))
+print((ts + datetime.timedelta(seconds=1)).strftime("%Y-%m-%dT%H:%M:%SZ"))
+PY
+)"
   local manifest="$GEN_DIR/auth-test-manifest.json"
   python3 "$BUILDER" rehearsal-manifest --confirmation-timestamp "$CONFIRM_TS" --out "$manifest" >/dev/null
   python3 "$BUILDER" freeze --stage 2 --environment-mode REHEARSAL \
