@@ -18,7 +18,7 @@ regeneration, SQL byte-identical to a fresh regeneration) and
 
 | Artifact | SHA-256 |
 |---|---|
-| Package commit (this hardening release) | recorded in the evidence-binding commit `docs/RECONCILIATION_013_REPAIR_PACKAGE_FINAL_HARDENING_REPORT.md` §2 |
+| Package commit (this hardening release) | `4540346c46b40c46cec257ec21be265cf0c1c92a` |
 | Migration 013 (`supabase/migrations/013_reconciliation_claim_hardening.sql`) | `d9086ad51b3cb9f5796c6f06f5b0bec338d3bb485c1f1f4c996a0d52c1b2cd93` |
 | Stage-1 SQL working copy (`14a-stage1-unapproved-repair.sql`) | `a91123dbdb8def4634163699a7c0701879c70dd9919c6c41b5d43f8b1f21903d` |
 | Stage-2 SQL working copy (`14b-stage2-approved-repair.sql`) | `847463baf847e0b6f37fa080f27a62bad143382b784223eb68b9741b2af835aa` |

@@ -21,7 +21,9 @@ evidence-binding commit recording the final package commit SHA (§2, §17).
 
 ## 2. New artifact identity
 
-Package commit: recorded in the evidence-binding follow-up commit (§17).
+Package commit: `4540346c46b40c46cec257ec21be265cf0c1c92a`
+(`feat: bind stage-2 authorization to the immutable committed basis
+(013-pre)`), plus the evidence-binding commit that records this SHA.
 Base: `7fd608b5283411f17ad30e042d4427d55bd6027e` (not amended).
 
 Key hashes (full evidence: `rehearsal/EVIDENCE.md`):
@@ -221,10 +223,10 @@ production-capable chaining wrapper.
 
 ## 17. New commit SHA
 
-Recorded in the evidence-binding follow-up commit (the commit that fills
-this section and EVIDENCE.md §0); package corrections live in the preceding
-commit, which this report ships with. `7fd608b` was not amended; the
-working tree ends clean.
+`4540346c46b40c46cec257ec21be265cf0c1c92a` — the package corrections commit
+(this report ships with it; this section and EVIDENCE.md §0 are filled by
+the immediately following evidence-binding commit). `7fd608b` was not
+amended; the working tree ends clean.
 
 ## 18. Remaining risks
 
