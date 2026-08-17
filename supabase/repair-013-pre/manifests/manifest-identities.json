@@ -43,16 +43,19 @@
         ]
       },
       "stage1_targets": 154,
-      "stage2_candidates": 98,
-      "stage2_guards": 91,
       "stage1_guards": 101,
+      "stage2_candidates": 102,
+      "stage2_retireable": 98,
+      "stage2_guards": 87,
+      "stage2_basis_rows": 189,
       "total_matches": 573,
       "total_approved": 409,
       "total_manual": 0,
       "dup_endpoints": 107,
       "dup_endpoints_after_stage1": 91,
       "live_unapproved_after_stage1": 10
-    }
+    },
+    "production_project_ref": "fqvekbzwghjurkcawpgg"
   },
   "manifests": {
     "duplicate-endpoints.csv": {
@@ -64,20 +67,28 @@
       "rows": 255
     },
     "stage2-approved-candidates.csv": {
-      "sha256": "0e8bccc1f683a6a3a59c7200586b7a102a9bfd00ddb5a17b6982afb912c66486",
-      "rows": 98
+      "sha256": "04a48ba553276273bce45020ac659d0c7508d8eaf8470c9ac07f7aa351b6b42b",
+      "rows": 102
     },
     "r6-review.csv": {
       "sha256": "5c1603aa30d3b546ffde12435d116b4dc5efbebee4dd0ab556a9900a1ec33ff0",
       "rows": 4
     },
-    "stage2-authorization-manifest-template.csv": {
-      "sha256": "93909c1996ff949fb50d95c16daa5f6598444c8fe5f5f2149aad5255448711a5",
+    "stage2-immutable-basis.json": {
+      "sha256": "751d9b04ac3695da82821af311a20de7b45fd8bcfd7633f4cd4eb813793bf271",
       "rows": 189
     },
-    "stage2-test-authorization-manifest.csv": {
-      "sha256": "0ff013d452e4893d018fe9bea79b49a5ecc91a85f738812fd70528c1df273dd2",
-      "rows": 189
+    "stage2-test-decisions.json": {
+      "sha256": "c38d19f3e21772fb61fb36177969a15b9eeae4c0d30280d7d8fcf140cdb87afe",
+      "rows": 98
+    },
+    "stage2-authorization-manifest-template.json": {
+      "sha256": "3bee90c164c7c2267b171abd9ec869afb0b8b38e3f622b3a10f131d7c4cfb81d",
+      "rows": 0
+    },
+    "stage2-rehearsal-authorization-manifest.json": {
+      "sha256": "940e9021d7a67a1ad4892e9712c35af0848fe85924a4a693baee01149e0bf7c4",
+      "rows": 98
     }
   }
 }

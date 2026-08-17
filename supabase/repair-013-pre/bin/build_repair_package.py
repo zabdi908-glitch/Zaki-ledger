@@ -6,9 +6,60 @@ the accepted production snapshot inventories captured 2026-08-16 (see
 docs/RECONCILIATION_HISTORICAL_REPAIR_DESIGN_REPORT.md §2–§9).
 
 This script is READ-ONLY with respect to any database: it consumes the
-snapshot JSONs under --snapshot-dir and never opens a network connection.
+snapshot JSONs under --snapshot-dir (only for regeneration/verification) and
+the committed manifests under manifests/, and never opens a network
+connection.
 
-The accepted classification is fixed and validated on every build:
+AUTHORIZATION MODEL (hardened):
+
+  The accountant's stage-2 authorization is a DECISION OVER an immutable
+  committed basis. The committed basis
+  (manifests/stage2-immutable-basis.json) fixes, for each of the 102
+  decision-permitted candidate rows and the 87 survivor-guard rows: match id,
+  QB/bank/statement ids, tenant/user/client/book ids, practice id, amounts,
+  dates, description fingerprints, approval stamps, class, reason, action,
+  evidence summary, the PERMITTED survivor set, and the PERMITTED decision
+  set. The authorization manifest contains ONLY decision fields
+  (match_id, decision, accountant identity, confirmation timestamp, optional
+  note). The builder validates every decision against the committed basis:
+
+    - decision match_id must exist in the basis and be decision-permitted;
+    - decision must be an element of the row's permitted decision set;
+    - the surviving row for an authorized retirement comes from the basis
+      (permitted survivor set), never from the manifest;
+    - reason, action, class, QB/bank/statement ids, fingerprints, and all
+      accounting identity come from the basis, never from the manifest;
+    - no more than one member of an R6 pair may retire;
+    - every decision's confirmation_timestamp must not predate the recorded
+      stage-1 execution (the stage-1 checkpoint precedes stage-2
+      authorization);
+    - unknown manifest keys (including any attempt to smuggle legacy
+      identity/reason/survivor/action/class columns) are rejected.
+
+  Counts are never sufficient.
+
+ENVIRONMENT-MODE BARRIER:
+
+  Every generated artifact carries environment_mode = REHEARSAL or
+  PRODUCTION, bound into the SQL (a hard identity gate executed inside the
+  repair transaction), the audit evidence, and the artifact identity hash.
+  REHEARSAL artifacts execute only against the scratch restore database
+  `repair_drill`; PRODUCTION artifacts execute only against database
+  `postgres` on PostgreSQL 17 with the session GUC
+  zaki.repair_project_ref = fqvekbzwghjurkcawpgg. Rehearsal manifests are
+  refused by PRODUCTION builds, and vice versa.
+
+STAGE-2 FREEZE:
+
+  Production (and rehearsal) execution uses the `freeze` subcommand: it
+  builds the exact SQL artifact from the committed basis + the signed
+  authorization manifest + the stage-1 execution proof, writes it to a unique
+  immutable path (overwrite refused), records its SHA-256 and identity in a
+  freeze record, and the runner executes only a hash-verified frozen
+  artifact. `verify --artifact <freeze.json>` independently re-proves the
+  frozen bytes before execution.
+
+Accepted classification (validated on every build):
 
   R2: 14 endpoints / 28 rows (14 approved, 14 unapproved)
   R3: 87 endpoints / 310 rows (180 approved, 130 unapproved)
@@ -23,26 +74,45 @@ The accepted classification is fixed and validated on every build:
 
 Subcommands:
 
-  manifests  Write manifests/*.csv + manifests/manifest-identities.json.
-  sql        Write 14a-stage1-unapproved-repair.sql and
-             14b-stage2-approved-repair.sql. 14b is emitted from the
-             authorization manifest (default: the committed REHEARSAL-ONLY
-             test manifest). The SQL embeds the exact manifest rows and the
-             manifest SHA-256, so any manifest change requires regeneration.
-  verify     Recompute hashes and cross-check counts, CSVs, and the emitted
-             SQL (including that the SQL's embedded manifest hash matches the
-             manifest file on disk). Exits non-zero on any mismatch.
+  manifests  Write the committed manifests from the snapshot: duplicate
+             endpoints, stage-1 targets+guards, the stage-2 immutable basis
+             and candidate inventory, the R6 review rows, the test-decisions
+             list, the authorization-manifest template, and the REHEARSAL
+             test authorization manifest, plus manifest-identities.json.
+  sql        REHEARSAL-ONLY regeneration of the committed 14a/14b working
+             copies. --auth-manifest is REQUIRED (no default — missing
+             authorization input fails closed).
+  freeze     Build an immutable execution artifact (stage 1 or stage 2) +
+             freeze record. Stage 2 requires --auth-manifest,
+             --stage1-artifact, and --stage1-execution-proof. PRODUCTION
+             mode requires --project-ref fqvekbzwghjurkcawpgg. Overwrite is
+             refused.
+  verify     Package consistency: manifest hashes, snapshot provenance,
+             classification re-derivation, committed SQL byte-identity with
+             regeneration (--auth-manifest REQUIRED for the stage-2 binding).
+             verify --artifact <freeze.json> independently re-proves a
+             frozen artifact (SHA-256, embedded identity, gates, binding).
+  rehearsal-manifest  Generate a REHEARSAL authorization manifest for the
+             rehearsal chain from the committed test-decisions list, stamped
+             with a fresh confirmation timestamp (post-stage-1 by
+             construction).
 
 Usage:
 
   python3 bin/build_repair_package.py manifests --snapshot-dir /tmp/zaki-repair-design
-  python3 bin/build_repair_package.py sql
-  python3 bin/build_repair_package.py verify
-  python3 bin/build_repair_package.py sql --auth-manifest <signed.csv>   # production window
+  python3 bin/build_repair_package.py sql --auth-manifest manifests/stage2-rehearsal-authorization-manifest.json
+  python3 bin/build_repair_package.py verify --auth-manifest manifests/stage2-rehearsal-authorization-manifest.json
+  python3 bin/build_repair_package.py freeze --stage 1 --environment-mode REHEARSAL --out-dir artifacts
+  python3 bin/build_repair_package.py freeze --stage 2 --environment-mode PRODUCTION \
+      --auth-manifest <signed.json> --stage1-artifact <frozen-14a.sql> \
+      --stage1-execution-proof <proof.json> --project-ref fqvekbzwghjurkcawpgg \
+      --out-dir <window-artifacts>
+  python3 bin/build_repair_package.py verify --artifact artifacts/freeze-14b-*.json
 """
 
 import argparse
 import csv
+import datetime
 import hashlib
 import json
 import sys
@@ -57,13 +127,23 @@ SQL_STAGE1 = ROOT / "14a-stage1-unapproved-repair.sql"
 SQL_STAGE2 = ROOT / "14b-stage2-approved-repair.sql"
 PREP_SQL = ROOT / "13-repair-prep.sql"
 
+BASIS_PATH = MANIFEST_DIR / "stage2-immutable-basis.json"
+TEST_DECISIONS_PATH = MANIFEST_DIR / "stage2-test-decisions.json"
+AUTH_TEMPLATE_PATH = MANIFEST_DIR / "stage2-authorization-manifest-template.json"
+REHEARSAL_MANIFEST_PATH = (
+    MANIFEST_DIR / "stage2-rehearsal-authorization-manifest.json"
+)
+
 # ---------------------------------------------------------------------------
 # Fixed package constants
 # ---------------------------------------------------------------------------
 
 # Fixed per-package-release operation ids. Semantic idempotency is keyed on
 # these: a re-run proves its exact targets already carry THIS operation id;
-# rows superseded by any other operation id abort the run.
+# rows superseded by any other operation id abort the run. The ids are
+# IDENTICAL for rehearsal and production so a rehearsal run proves the exact
+# production semantics; the environment mode is bound into the artifact
+# identity and the audit evidence instead (see ARTIFACT identity below).
 STAGE1_OPERATION_ID = "0a1a1a01-4a5e-4b1a-8c01-013000000001"
 STAGE2_OPERATION_ID = "0a1a1a01-4a5e-4b1a-8c01-013000000002"
 
@@ -73,6 +153,18 @@ ADVISORY_LOCK = "0x5A414B49"
 
 STAGE1_ACTOR = "zaki-repair-stage1-system"
 AUDIT_ACTION = "match_repair_superseded"
+
+# Environment-mode barrier (mechanical, not a warning).
+MODES = ("REHEARSAL", "PRODUCTION")
+PROD_PROJECT_REF = "fqvekbzwghjurkcawpgg"
+REHEARSAL_DB = "repair_drill"
+PROD_DB = "postgres"
+PROD_SERVER_VERSION_PREFIX = "17"
+PROJECT_REF_GUC = "zaki.repair_project_ref"
+MODE_GATE_REHEARSAL_MARK = "REHEARSAL artifact refuses database identity"
+MODE_GATE_PRODUCTION_MARK = (
+    "PRODUCTION artifact requires the exact production database identity"
+)
 
 # Snapshot classification constants (accepted — see the design report).
 TEST_QB_IDS = {
@@ -86,9 +178,11 @@ EXPECTED = {
     "endpoints": {"R2": 14, "R3": 87, "R5": 2, "R6": 4, "R7": 0},
     "rows": {"R2": (14, 14), "R3": (180, 130), "R5": (1, 4), "R6": (8, 6)},
     "stage1_targets": 154,
-    "stage2_candidates": 98,
-    "stage2_guards": 91,   # 87 R3 exact survivors + 4 R6 keep rows
-    "stage1_guards": 101,  # 14 R2 approved survivors + 87 R3 exact survivors
+    "stage1_guards": 101,          # 14 R2 approved survivors + 87 R3 exact survivors
+    "stage2_candidates": 102,      # decision-permitted basis rows: 93 R3 + 1 R5 + 8 R6 pair members
+    "stage2_retireable": 98,       # full-repair retirement population (93 R3 + 1 R5 + 4 R6)
+    "stage2_guards": 87,           # R3 exact survivors (R6 keep rows are candidates now)
+    "stage2_basis_rows": 189,      # 102 candidates + 87 guards
     "total_matches": 573,
     "total_approved": 409,
     "total_manual": 0,
@@ -107,7 +201,9 @@ REASONS = {
     ("R6", "approved", 2): "conflicting_approved_duplicate_evidence",
 }
 
-# Fixed rehearsal constants for the committed TEST authorization manifest.
+PERMITTED_DECISIONS = ["RETIRE", "DO_NOT_REPAIR"]
+
+# Fixed rehearsal constants for the committed test authorization manifest.
 TEST_ACCOUNTANT = "rehearsal-test-accountant"
 TEST_CONFIRMATION_TS = "2026-08-17T00:00:00+00:00"
 
@@ -183,12 +279,56 @@ def sha256_file(path):
     return h.hexdigest()
 
 
+def sha256_text(text):
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
 def fmt_amount(v):
     return f"{float(v):.2f}"
 
 
 def fmt_confidence(v):
     return f"{float(v):.4f}".rstrip("0").rstrip(".")
+
+
+def parse_iso_ts(text):
+    """ISO-8601 timestamptz with possible 'Z'; returns datetime (aware)."""
+    if text is None:
+        raise SystemExit("missing ISO timestamp")
+    t = str(text).strip()
+    if t.endswith("Z"):
+        t = t[:-1] + "+00:00"
+    return datetime.datetime.fromisoformat(t)
+
+
+def artifact_identity_stage1(mode, stage1_manifest_sha, basis_sha, project_ref):
+    return sha256_text(
+        "|".join([
+            STAGE1_OPERATION_ID,
+            mode,
+            stage1_manifest_sha,
+            basis_sha,
+            project_ref or "-",
+        ])
+    )
+
+
+def artifact_identity_stage2(mode, stage1_manifest_sha, basis_sha,
+                             auth_manifest_sha, stage1_artifact_sha,
+                             proof_sha, project_ref):
+    return sha256_text(
+        "|".join([
+            STAGE1_OPERATION_ID,
+            STAGE2_OPERATION_ID,
+            mode,
+            stage1_manifest_sha,
+            basis_sha,
+            auth_manifest_sha,
+            stage1_artifact_sha,
+            proof_sha,
+            project_ref or "-",
+        ])
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -293,8 +433,9 @@ def evidence_summary(m, ep, cls, survivor_id, stage):
         )
     if cls == "R6" and stage == 2:
         return (
-            f"identical-evidence approved pair on QB '{qb_desc}'; proposal keeps "
-            f"{survivor_id} (earliest statement upload) — HUMAN DECISION REQUIRED"
+            f"identical-evidence approved pair on QB '{qb_desc}'; accountant "
+            f"selects which side (if any) retires; permitted survivor for this "
+            f"row is {survivor_id}"
         )
     raise SystemExit(f"unhandled class/stage {cls}/{stage}")
 
@@ -338,13 +479,20 @@ def core_row(m, ep, role, cls, stage, survivor_id, reason, action):
 
 
 def build_rows(snapshot):
-    """Returns (stage1_rows, stage2_candidates, dup_endpoints,
-                dup_after_stage1, r6_rows)."""
+    """Returns (stage1_targets, stage1_guards, stage2_candidates,
+                stage2_guards, dup_endpoints, dup_after_stage1, r6_rows).
+
+    stage2_candidates contains the 102 decision-permitted basis rows
+    (93 R3 non-exact approved + 1 R5 approved + 8 R6 pair members, BOTH
+    sides of each pair); stage2_guards contains the 87 R3 exact survivors
+    (never decision-permitted). Permitted survivor/decision sets are derived
+    below at serialization time.
+    """
     endpoint_class, by_qb, endpoints = classify(snapshot)
     audit_by_match = audit_events_by_match(snapshot)
 
     stage1_targets, stage1_guards = [], []
-    stage2_targets, stage2_guards = [], []
+    stage2_candidates, stage2_guards = [], []
     dup_endpoints, dup_after_stage1 = [], []
     r6_rows = []
 
@@ -419,13 +567,13 @@ def build_rows(snapshot):
                 "qb_transaction_id": qb_id,
                 "resolved_by_stage1": True,
             })
-            # Stage 2: the one approved test row.
+            # Stage 2: the one approved test row (no survivor).
             for m in sorted(app, key=lambda x: x["match_id"]):
                 row = core_row(
-                    m, ep, "target", cls, 2, None,
+                    m, ep, "candidate", cls, 2, None,
                     REASONS[(cls, "approved", 2)], "SUPERSEDE",
                 )
-                stage2_targets.append(row)
+                stage2_candidates.append(row)
             continue
 
         if cls == "R3":
@@ -433,16 +581,17 @@ def build_rows(snapshot):
                 "qb_transaction_id": qb_id,
                 "resolved_by_stage1": False,
             })
-            # Stage 2: every approved non-exact row; survivor = the exact row.
+            # Stage 2: every approved non-exact row; survivor = the exact row
+            # (fixed by the committed basis — never manifest-editable).
             for m in sorted(
                 [m for m in app if m not in exact], key=lambda x: x["match_id"]
             ):
                 row = core_row(
-                    m, ep, "target", cls, 2,
+                    m, ep, "candidate", cls, 2,
                     survivor["match_id"],
                     REASONS[(cls, "approved", 2)], "SUPERSEDE",
                 )
-                stage2_targets.append(row)
+                stage2_candidates.append(row)
             row = core_row(
                 survivor, ep, "survivor_guard", cls, 2,
                 survivor["match_id"], "intended_survivor_guard", "KEEP_LIVE_GUARD",
@@ -460,20 +609,24 @@ def build_rows(snapshot):
                 app, key=lambda x: (str(x["stmt_upload_date"]), x["match_id"])
             )
             keep, retire = app_sorted[0], app_sorted[1]
-            # Proposal only — the accountant's signed decision is what the
-            # executable stage-2 manifest requires (no automatic execution).
+            # BOTH pair members are decision-permitted candidates. The
+            # accountant's decision selects which side (if any) retires; the
+            # permitted survivor for either side is the other member, fixed
+            # by the committed basis. The earliest-upload proposal is
+            # recorded for the human packet only — no default executable
+            # decision exists.
             row = core_row(
-                retire, ep, "target", cls, 2,
+                keep, ep, "candidate", cls, 2,
+                retire["match_id"],
+                REASONS[(cls, "approved", 2)], "SUPERSEDE",
+            )
+            stage2_candidates.append(row)
+            row = core_row(
+                retire, ep, "candidate", cls, 2,
                 keep["match_id"],
                 REASONS[(cls, "approved", 2)], "SUPERSEDE",
             )
-            stage2_targets.append(row)
-            row = core_row(
-                keep, ep, "survivor_guard", cls, 2,
-                keep["match_id"], "intended_survivor_guard", "KEEP_LIVE_GUARD",
-            )
-            row["intended_survivor_match_id"] = ""
-            stage2_guards.append(row)
+            stage2_candidates.append(row)
 
             def ev(rid):
                 for a in audit_by_match.get(rid, []):
@@ -529,34 +682,103 @@ def build_rows(snapshot):
 
     stage1_targets.sort(key=lambda r: r["match_id"])
     stage1_guards.sort(key=lambda r: r["match_id"])
-    stage2_targets.sort(key=lambda r: r["match_id"])
+    stage2_candidates.sort(key=lambda r: r["match_id"])
     stage2_guards.sort(key=lambda r: r["match_id"])
     dup_endpoints.sort(key=lambda r: r["qb_transaction_id"])
     r6_rows.sort(key=lambda r: r["qb_transaction_id"])
 
     assert len(stage1_targets) == EXPECTED["stage1_targets"], len(stage1_targets)
     assert len(stage1_guards) == EXPECTED["stage1_guards"], len(stage1_guards)
-    assert len(stage2_targets) == EXPECTED["stage2_candidates"], len(stage2_targets)
+    assert len(stage2_candidates) == EXPECTED["stage2_candidates"], len(stage2_candidates)
     assert len(stage2_guards) == EXPECTED["stage2_guards"], len(stage2_guards)
+    assert len(stage2_candidates) + len(stage2_guards) == EXPECTED["stage2_basis_rows"]
     assert len(dup_endpoints) == EXPECTED["dup_endpoints"], len(dup_endpoints)
     assert sum(1 for e in dup_after_stage1 if e["resolved_by_stage1"]) == 16
     assert len(dup_after_stage1) == EXPECTED["dup_endpoints"]
     assert len(r6_rows) == 4
+
+    # Full-repair retirement population: 93 R3 + 1 R5 + 4 R6 = 98.
+    assert sum(1 for r in stage2_candidates if r["class"] != "R6") == 94
+    assert EXPECTED["stage2_retireable"] == 98
 
     # Survivors referenced by stage-1 targets must all be guarded.
     guard_ids = {r["match_id"] for r in stage1_guards}
     for r in stage1_targets:
         if r["intended_survivor_match_id"]:
             assert r["intended_survivor_match_id"] in guard_ids
-    guard_ids = {r["match_id"] for r in stage2_guards}
-    for r in stage2_targets:
-        if r["intended_survivor_match_id"]:
-            assert r["intended_survivor_match_id"] in guard_ids
+
+    # R6 pair members reference each other as permitted survivors.
+    candidate_ids = {r["match_id"] for r in stage2_candidates}
+    for r in stage2_candidates:
+        if r["class"] == "R6":
+            assert r["intended_survivor_match_id"] in candidate_ids
+            assert r["intended_survivor_match_id"] != r["match_id"]
 
     return (
-        stage1_targets, stage1_guards, stage2_targets, stage2_guards,
+        stage1_targets, stage1_guards, stage2_candidates, stage2_guards,
         dup_endpoints, dup_after_stage1, r6_rows,
     )
+
+
+# ---------------------------------------------------------------------------
+# Committed-basis assembly (the immutable authorization contract)
+# ---------------------------------------------------------------------------
+
+BASIS_ROW_KEYS = [
+    "match_id", "role", "class", "stage", "reason", "action",
+    "qb_transaction_id", "qb_date", "qb_amount", "qb_description",
+    "qb_description_fp", "qb_ledger_book_id",
+    "bank_transaction_id", "bank_date", "bank_amount", "bank_description",
+    "bank_description_fp", "bank_merchant",
+    "statement_id", "statement_file_name", "statement_upload_date",
+    "statement_ledger_book_id",
+    "user_id", "client_entity_id", "practice_id",
+    "matched_by", "matched_at", "confidence", "flagged_level",
+    "approved_at", "approved_by", "intended_survivor_match_id",
+    "permitted_survivor_match_ids", "permitted_decisions",
+    "evidence_summary",
+]
+
+
+def build_basis_rows(stage2_candidates, stage2_guards):
+    """Assemble the committed basis document rows.
+
+    Candidates carry their permitted survivor set and permitted decision
+    set; guards are never decision-permitted.
+    """
+    rows = []
+    for r in stage2_candidates:
+        row = {k: r.get(k, "") for k in BASIS_ROW_KEYS}
+        row["permitted_survivor_match_ids"] = (
+            [r["intended_survivor_match_id"]]
+            if r["intended_survivor_match_id"]
+            else []
+        )
+        row["permitted_decisions"] = list(PERMITTED_DECISIONS)
+        rows.append(row)
+    for r in stage2_guards:
+        row = {k: r.get(k, "") for k in BASIS_ROW_KEYS}
+        row["permitted_survivor_match_ids"] = []
+        row["permitted_decisions"] = []
+        rows.append(row)
+    rows.sort(key=lambda r: (r["role"], r["match_id"]))
+    return rows
+
+
+def basis_document(basis_rows):
+    return {
+        "package": "repair-013-pre",
+        "basis_schema_version": 1,
+        "stage1_operation_id": STAGE1_OPERATION_ID,
+        "stage2_operation_id": STAGE2_OPERATION_ID,
+        "rows": basis_rows,
+    }
+
+
+def write_json(path, doc):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(doc, f, indent=2)
+        f.write("\n")
 
 
 # ---------------------------------------------------------------------------
@@ -577,9 +799,8 @@ CORE_HEADER = [
     "evidence_summary",
 ]
 
-AUTH_HEADER = [
-    "accountant_decision", "accountant_identity", "confirmation_timestamp",
-    "authorization_status",
+CANDIDATES_HEADER = CORE_HEADER + [
+    "permitted_survivor_match_ids", "permitted_decisions",
 ]
 
 DUP_ENDPOINTS_HEADER = [
@@ -626,93 +847,304 @@ def read_csv(path):
         return list(csv.DictReader(f))
 
 
-def cmd_manifests(snapshot_dir, out_dir):
-    snap = load_snapshot(snapshot_dir)
-    (s1t, s1g, s2t, s2g, dup_eps, dup_after_s1, r6) = build_rows(snap)
+# ---------------------------------------------------------------------------
+# Authorization manifest (thin, decision-only)
+# ---------------------------------------------------------------------------
 
-    out = Path(out_dir)
-    out.mkdir(parents=True, exist_ok=True)
+MANIFEST_TOP_KEYS = {
+    "package", "manifest_schema_version", "environment_mode",
+    "basis_sha256", "decisions",
+}
+DECISION_KEYS = {
+    "match_id", "decision", "accountant_identity", "confirmation_timestamp",
+    "note",
+}
 
-    # 1. Duplicate-endpoint inventory (107 rows).
-    write_csv(out / "duplicate-endpoints.csv", DUP_ENDPOINTS_HEADER, dup_eps)
 
-    # 2. Stage-1 manifest: 154 targets + 101 survivor guards.
-    write_csv(
-        out / "stage1-unapproved-targets.csv",
-        CORE_HEADER, s1t + s1g,
-    )
+def build_test_decisions(r6_rows, stage2_candidates):
+    """The fixed REHEARSAL test choices: RETIRE the 94 fixed candidates and
+    the 4 R6 retire-proposal members (earliest-upload proposal). Committed
+    and hash-locked; stamped with a fresh confirmation timestamp by the
+    rehearsal chain at run time."""
+    by_id = {r["match_id"]: r for r in stage2_candidates}
+    retire_ids = {r["retire_candidate_match_id"] for r in r6_rows}
+    choices = []
+    for r in stage2_candidates:
+        if r["class"] != "R6" or r["match_id"] in retire_ids:
+            choices.append({
+                "match_id": r["match_id"],
+                "decision": "RETIRE",
+                "note": "REHEARSAL test choice (committed test-decisions list)",
+            })
+    choices.sort(key=lambda d: d["match_id"])
+    assert len(choices) == EXPECTED["stage2_retireable"], len(choices)
+    return choices
 
-    # 3. Stage-2 candidate inventory (98 rows, no decisions).
-    write_csv(
-        out / "stage2-approved-candidates.csv",
-        CORE_HEADER, s2t,
-    )
 
-    # 4. R6 human-review rows (4 endpoints).
-    write_csv(out / "r6-review.csv", R6_HEADER, r6)
-
-    # 5. Stage-2 authorization manifest TEMPLATE (empty decision columns).
-    template = [dict(r) for r in s2t] + [dict(r) for r in s2g]
-    for r in template:
-        for c in AUTH_HEADER:
-            r[c] = ""
-        if r["role"] == "target":
-            r["authorization_status"] = "PENDING"
-    write_csv(
-        out / "stage2-authorization-manifest-template.csv",
-        CORE_HEADER + AUTH_HEADER, template,
-    )
-
-    # 6. REHEARSAL-ONLY test authorization manifest (all 98 signed with a
-    #    clearly marked test identity).
-    test = [dict(r) for r in s2t] + [dict(r) for r in s2g]
-    for r in test:
-        if r["role"] == "target":
-            r["accountant_decision"] = "RETIRE"
-            r["accountant_identity"] = TEST_ACCOUNTANT
-            r["confirmation_timestamp"] = TEST_CONFIRMATION_TS
-            r["authorization_status"] = "APPROVED_FOR_RETIREMENT"
-        else:
-            for c in AUTH_HEADER:
-                r[c] = ""
-    write_csv(
-        out / "stage2-test-authorization-manifest.csv",
-        CORE_HEADER + AUTH_HEADER, test,
-    )
-
-    # 7. Identity registry.
-    files = [
-        "duplicate-endpoints.csv",
-        "stage1-unapproved-targets.csv",
-        "stage2-approved-candidates.csv",
-        "r6-review.csv",
-        "stage2-authorization-manifest-template.csv",
-        "stage2-test-authorization-manifest.csv",
-    ]
-    identities = {
-        "package": {
-            "stage1_operation_id": STAGE1_OPERATION_ID,
-            "stage2_operation_id": STAGE2_OPERATION_ID,
-            "snapshot_provenance": {
-                name: {"sha256": h} for name, h in snap["hashes"].items()
-            },
-            "accepted_classification": EXPECTED,
-        },
-        "manifests": {
-            name: {
-                "sha256": sha256_file(out / name),
-                "rows": len(read_csv(out / name)),
-            }
-            for name in files
-        },
+def auth_manifest_document(basis_sha, mode, decisions):
+    return {
+        "package": "repair-013-pre",
+        "manifest_schema_version": 1,
+        "environment_mode": mode,
+        "basis_sha256": basis_sha,
+        "decisions": decisions,
     }
-    with open(out / "manifest-identities.json", "w", encoding="utf-8") as f:
-        json.dump(identities, f, indent=2)
-        f.write("\n")
 
-    print(f"manifests written to {out}")
-    for name, meta in identities["manifests"].items():
-        print(f"  {name}: {meta['rows']} rows  sha256={meta['sha256'][:16]}…")
+
+def validate_auth_manifest(path, mode, proof=None):
+    """Validate the thin authorization manifest against the COMMITTED basis.
+
+    Returns (decisions, manifest_sha). Raises SystemExit on any deviation —
+    the manifest is a decision over the basis, never a redefinition of it.
+    """
+    manifest_path = Path(path)
+    try:
+        data = json.load(open(manifest_path, encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        raise SystemExit(f"authorization manifest unreadable: {e}")
+
+    if not isinstance(data, dict):
+        raise SystemExit("authorization manifest must be a JSON object")
+    unknown = set(data.keys()) - MANIFEST_TOP_KEYS
+    if unknown:
+        raise SystemExit(
+            f"authorization manifest contains unknown top-level keys "
+            f"{sorted(unknown)} — accounting identity cannot be redefined "
+            f"by the manifest"
+        )
+    for key in MANIFEST_TOP_KEYS:
+        if key not in data:
+            raise SystemExit(f"authorization manifest missing key '{key}'")
+
+    if data["environment_mode"] != mode:
+        raise SystemExit(
+            f"authorization manifest mode {data['environment_mode']!r} does "
+            f"not match the requested mode {mode!r}"
+        )
+    if data["manifest_schema_version"] != 1:
+        raise SystemExit("unsupported authorization manifest schema version")
+
+    basis = load_committed_basis()
+    basis_sha = sha256_file(BASIS_PATH)
+    if data["basis_sha256"] != basis_sha:
+        raise SystemExit(
+            f"authorization manifest basis_sha256 {data['basis_sha256']} "
+            f"does not match the committed basis {basis_sha} — the manifest "
+            f"was built against a different accounting identity"
+        )
+
+    basis_by_id = {r["match_id"]: r for r in basis["rows"]}
+    decisions = data.get("decisions")
+    if not isinstance(decisions, list):
+        raise SystemExit("manifest 'decisions' must be a list")
+
+    seen = set()
+    n_exec = 0
+    for i, d in enumerate(decisions):
+        if not isinstance(d, dict):
+            raise SystemExit(f"decision {i} is not an object")
+        unknown = set(d.keys()) - DECISION_KEYS
+        if unknown:
+            raise SystemExit(
+                f"decision for {d.get('match_id', i)} contains unknown keys "
+                f"{sorted(unknown)} — identity/reason/action/class/survivor "
+                f"columns cannot be redefined by the authorization manifest"
+            )
+        match_id = d.get("match_id")
+        if not match_id or match_id in seen:
+            raise SystemExit(f"decision {i}: missing or duplicate match_id")
+        seen.add(match_id)
+        row = basis_by_id.get(match_id)
+        if row is None:
+            raise SystemExit(
+                f"decision references match_id {match_id} which is not part "
+                f"of the committed stage-2 basis (arbitrary target "
+                f"replacement rejected)"
+            )
+        if row["role"] != "candidate":
+            raise SystemExit(
+                f"match_id {match_id} is a committed survivor guard — "
+                f"candidate/survivor reversal is rejected"
+            )
+        decision = d.get("decision")
+        if decision not in row["permitted_decisions"]:
+            raise SystemExit(
+                f"decision {decision!r} for {match_id} is outside the "
+                f"permitted decision set {row['permitted_decisions']} of the "
+                f"committed basis"
+            )
+        identity = (d.get("accountant_identity") or "").strip()
+        ts = (d.get("confirmation_timestamp") or "").strip()
+        if not identity or not ts:
+            raise SystemExit(
+                f"decision for {match_id} lacks accountant_identity or "
+                f"confirmation_timestamp"
+            )
+        try:
+            parsed_ts = parse_iso_ts(ts)
+        except ValueError as e:
+            raise SystemExit(
+                f"decision for {match_id} has an invalid "
+                f"confirmation_timestamp {ts!r}: {e}"
+            )
+        if proof is not None:
+            if parsed_ts < proof["executed_at"]:
+                raise SystemExit(
+                    f"decision for {match_id} has confirmation_timestamp "
+                    f"{ts} earlier than the recorded stage-1 execution "
+                    f"{proof['executed_at_iso']} — stage-2 authorization "
+                    f"must follow the stage-1 checkpoint"
+                )
+        if decision == "RETIRE":
+            n_exec += 1
+
+    # R6 pairs: at most one member may retire.
+    r6_retired = defaultdict(list)
+    for d in decisions:
+        if d.get("decision") != "RETIRE":
+            continue
+        row = basis_by_id[d["match_id"]]
+        if row["class"] == "R6":
+            r6_retired[row["qb_transaction_id"]].append(d["match_id"])
+    for qb_id, ids in r6_retired.items():
+        if len(ids) > 1:
+            raise SystemExit(
+                f"R6 endpoint {qb_id} authorizes BOTH pair members for "
+                f"retirement ({', '.join(ids)}) — the survivor must remain"
+            )
+
+    # Authorized retirees reference only their basis survivor (which must be
+    # guarded: present in the basis rows).
+    for d in decisions:
+        if d.get("decision") != "RETIRE":
+            continue
+        row = basis_by_id[d["match_id"]]
+        survivor = row.get("intended_survivor_match_id") or ""
+        permitted = row.get("permitted_survivor_match_ids") or []
+        if survivor and survivor not in permitted:
+            raise SystemExit(
+                f"internal basis inconsistency: survivor {survivor} for "
+                f"{d['match_id']} not in its permitted survivor set"
+            )
+        if survivor and survivor not in basis_by_id:
+            raise SystemExit(
+                f"basis survivor {survivor} for {d['match_id']} is not part "
+                f"of the committed basis"
+            )
+
+    manifest_sha = sha256_file(manifest_path)
+    return decisions, manifest_sha
+
+
+def load_committed_basis():
+    try:
+        doc = json.load(open(BASIS_PATH, encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        raise SystemExit(f"committed basis unreadable: {e}")
+    if doc.get("basis_schema_version") != 1:
+        raise SystemExit("unsupported committed basis schema version")
+    rows = doc.get("rows")
+    if not isinstance(rows, list) or len(rows) != EXPECTED["stage2_basis_rows"]:
+        raise SystemExit(
+            f"committed basis row count {len(rows) if isinstance(rows, list) else 'n/a'} "
+            f"!= {EXPECTED['stage2_basis_rows']}"
+        )
+    return doc
+
+
+def load_committed_package():
+    """Load everything the SQL emitter needs from COMMITTED files only."""
+    s1 = read_csv(MANIFEST_DIR / "stage1-unapproved-targets.csv")
+    s1t = [r for r in s1 if r["role"] == "target"]
+    s1g = [r for r in s1 if r["role"] == "survivor_guard"]
+    if len(s1t) != EXPECTED["stage1_targets"] or len(s1g) != EXPECTED["stage1_guards"]:
+        raise SystemExit("committed stage-1 manifest has unexpected role counts")
+
+    dup_eps = read_csv(MANIFEST_DIR / "duplicate-endpoints.csv")
+    if len(dup_eps) != EXPECTED["dup_endpoints"]:
+        raise SystemExit("committed duplicate-endpoint inventory has unexpected size")
+    dup_after_s1 = [
+        {
+            "qb_transaction_id": r["qb_transaction_id"],
+            "resolved_by_stage1": r["class"] in ("R2", "R5"),
+        }
+        for r in dup_eps
+    ]
+    if sum(1 for e in dup_after_s1 if e["resolved_by_stage1"]) != 16:
+        raise SystemExit("committed duplicate-endpoint inventory resolution map drifted")
+
+    basis = load_committed_basis()
+    s2c = [r for r in basis["rows"] if r["role"] == "candidate"]
+    s2g = [r for r in basis["rows"] if r["role"] == "survivor_guard"]
+    if len(s2c) != EXPECTED["stage2_candidates"] or len(s2g) != EXPECTED["stage2_guards"]:
+        raise SystemExit("committed basis has unexpected role counts")
+    # SQL temp-table key names: candidates carry their committed basis
+    # survivor under `survivor_id`.
+    for r in s2c:
+        r["survivor_id"] = r.get("intended_survivor_match_id") or ""
+
+    stage1_manifest_sha = sha256_file(MANIFEST_DIR / "stage1-unapproved-targets.csv")
+    basis_sha = sha256_file(BASIS_PATH)
+    return {
+        "s1t": s1t, "s1g": s1g, "dup_eps": dup_eps,
+        "dup_after_s1": dup_after_s1, "s2c": s2c, "s2g": s2g,
+        "stage1_manifest_sha": stage1_manifest_sha, "basis_sha": basis_sha,
+        "basis_rows": basis["rows"],
+    }
+
+
+def load_stage1_proof(path, mode, stage1_artifact_path):
+    """Validate the stage-1 execution proof record for a stage-2 build."""
+    proof_path = Path(path)
+    try:
+        proof = json.load(open(proof_path, encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        raise SystemExit(f"stage-1 execution proof unreadable: {e}")
+    if proof.get("proof_schema_version") != 1:
+        raise SystemExit("unsupported stage-1 execution proof schema version")
+    if proof.get("stage") != 1:
+        raise SystemExit("stage-2 build requires a STAGE-1 execution proof")
+    if proof.get("environment_mode") != mode:
+        raise SystemExit(
+            f"stage-1 execution proof mode {proof.get('environment_mode')!r} "
+            f"does not match the requested mode {mode!r}"
+        )
+    if proof.get("result") not in ("APPLIED", "NOOP"):
+        raise SystemExit("stage-1 execution proof records no completed run")
+    artifact_sha = proof.get("artifact_sha256") or ""
+    if not artifact_sha or artifact_sha != sha256_file(stage1_artifact_path):
+        raise SystemExit(
+            "stage-1 execution proof artifact_sha256 does not match the "
+            "supplied --stage1-artifact file — the proof was produced by a "
+            "different artifact"
+        )
+    try:
+        executed_at = parse_iso_ts(proof.get("executed_at"))
+    except (SystemExit, ValueError):
+        raise SystemExit("stage-1 execution proof has no valid executed_at")
+    return {
+        "record": proof,
+        "executed_at": executed_at,
+        "executed_at_iso": str(proof.get("executed_at")),
+        "artifact_sha256": artifact_sha,
+    }
+
+
+def check_stage1_artifact_content(stage1_artifact_path, mode):
+    """The stage-1 artifact the operator ran must be a real stage-1 artifact
+    of this package in the matching mode."""
+    content = Path(stage1_artifact_path).read_text(encoding="utf-8")
+    if STAGE1_OPERATION_ID not in content:
+        raise SystemExit(
+            "supplied stage-1 artifact does not contain the stage-1 "
+            "operation id of this package"
+        )
+    mark = MODE_GATE_REHEARSAL_MARK if mode == "REHEARSAL" else MODE_GATE_PRODUCTION_MARK
+    if mark not in content:
+        raise SystemExit(
+            f"supplied stage-1 artifact does not carry the {mode} "
+            f"environment-mode gate"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -735,13 +1167,13 @@ def sql_values(header, rows):
 
 
 def manifest_row_values(rows):
-    # Order rows: targets first then guards, each sorted by match_id — the
-    # same order the CSV carries.
     return sql_values(CORE_HEADER, rows)
 
 
-def auth_row_values(rows):
-    return sql_values(CORE_HEADER + AUTH_HEADER, rows)
+def candidate_row_values(rows):
+    cols = ["match_id", "class", "reason", "approved_at", "approved_by",
+            "confidence", "survivor_id"]
+    return sql_values(cols, rows)
 
 
 def endpoint_values(rows):
@@ -753,56 +1185,261 @@ def qb_id_values(rows):
     return sql_values(["qb_transaction_id"], rows)
 
 
-def stage1_sql(s1t, s1g, dup_eps, dup_after_s1, manifest_sha):
-    s1 = f"""-- =============================================================================
--- ZAKI-REPAIR-013-PRE — STAGE 1: UNAPPROVED-ROW REPAIR (exact-ID, manifest-bound)
+def stage1_id_values(s1t):
+    return sql_values(["match_id"], [{"match_id": r["match_id"]} for r in s1t])
+
+
+def stage2_endpoint_values(rows):
+    return sql_values(
+        ["qb_transaction_id", "still_duplicate"],
+        [
+            {
+                "qb_transaction_id": r["qb_transaction_id"],
+                "still_duplicate": r["still_duplicate"],
+            }
+            for r in rows
+        ],
+    )
+
+
+# Evidence JSON shapes shared by the apply INSERTs and the exact no-op
+# verification. Both derive from the same temp-manifest columns, so the
+# applied rows and the re-verified rows are identical by construction.
+def _previous_state_sql():
+    return (
+        "jsonb_build_object(\n"
+        "       'approved_at', t.approved_at,\n"
+        "       'approved_by', t.approved_by,\n"
+        "       'confidence', t.confidence,\n"
+        "       'matched_by', t.matched_by,\n"
+        "       'flagged_level', t.flagged_level,\n"
+        "       'superseded_at', NULL,\n"
+        "       'superseded_by_match_id', NULL,\n"
+        "       'supersede_reason', NULL,\n"
+        "       'supersede_operation_id', NULL)"
+    )
+
+
+def _resulting_state_sql(stage_op):
+    return (
+        "jsonb_build_object(\n"
+        "       'approved_at', t.approved_at,\n"
+        "       'approved_by', t.approved_by,\n"
+        "       'confidence', t.confidence,\n"
+        "       'matched_by', t.matched_by,\n"
+        "       'flagged_level', t.flagged_level,\n"
+        "       'superseded_at', m.superseded_at,\n"
+        "       'superseded_by_match_id', t.survivor_id,\n"
+        "       'supersede_reason', t.reason,\n"
+        f"       'supersede_operation_id', '{stage_op}')"
+    )
+
+
+def _evidence_s1_sql(stage1_manifest_sha, basis_sha, mode, artifact_identity):
+    return (
+        "jsonb_build_object(\n"
+        "       'stage', '1',\n"
+        "       'class', t.class,\n"
+        "       'reason', t.reason,\n"
+        "       'old_match_id', t.match_id,\n"
+        "       'survivor_match_id', t.survivor_id,\n"
+        "       'previous_approved_at', t.approved_at,\n"
+        "       'previous_approved_by', t.approved_by,\n"
+        "       'previous_confidence', t.confidence,\n"
+        f"       'stage1_manifest_sha256', '{stage1_manifest_sha}',\n"
+        f"       'stage2_basis_sha256', '{basis_sha}',\n"
+        f"       'environment_mode', '{mode}',\n"
+        f"       'artifact_identity', '{artifact_identity}')"
+    )
+
+
+def _evidence_s2_sql(auth_manifest_sha, basis_sha, stage1_artifact_sha,
+                     proof_sha, mode, artifact_identity):
+    return (
+        "jsonb_build_object(\n"
+        "       'stage', '2',\n"
+        "       'class', t.class,\n"
+        "       'reason', t.reason,\n"
+        "       'old_match_id', t.match_id,\n"
+        "       'survivor_match_id', t.survivor_id,\n"
+        "       'previous_approved_at', t.approved_at,\n"
+        "       'previous_approved_by', t.approved_by,\n"
+        "       'previous_confidence', t.confidence,\n"
+        "       'accountant_decision', t.accountant_decision,\n"
+        "       'accountant_identity', t.accountant_identity,\n"
+        "       'confirmation_timestamp', t.confirmation_timestamp,\n"
+        "       'authorization_status', t.authorization_status,\n"
+        "       'accountant_note', t.accountant_note,\n"
+        f"       'stage1_artifact_sha256', '{stage1_artifact_sha}',\n"
+        f"       'stage1_execution_proof_sha256', '{proof_sha}',\n"
+        f"       'stage2_basis_sha256', '{basis_sha}',\n"
+        f"       'authorization_manifest_sha256', '{auth_manifest_sha}',\n"
+        f"       'environment_mode', '{mode}',\n"
+        f"       'artifact_identity', '{artifact_identity}')"
+    )
+
+
+# Exact-evidence audit verification predicate (Phase 8). Used both by the
+# dispatcher (a row with altered evidence is neither live nor done — the run
+# aborts as partial state) and by the postconditions.
+def _evidence_match_s1(previous_state, resulting_state, evidence):
+    return (
+        f"a.action_by = '{STAGE1_ACTOR}'\n"
+        "  AND a.action_at IS NOT DISTINCT FROM m.superseded_at\n"
+        f"  AND a.previous_state IS NOT DISTINCT FROM {previous_state}\n"
+        f"  AND a.resulting_state IS NOT DISTINCT FROM {resulting_state}\n"
+        f"  AND a.evidence IS NOT DISTINCT FROM {evidence}"
+    )
+
+
+def _evidence_match_s2(previous_state, resulting_state, evidence):
+    return (
+        "a.action_by IS NOT DISTINCT FROM t.accountant_identity\n"
+        "  AND a.action_at IS NOT DISTINCT FROM m.superseded_at\n"
+        f"  AND a.previous_state IS NOT DISTINCT FROM {previous_state}\n"
+        f"  AND a.resulting_state IS NOT DISTINCT FROM {resulting_state}\n"
+        f"  AND a.evidence IS NOT DISTINCT FROM {evidence}"
+    )
+
+
+def _mode_gate_sql(mode):
+    """Hard environment-mode identity gate, executed inside the repair
+    transaction before any lock or write."""
+    if mode == "REHEARSAL":
+        return f"""-- =============================================================================
+-- P0.0 Environment-mode identity gate (mechanical, not a warning)
 -- =============================================================================
--- Package:    supabase/repair-013-pre (historical repair hardening)
--- Manifest:   manifests/stage1-unapproved-targets.csv
---             SHA-256 {manifest_sha}
---             (verified by bin/build_repair_package.py verify)
--- Snapshot:   production fqvekbzwghjurkcawpgg, captured 2026-08-16
---             (docs/RECONCILIATION_HISTORICAL_REPAIR_DESIGN_REPORT.md §2)
--- Operation:  {STAGE1_OPERATION_ID}  (fixed per package release —
---             the semantic idempotency key)
---
--- Scope: supersedes EXACTLY the 154 unapproved duplicate live-auto rows
---        listed in the stage-1 manifest. NO approved row is touched.
---        NO DELETE. One transaction. Fails closed on any drift.
---
--- Execution gate: this file may only be executed against production inside
---        an explicitly authorized repair window (see execution-window.md).
---        Rehearsal evidence lives in rehearsal/.
---
--- Writer exclusion (P0a): ACCESS EXCLUSIVE table locks, taken in the
---        controlled writers' natural order (statements -> bank -> qb ->
---        matches -> audit), after the shared advisory lock. Details and the
---        exclusion analysis: execution-window.md.
---
--- Semantic idempotency (P0c): re-running after success proves every target
---        already carries THIS operation id with correct reason/survivor and
---        a matching audit row, then exits as a verified no-op. Targets
---        superseded by any OTHER operation id abort the run.
+-- REHEARSAL artifacts execute ONLY against the scratch restore database.
+-- This gate is part of the artifact; it cannot be skipped or edited without
+-- changing the artifact hash.
+DO $mode_gate$
+DECLARE
+  v_db text := current_database();
+BEGIN
+  IF v_db IS DISTINCT FROM '{REHEARSAL_DB}' THEN
+    RAISE EXCEPTION '{MODE_GATE_REHEARSAL_MARK} % (rehearsal artifacts execute only against the scratch restore)', v_db;
+  END IF;
+END;
+$mode_gate$;"""
+    return f"""-- =============================================================================
+-- P0.0 Environment-mode identity gate (mechanical, not a warning)
+-- =============================================================================
+-- PRODUCTION artifacts execute ONLY against the exact production database
+-- identity: database 'postgres', PostgreSQL 17, and the session GUC
+-- {PROJECT_REF_GUC} = '{PROD_PROJECT_REF}' (set by the execution driver,
+-- e.g. PGOPTIONS="-c {PROJECT_REF_GUC}={PROD_PROJECT_REF}"). This gate is
+-- part of the artifact; it cannot be skipped or edited without changing the
+-- artifact hash.
+DO $mode_gate$
+DECLARE
+  v_db  text := current_database();
+  v_ver text := current_setting('server_version_num');
+  v_ref text := current_setting('{PROJECT_REF_GUC}', true);
+BEGIN
+  IF v_db IS DISTINCT FROM '{PROD_DB}'
+     OR substring(v_ver from 1 for 2) IS DISTINCT FROM '{PROD_SERVER_VERSION_PREFIX}'
+     OR v_ref IS DISTINCT FROM '{PROD_PROJECT_REF}' THEN
+    RAISE EXCEPTION '{MODE_GATE_PRODUCTION_MARK} (database=%, server_version_num=%, project_ref=%; expected database={PROD_DB}, server_version_num {PROD_SERVER_VERSION_PREFIX}xxxx, project_ref={PROD_PROJECT_REF})',
+      v_db, v_ver, COALESCE(v_ref, '<unset>');
+  END IF;
+END;
+$mode_gate$;"""
 
-SET search_path = pg_temp, public;
 
-BEGIN;
-
--- Serialize repair attempts. Both stages share this key, so stage 1 and
--- stage 2 also serialize against each other.
-SELECT pg_advisory_xact_lock({ADVISORY_LOCK});  -- 'ZAKI'
-
--- ===========================================================================
+def _locks_sql():
+    return """-- ===========================================================================
 -- P0a. Writer exclusion: database-side execution locks
 -- ===========================================================================
 LOCK TABLE public.bank_statements IN ACCESS EXCLUSIVE MODE;
 LOCK TABLE public.bank_transactions IN ACCESS EXCLUSIVE MODE;
 LOCK TABLE public.qb_transactions IN ACCESS EXCLUSIVE MODE;
+LOCK TABLE public.client_entities IN ACCESS EXCLUSIVE MODE;
 LOCK TABLE public.reconciliation_matches IN ACCESS EXCLUSIVE MODE;
-LOCK TABLE public.reconciliation_audit_log IN ACCESS EXCLUSIVE MODE;
+LOCK TABLE public.reconciliation_audit_log IN ACCESS EXCLUSIVE MODE;"""
+
+
+def _client_entities_drift_cond(table_alias="t"):
+    return (
+        f"ce.id IS NULL\n"
+        f"     OR ce.practice_id IS DISTINCT FROM {table_alias}.practice_id\n"
+        f"     OR ce.status IS DISTINCT FROM 'active'\n"
+        f"     OR ce.archived_at IS NOT NULL"
+    )
+
+
+def stage1_sql(s1t, s1g, s2c, dup_after_s1, stage1_manifest_sha, basis_sha,
+               mode, project_ref, artifact_identity):
+    previous_state = _previous_state_sql()
+    resulting_state = _resulting_state_sql(STAGE1_OPERATION_ID)
+    evidence = _evidence_s1_sql(stage1_manifest_sha, basis_sha, mode,
+                                artifact_identity)
+    ev_match = _evidence_match_s1(previous_state, resulting_state, evidence)
+    project_line = (
+        f"-- Project:    {project_ref} (bound by the P0.0 identity gate)"
+        if project_ref
+        else "-- Project:    (REHEARSAL artifact — bound to the scratch restore identity)"
+    )
+    s1 = f"""-- =============================================================================
+-- ZAKI-REPAIR-013-PRE — STAGE 1: UNAPPROVED-ROW REPAIR (exact-ID, basis-bound)
+-- =============================================================================
+-- Package:         supabase/repair-013-pre (historical repair hardening)
+-- Environment mode: {mode}   (bound into the P0.0 identity gate, the audit
+--                   evidence, and the artifact identity — see below)
+{project_line}
+-- Manifest:        manifests/stage1-unapproved-targets.csv
+--                  SHA-256 {stage1_manifest_sha}
+-- Stage-2 basis:   manifests/stage2-immutable-basis.json
+--                  SHA-256 {basis_sha}
+--                  (stage 1 identity-checks all 102 approved candidate rows
+--                   of the committed basis that protect the affected
+--                   endpoints, in addition to the 101 survivor guards)
+-- Artifact identity: {artifact_identity}
+--                  (sha256 of operation id | mode | stage-1 manifest |
+--                   stage-2 basis | project ref; recomputed by
+--                   bin/build_repair_package.py verify)
+-- Snapshot:        production fqvekbzwghjurkcawpgg, captured 2026-08-16
+--                  (docs/RECONCILIATION_HISTORICAL_REPAIR_DESIGN_REPORT.md §2)
+-- Operation:       {STAGE1_OPERATION_ID}  (fixed per package release —
+--                  the semantic idempotency key; identical in rehearsal and
+--                  production)
+--
+-- Scope: supersedes EXACTLY the 154 unapproved duplicate live-auto rows
+--        listed in the stage-1 manifest. NO approved row is touched.
+--        NO DELETE. One transaction. Fails closed on any drift.
+--
+-- Execution gate: {mode} artifacts execute only under their P0.0 identity
+--        gate. PRODUCTION execution requires an explicitly authorized
+--        repair window (see execution-window.md); this REHEARSAL file
+--        cannot run against production.
+--
+-- Writer exclusion (P0a): ACCESS EXCLUSIVE table locks, taken in the
+--        controlled writers' natural order (statements -> bank -> qb ->
+--        client_entities -> matches -> audit), after the shared advisory
+--        lock. Details and the exclusion analysis: execution-window.md.
+--
+-- Semantic idempotency (P0c): re-running after success proves every target
+--        already carries THIS operation id with correct reason/survivor and
+--        a byte-exact audit row (action, actor, action_at, previous_state,
+--        resulting_state, evidence), then exits as a verified no-op. Altered
+--        audit evidence or a different operation id aborts the run.
+
+SET search_path = pg_temp, public;
+
+BEGIN;
+
+SET LOCAL TIME ZONE 'UTC';  -- deterministic timestamptz rendering in the
+                            -- exact audit-evidence comparisons below
+
+-- Serialize repair attempts. Both stages share this key, so stage 1 and
+-- stage 2 also serialize against each other.
+SELECT pg_advisory_xact_lock({ADVISORY_LOCK});  -- 'ZAKI'
+
+{_mode_gate_sql(mode)}
+
+{_locks_sql()}
 
 -- ===========================================================================
--- P0b. Manifest load (targets + survivor guards)
+-- P0b. Manifest load (targets + survivor guards + committed-basis candidates)
 -- ===========================================================================
 CREATE TEMP TABLE zaki_manifest (
   match_id     uuid PRIMARY KEY,
@@ -850,6 +1487,26 @@ INSERT INTO zaki_manifest
 VALUES
 {manifest_row_values(s1t + s1g)};
 
+-- Approved candidate rows of the committed stage-2 basis (102 rows). Stage 1
+-- never writes them; it identity-checks that every approved row protecting
+-- an affected endpoint still carries its exact snapshot approval stamps and
+-- is either pristine-live or (after stage 2) superseded by the stage-2
+-- operation with the basis reason/survivor.
+CREATE TEMP TABLE zaki_candidates (
+  match_id     uuid PRIMARY KEY,
+  class        text NOT NULL,
+  reason       text NOT NULL,
+  approved_at  timestamptz NOT NULL,
+  approved_by  text NOT NULL,
+  confidence   numeric(4,3) NOT NULL,
+  survivor_id  uuid
+) ON COMMIT DROP;
+
+INSERT INTO zaki_candidates
+  (match_id, class, reason, approved_at, approved_by, confidence, survivor_id)
+VALUES
+{candidate_row_values(s2c)};
+
 CREATE TEMP TABLE zaki_endpoints (
   qb_id uuid PRIMARY KEY,
   resolved_by_stage1 boolean NOT NULL
@@ -867,6 +1524,9 @@ BEGIN
   IF (SELECT count(*) FROM zaki_manifest WHERE role = 'survivor_guard') <> {EXPECTED['stage1_guards']} THEN
     RAISE EXCEPTION 'STOP: manifest integrity failure (guard count)';
   END IF;
+  IF (SELECT count(*) FROM zaki_candidates) <> {EXPECTED['stage2_candidates']} THEN
+    RAISE EXCEPTION 'STOP: committed-basis candidate integrity failure';
+  END IF;
   IF (SELECT count(*) FROM zaki_endpoints) <> {EXPECTED['dup_endpoints']} THEN
     RAISE EXCEPTION 'STOP: endpoint manifest integrity failure';
   END IF;
@@ -875,6 +1535,10 @@ END $$;
 -- ===========================================================================
 -- P0c. Stage dispatcher (semantic idempotency on THIS operation id)
 -- ===========================================================================
+-- A row superseded by this operation counts as DONE only if its audit row
+-- carries the byte-exact expected evidence (actor, action_at, previous_state,
+-- resulting_state, evidence). Altered audit evidence is neither live nor
+-- done: the run aborts as partial state (Phase 8 audit idempotency).
 DO $$
 DECLARE
   v_total  int;
@@ -899,21 +1563,21 @@ BEGIN
   JOIN public.reconciliation_matches m ON m.id = t.match_id
   WHERE t.role = 'target' AND m.superseded_at IS NULL;
 
-  -- Targets superseded by THIS operation with correct fields and audit rows.
+  -- Targets superseded by THIS operation with correct fields and exact
+  -- audit evidence.
   SELECT count(*) INTO v_done
   FROM zaki_manifest t
   JOIN public.reconciliation_matches m ON m.id = t.match_id
+  JOIN public.reconciliation_audit_log a
+    ON a.reconciliation_match_id = t.match_id
+   AND a.action = '{AUDIT_ACTION}'
+   AND a.operation_id = '{STAGE1_OPERATION_ID}'
   WHERE t.role = 'target'
     AND m.superseded_at IS NOT NULL
     AND m.supersede_operation_id = '{STAGE1_OPERATION_ID}'
     AND m.supersede_reason = t.reason
     AND m.superseded_by_match_id IS NOT DISTINCT FROM t.survivor_id
-    AND EXISTS (
-      SELECT 1 FROM public.reconciliation_audit_log a
-      WHERE a.reconciliation_match_id = t.match_id
-        AND a.action = '{AUDIT_ACTION}'
-        AND a.operation_id = '{STAGE1_OPERATION_ID}'
-    );
+    AND {ev_match};
 
   -- Targets superseded by a different operation (foreign state).
   SELECT count(*) INTO v_other
@@ -944,13 +1608,17 @@ DECLARE
   v_bad int;
   v_mode text := current_setting('zaki.repair_mode');
 BEGIN
-  -- 1. Endpoint identity + value fingerprints for EVERY manifest row.
+  -- 1. Endpoint identity + value fingerprints for EVERY manifest row,
+  --    including the client_entities row identity: the tenant row must
+  --    exist, carry the manifest practice_id, and be active (client_entities
+  --    is lock-protected for the transaction above).
   SELECT count(*) INTO v_bad
   FROM zaki_manifest t
   LEFT JOIN public.reconciliation_matches m ON m.id = t.match_id
   LEFT JOIN public.bank_transactions b ON b.id = t.bank_id
   LEFT JOIN public.qb_transactions q ON q.id = t.qb_id
   LEFT JOIN public.bank_statements s ON s.id = t.statement_id
+  LEFT JOIN public.client_entities ce ON ce.id = t.client_id
   WHERE m.id IS NULL
      OR (m.user_id, m.client_entity_id, m.statement_id, m.bank_transaction_id, m.qb_transaction_id)
         IS DISTINCT FROM (t.user_id, t.client_id, t.statement_id, t.bank_id, t.qb_id)
@@ -960,6 +1628,7 @@ BEGIN
         IS DISTINCT FROM (t.user_id, t.client_id, t.qb_book, t.qb_date, t.qb_amount)
      OR (s.user_id, s.client_entity_id, s.ledger_book_id, s.file_name, s.upload_date)
         IS DISTINCT FROM (t.user_id, t.client_id, t.stmt_book, t.stmt_file, t.stmt_upload)
+     OR {_client_entities_drift_cond()}
      OR m.confidence IS DISTINCT FROM t.confidence
      OR m.matched_by IS DISTINCT FROM t.matched_by
      OR m.matched_at IS DISTINCT FROM t.matched_at
@@ -975,21 +1644,49 @@ BEGIN
     RAISE EXCEPTION 'STOP: % manifest rows drifted from the accepted snapshot (identity/value drift)', v_bad;
   END IF;
 
-  -- 2. Approval/state drift.
+  -- 2. Approval/state drift: targets must be completely unapproved
+  --    (approved_at AND approved_by NULL); survivors must keep their exact
+  --    approved stamps and stay live.
   SELECT count(*) INTO v_bad
   FROM zaki_manifest t
   JOIN public.reconciliation_matches m ON m.id = t.match_id
-  WHERE (t.role = 'target' AND m.approved_at IS NOT NULL)
+  WHERE (t.role = 'target'
+         AND (m.approved_at IS NOT NULL OR m.approved_by IS NOT NULL))
      OR (t.role = 'survivor_guard'
          AND (m.approved_at IS NULL
+              OR m.approved_by IS DISTINCT FROM t.approved_by
               OR m.superseded_at IS NOT NULL
               OR m.approved_at IS DISTINCT FROM t.approved_at
-              OR m.approved_by IS DISTINCT FROM t.approved_by
               OR m.confidence IS DISTINCT FROM t.confidence
               OR abs((SELECT b.amount FROM public.bank_transactions b WHERE b.id = m.bank_transaction_id)
                    - (SELECT q.amount FROM public.qb_transactions q WHERE q.id = m.qb_transaction_id)) > 0.01));
   IF v_bad > 0 THEN
     RAISE EXCEPTION 'STOP: % rows drifted from the expected approval state (target approved / survivor changed)', v_bad;
+  END IF;
+
+  -- 2b. Committed-basis candidates (the 102 approved rows that protect the
+  --     affected endpoints): exact approval stamps and either pristine-live
+  --     or (stage-2-completed state) superseded by the stage-2 operation
+  --     with the basis reason/survivor and audit row. A candidate row
+  --     superseded by anything else aborts.
+  SELECT count(*) INTO v_bad
+  FROM zaki_candidates t
+  LEFT JOIN public.reconciliation_matches m ON m.id = t.match_id
+  WHERE m.id IS NULL
+     OR m.approved_at IS DISTINCT FROM t.approved_at
+     OR m.approved_by IS DISTINCT FROM t.approved_by
+     OR m.confidence IS DISTINCT FROM t.confidence
+     OR (m.superseded_at IS NOT NULL
+         AND (m.supersede_operation_id IS DISTINCT FROM '{STAGE2_OPERATION_ID}'
+              OR m.supersede_reason IS DISTINCT FROM t.reason
+              OR m.superseded_by_match_id IS DISTINCT FROM t.survivor_id
+              OR NOT EXISTS (
+                SELECT 1 FROM public.reconciliation_audit_log a
+                WHERE a.reconciliation_match_id = t.match_id
+                  AND a.action = '{AUDIT_ACTION}'
+                  AND a.operation_id = '{STAGE2_OPERATION_ID}')));
+  IF v_bad > 0 THEN
+    RAISE EXCEPTION 'STOP: % approved candidate rows drifted from the committed stage-2 basis', v_bad;
   END IF;
 
   -- 3. Duplicate-endpoint set: no unexpected NEW duplicate endpoints, and
@@ -1017,7 +1714,33 @@ BEGIN
     RAISE EXCEPTION 'STOP: a snapshot duplicate endpoint is no longer duplicate';
   END IF;
 
-  -- 4. (Apply mode) exact pre-state: the affected-row population must be
+  -- 4. (Apply mode) exact clean pre-state: targets must carry NO supersession
+  --    fields at all, and so must the committed-basis candidate rows.
+  IF v_mode = 'apply' THEN
+    SELECT count(*) INTO v_bad
+    FROM zaki_manifest t
+    JOIN public.reconciliation_matches m ON m.id = t.match_id
+    WHERE t.role = 'target'
+      AND (m.superseded_at IS NOT NULL
+           OR m.superseded_by_match_id IS NOT NULL
+           OR m.supersede_reason IS NOT NULL
+           OR m.supersede_operation_id IS NOT NULL);
+    IF v_bad > 0 THEN
+      RAISE EXCEPTION 'STOP: % stage-1 targets carry stale supersession fields', v_bad;
+    END IF;
+    SELECT count(*) INTO v_bad
+    FROM zaki_candidates t
+    JOIN public.reconciliation_matches m ON m.id = t.match_id
+    WHERE m.superseded_at IS NOT NULL
+       OR m.superseded_by_match_id IS NOT NULL
+       OR m.supersede_reason IS NOT NULL
+       OR m.supersede_operation_id IS NOT NULL;
+    IF v_bad > 0 THEN
+      RAISE EXCEPTION 'STOP: % candidate rows carry stale supersession fields before stage 1', v_bad;
+    END IF;
+  END IF;
+
+  -- 5. (Apply mode) exact pre-state: the affected-row population must be
   --    exactly the snapshot population — 357 live-auto rows on the 107
   --    endpoints, of which 203 approved.
   IF v_mode = 'apply' THEN
@@ -1076,7 +1799,7 @@ BEGIN
 
   -- One audit row per superseded row; previous/resulting state and enriched
   -- repair evidence (operation id, stage, reason, survivor, prior approval
-  -- stamps, manifest hash).
+  -- stamps, manifest hashes, environment mode, artifact identity).
   INSERT INTO public.reconciliation_audit_log
     (id, reconciliation_match_id, action, action_by, action_at,
      old_confidence, new_confidence, client_entity_id, user_id,
@@ -1085,40 +1808,9 @@ BEGIN
     gen_random_uuid(), t.match_id, '{AUDIT_ACTION}', '{STAGE1_ACTOR}', now(),
     t.confidence, t.confidence, t.client_id, t.user_id,
     '{STAGE1_OPERATION_ID}',
-    jsonb_build_object(
-      'approved_at', t.approved_at,
-      'approved_by', t.approved_by,
-      'confidence', t.confidence,
-      'matched_by', t.matched_by,
-      'flagged_level', t.flagged_level,
-      'superseded_at', NULL,
-      'superseded_by_match_id', NULL,
-      'supersede_reason', NULL,
-      'supersede_operation_id', NULL
-    ),
-    jsonb_build_object(
-      'approved_at', t.approved_at,
-      'approved_by', t.approved_by,
-      'confidence', t.confidence,
-      'matched_by', t.matched_by,
-      'flagged_level', t.flagged_level,
-      'superseded_at', now(),
-      'superseded_by_match_id', t.survivor_id,
-      'supersede_reason', t.reason,
-      'supersede_operation_id', '{STAGE1_OPERATION_ID}'
-    ),
-    jsonb_build_object(
-      'stage', '1',
-      'class', t.class,
-      'reason', t.reason,
-      'old_match_id', t.match_id,
-      'survivor_match_id', t.survivor_id,
-      'previous_approved_at', t.approved_at,
-      'previous_approved_by', t.approved_by,
-      'previous_confidence', t.confidence,
-      'stage1_manifest_sha256', '{manifest_sha}',
-      'authorization_manifest_sha256', NULL
-    )
+    {previous_state},
+    {resulting_state},
+    {evidence}
   FROM zaki_manifest t
   JOIN public.reconciliation_matches m ON m.id = t.match_id
   WHERE t.role = 'target'
@@ -1198,6 +1890,23 @@ BEGIN
     ) d
   ) THEN
     RAISE EXCEPTION 'FAIL: a stage-1 target has more than one repair audit row';
+  END IF;
+
+  -- 3b. FULL AUDIT IDEMPOTENCY (Phase 8): every repair audit row for this
+  --     operation must carry the byte-exact expected evidence. An altered
+  --     audit row is an ABORT, never a silent no-op.
+  IF EXISTS (
+    SELECT 1
+    FROM zaki_manifest t
+    JOIN public.reconciliation_matches m ON m.id = t.match_id
+    JOIN public.reconciliation_audit_log a
+      ON a.reconciliation_match_id = t.match_id
+     AND a.action = '{AUDIT_ACTION}'
+     AND a.operation_id = '{STAGE1_OPERATION_ID}'
+    WHERE t.role = 'target'
+      AND NOT ({ev_match})
+  ) THEN
+    RAISE EXCEPTION 'FAIL: a stage-1 repair audit row carries altered evidence (action/actor/action_at/previous_state/resulting_state/evidence mismatch)';
   END IF;
 
   -- 4. Intended survivors unchanged: still live, approved, same stamps.
@@ -1280,7 +1989,7 @@ BEGIN
       RAISE EXCEPTION 'FAIL: an endpoint expected to remain duplicate was resolved early';
     END IF;
   ELSE
-    RAISE NOTICE 'STAGE 1: ALREADY APPLIED — verified % targets carry this operation with correct fields and audit rows; no-op commit',
+    RAISE NOTICE 'STAGE 1: ALREADY APPLIED — verified % targets carry this operation with correct fields and byte-exact audit evidence; no-op commit',
       (SELECT count(*) FROM zaki_manifest WHERE role = 'target');
   END IF;
 END;
@@ -1291,37 +2000,40 @@ COMMIT;
     return s1
 
 
-def stage2_sql(s2t, s2g, s1t, dup_after_s1, auth_manifest_sha, n_exec):
-    """Emit stage-2 SQL from a signed authorization manifest.
+def stage2_sql(s2c_rows, s2g_rows, s1t, dup_after_s1, auth_manifest_sha,
+               basis_sha, stage1_artifact_sha, proof_sha, mode, project_ref,
+               artifact_identity, n_exec, stage1_manifest_sha=""):
+    """Emit stage-2 SQL from the COMMITTED basis joined with the validated
+    authorization manifest decisions.
 
-    s2t/s2g: candidate and guard rows WITH authorization columns.
-    s1t: stage-1 target ids (sequencing precondition).
+    s2c_rows/s2g_rows: basis rows WITH decision columns filled from the
+    validated authorization manifest (accountant_decision,
+    accountant_identity, confirmation_timestamp, authorization_status,
+    accountant_note).
+    s1t: stage-1 target ids (sequencing precondition), from the committed
+    stage-1 manifest.
     dup_after_s1: post-stage-1 endpoint set (precondition in apply mode).
-    auth_manifest_sha: SHA-256 of the signed authorization manifest CSV.
-    n_exec: number of rows authorized for retirement.
     """
-    # Rows the SQL will retire: role=target, APPROVED_FOR_RETIREMENT, RETIRE.
     exec_ids = [
-        r["match_id"] for r in s2t
-        if r["authorization_status"] == "APPROVED_FOR_RETIREMENT"
-        and r["accountant_decision"] == "RETIRE"
+        r["match_id"] for r in s2c_rows
+        if r["accountant_decision"] == "RETIRE"
+        and r["authorization_status"] == "APPROVED_FOR_RETIREMENT"
     ]
     if len(exec_ids) != n_exec:
         raise SystemExit(
             f"authorization manifest inconsistent: {len(exec_ids)} executable "
             f"rows, expected {n_exec}"
         )
-    # Pre-stage-2 duplicate endpoint set = the stage-1 remainder (91), taken
-    # from dup_after_s1. The post-stage-2 set is derived from the authorized
-    # subset: an endpoint remains duplicate iff >=2 of its manifest rows
-    # (candidates + guards) are NOT retired by this execution.
+    # Pre-stage-2 duplicate endpoint set = the stage-1 remainder (91). The
+    # post-stage-2 set is derived from the authorized subset: an endpoint
+    # remains duplicate iff >=2 of its basis rows are NOT retired.
     pre_set = [
         r["qb_transaction_id"] for r in dup_after_s1
         if not r["resolved_by_stage1"]
     ]
     retired = set(exec_ids)
     ep_rows = defaultdict(list)
-    for r in s2t + s2g:
+    for r in s2c_rows + s2g_rows:
         ep_rows[r["qb_transaction_id"]].append(r)
     remaining = []
     for qb_id in sorted(pre_set):
@@ -1330,60 +2042,89 @@ def stage2_sql(s2t, s2g, s1t, dup_after_s1, auth_manifest_sha, n_exec):
         remaining.append({"qb_transaction_id": qb_id,
                           "still_duplicate": len(live) >= 2})
 
+    previous_state = _previous_state_sql()
+    resulting_state = _resulting_state_sql(STAGE2_OPERATION_ID)
+    evidence = _evidence_s2_sql(auth_manifest_sha, basis_sha,
+                                stage1_artifact_sha, proof_sha, mode,
+                                artifact_identity)
+    ev_match = _evidence_match_s2(previous_state, resulting_state, evidence)
+    project_line = (
+        f"-- Project:    {project_ref} (bound by the P0.0 identity gate)"
+        if project_ref
+        else "-- Project:    (REHEARSAL artifact — bound to the scratch restore identity)"
+    )
+
     s2 = f"""-- =============================================================================
 -- ZAKI-REPAIR-013-PRE — STAGE 2: APPROVED-ROW REPAIR (accountant-authorized)
 -- =============================================================================
--- Package:    supabase/repair-013-pre (historical repair hardening)
--- Authorization manifest: {auth_manifest_sha}
---             (verified by bin/build_repair_package.py verify; this SQL was
---              regenerated from that exact manifest file)
--- Stage-1 prerequisite: 14a-stage1-unapproved-repair.sql must have run with
---             operation {STAGE1_OPERATION_ID}.
+-- Package:         supabase/repair-013-pre (historical repair hardening)
+-- Environment mode: {mode}   (bound into the P0.0 identity gate, the audit
+--                   evidence, and the artifact identity — see below)
+{project_line}
+-- Committed basis: manifests/stage2-immutable-basis.json
+--                  SHA-256 {basis_sha}
+--                  (ALL accounting identity — QB/bank/statement ids, tenant/
+--                   user/client/book, fingerprints, class, reason, action,
+--                   permitted survivor/decision sets — comes from this
+--                   committed basis, never from the authorization manifest)
+-- Authorization manifest: SHA-256 {auth_manifest_sha}
+--                  (decision-only: match_id, decision, accountant identity,
+--                   confirmation timestamp, note; validated by
+--                   bin/build_repair_package.py as a decision over the basis)
+-- Stage-1 manifest: manifests/stage1-unapproved-targets.csv
+--                   SHA-256 {stage1_manifest_sha}
+-- Stage-1 artifact: SHA-256 {stage1_artifact_sha}  (the exact stage-1 file
+--                   the operator executed; its execution proof is
+--                   SHA-256 {proof_sha})
+-- Artifact identity: {artifact_identity}
+--                  (sha256 of operation ids | mode | stage-1 manifest |
+--                   stage-2 basis | authorization manifest | stage-1
+--                   artifact | stage-1 proof | project ref)
+-- Stage-1 prerequisite: the stage-1 artifact above must have run with
+--             operation {STAGE1_OPERATION_ID} and produced the recorded
+--             execution proof.
 -- Operation:  {STAGE2_OPERATION_ID}  (fixed per package release — the
---             semantic idempotency key)
+--             semantic idempotency key; identical in rehearsal and
+--             production)
 --
--- Scope: supersedes EXACTLY the rows in the authorization manifest whose
---        authorization_status = 'APPROVED_FOR_RETIREMENT' and
---        accountant_decision = 'RETIRE' ({n_exec} rows). Rows with any
---        other decision are asserted untouched. NO DELETE. One transaction.
---        Fails closed on any drift.
+-- Scope: supersedes EXACTLY the rows whose committed-basis candidates carry
+--        an authorization decision RETIRE ({n_exec} rows). Rows with any
+--        other or no decision are asserted untouched. The survivor for an
+--        authorized retirement is the basis survivor (for R6 pairs: the
+--        other member). NO DELETE. One transaction. Fails closed on any
+--        drift.
 --
 -- Actor identity: every stage-2 audit row records the confirming
---        accountant's identity from the manifest (action_by), never a
---        system identity — the system does not make accounting judgements.
+--        accountant's identity from the authorization manifest (action_by),
+--        never a system identity — the system does not make accounting
+--        judgements.
 --
--- Execution gate: this file may only be executed against production inside
---        an explicitly authorized repair window (see execution-window.md).
---        The committed version of this file is generated from the
---        REHEARSAL-ONLY test authorization manifest and MUST NOT be used in
---        production; the production window regenerates it from the
---        accountant-signed manifest.
---
--- Writer exclusion (P0a): identical to stage 1 (execution-window.md).
+-- Execution gate: {mode} artifacts execute only under their P0.0 identity
+--        gate. PRODUCTION execution requires an explicitly authorized
+--        repair window (see execution-window.md); a REHEARSAL artifact
+--        cannot run against production.
 
 SET search_path = pg_temp, public;
 
 BEGIN;
 
+SET LOCAL TIME ZONE 'UTC';  -- deterministic timestamptz rendering in the
+                            -- exact audit-evidence comparisons below
+
 -- Serialize repair attempts. Both stages share this key, so stage 1 and
 -- stage 2 also serialize against each other.
 SELECT pg_advisory_xact_lock({ADVISORY_LOCK});  -- 'ZAKI'
 
--- ===========================================================================
--- P0a. Writer exclusion: database-side execution locks
--- ===========================================================================
-LOCK TABLE public.bank_statements IN ACCESS EXCLUSIVE MODE;
-LOCK TABLE public.bank_transactions IN ACCESS EXCLUSIVE MODE;
-LOCK TABLE public.qb_transactions IN ACCESS EXCLUSIVE MODE;
-LOCK TABLE public.reconciliation_matches IN ACCESS EXCLUSIVE MODE;
-LOCK TABLE public.reconciliation_audit_log IN ACCESS EXCLUSIVE MODE;
+{_mode_gate_sql(mode)}
+
+{_locks_sql()}
 
 -- ===========================================================================
--- P0b. Manifest load (authorized candidates + survivor guards)
+-- P0b. Manifest load (committed basis + authorization decisions)
 -- ===========================================================================
 CREATE TEMP TABLE zaki_manifest (
   match_id     uuid PRIMARY KEY,
-  role         text NOT NULL CHECK (role IN ('target','survivor_guard')),
+  role         text NOT NULL CHECK (role IN ('candidate','survivor_guard')),
   class        text NOT NULL,
   stage        int NOT NULL CHECK (stage = 2),
   reason       text NOT NULL,
@@ -1418,7 +2159,8 @@ CREATE TEMP TABLE zaki_manifest (
   accountant_decision text,
   accountant_identity text,
   confirmation_timestamp timestamptz,
-  authorization_status text
+  authorization_status text,
+  accountant_note text
 ) ON COMMIT DROP;
 
 INSERT INTO zaki_manifest
@@ -1429,9 +2171,9 @@ INSERT INTO zaki_manifest
    user_id, client_id, practice_id, matched_by, matched_at, confidence,
    flagged_level, approved_at, approved_by, survivor_id, evidence,
    accountant_decision, accountant_identity, confirmation_timestamp,
-   authorization_status)
+   authorization_status, accountant_note)
 VALUES
-{auth_row_values(s2t + s2g)};
+{auth_row_values(s2c_rows + s2g_rows)};
 
 CREATE TEMP TABLE zaki_s1_targets (match_id uuid PRIMARY KEY) ON COMMIT DROP;
 INSERT INTO zaki_s1_targets (match_id) VALUES
@@ -1448,20 +2190,20 @@ DO $$
 DECLARE
   v int;
 BEGIN
-  IF (SELECT count(*) FROM zaki_manifest WHERE role = 'target') <> {EXPECTED['stage2_candidates']} THEN
+  IF (SELECT count(*) FROM zaki_manifest WHERE role = 'candidate') <> {EXPECTED['stage2_candidates']} THEN
     RAISE EXCEPTION 'STOP: manifest integrity failure (candidate count)';
   END IF;
   IF (SELECT count(*) FROM zaki_manifest WHERE role = 'survivor_guard') <> {EXPECTED['stage2_guards']} THEN
     RAISE EXCEPTION 'STOP: manifest integrity failure (guard count)';
   END IF;
   IF (SELECT count(*) FROM zaki_manifest
-      WHERE role = 'target' AND authorization_status = 'APPROVED_FOR_RETIREMENT'
-        AND accountant_decision = 'RETIRE') <> {n_exec} THEN
-    RAISE EXCEPTION 'STOP: authorized-execution set does not match the manifest hash ({n_exec} expected)';
+      WHERE role = 'candidate' AND accountant_decision = 'RETIRE'
+        AND authorization_status = 'APPROVED_FOR_RETIREMENT') <> {n_exec} THEN
+    RAISE EXCEPTION 'STOP: authorized-execution set does not match the authorization manifest ({n_exec} expected)';
   END IF;
   IF EXISTS (
     SELECT 1 FROM zaki_manifest
-    WHERE role = 'target' AND authorization_status = 'APPROVED_FOR_RETIREMENT'
+    WHERE role = 'candidate' AND accountant_decision = 'RETIRE'
       AND (accountant_identity IS NULL OR btrim(accountant_identity) = ''
            OR confirmation_timestamp IS NULL)
   ) THEN
@@ -1496,6 +2238,11 @@ END $$;
 -- ===========================================================================
 -- P0d. Stage dispatcher (semantic idempotency on THIS operation id)
 -- ===========================================================================
+-- A row superseded by this operation counts as DONE only if its audit row
+-- carries the byte-exact expected evidence (accountant actor, action_at,
+-- previous_state, resulting_state, evidence incl. manifest hashes, mode and
+-- artifact identity). Altered audit evidence is neither live nor done: the
+-- run aborts as partial state (Phase 8 audit idempotency).
 DO $$
 DECLARE
   v_total  int;
@@ -1517,36 +2264,35 @@ BEGIN
   SELECT count(*) INTO v_live
   FROM zaki_manifest t
   JOIN public.reconciliation_matches m ON m.id = t.match_id
-  WHERE t.role = 'target'
-    AND t.authorization_status = 'APPROVED_FOR_RETIREMENT'
+  WHERE t.role = 'candidate'
     AND t.accountant_decision = 'RETIRE'
+    AND t.authorization_status = 'APPROVED_FOR_RETIREMENT'
     AND m.superseded_at IS NULL;
 
   -- Executable targets already superseded by THIS operation, correct fields
-  -- and audit rows.
+  -- and byte-exact audit evidence.
   SELECT count(*) INTO v_done
   FROM zaki_manifest t
   JOIN public.reconciliation_matches m ON m.id = t.match_id
-  WHERE t.role = 'target'
-    AND t.authorization_status = 'APPROVED_FOR_RETIREMENT'
+  JOIN public.reconciliation_audit_log a
+    ON a.reconciliation_match_id = t.match_id
+   AND a.action = '{AUDIT_ACTION}'
+   AND a.operation_id = '{STAGE2_OPERATION_ID}'
+  WHERE t.role = 'candidate'
     AND t.accountant_decision = 'RETIRE'
+    AND t.authorization_status = 'APPROVED_FOR_RETIREMENT'
     AND m.superseded_at IS NOT NULL
     AND m.supersede_operation_id = '{STAGE2_OPERATION_ID}'
     AND m.supersede_reason = t.reason
     AND m.superseded_by_match_id IS NOT DISTINCT FROM t.survivor_id
-    AND EXISTS (
-      SELECT 1 FROM public.reconciliation_audit_log a
-      WHERE a.reconciliation_match_id = t.match_id
-        AND a.action = '{AUDIT_ACTION}'
-        AND a.operation_id = '{STAGE2_OPERATION_ID}'
-    );
+    AND {ev_match};
 
   SELECT count(*) INTO v_other
   FROM zaki_manifest t
   JOIN public.reconciliation_matches m ON m.id = t.match_id
-  WHERE t.role = 'target'
-    AND t.authorization_status = 'APPROVED_FOR_RETIREMENT'
+  WHERE t.role = 'candidate'
     AND t.accountant_decision = 'RETIRE'
+    AND t.authorization_status = 'APPROVED_FOR_RETIREMENT'
     AND m.superseded_at IS NOT NULL
     AND m.supersede_operation_id IS DISTINCT FROM '{STAGE2_OPERATION_ID}';
 
@@ -1571,13 +2317,15 @@ DECLARE
   v_bad int;
   v_mode text := current_setting('zaki.repair_mode');
 BEGIN
-  -- 1. Endpoint identity + value fingerprints for EVERY manifest row.
+  -- 1. Endpoint identity + value fingerprints for EVERY manifest row,
+  --    including the client_entities row identity (practice_id, active).
   SELECT count(*) INTO v_bad
   FROM zaki_manifest t
   LEFT JOIN public.reconciliation_matches m ON m.id = t.match_id
   LEFT JOIN public.bank_transactions b ON b.id = t.bank_id
   LEFT JOIN public.qb_transactions q ON q.id = t.qb_id
   LEFT JOIN public.bank_statements s ON s.id = t.statement_id
+  LEFT JOIN public.client_entities ce ON ce.id = t.client_id
   WHERE m.id IS NULL
      OR (m.user_id, m.client_entity_id, m.statement_id, m.bank_transaction_id, m.qb_transaction_id)
         IS DISTINCT FROM (t.user_id, t.client_id, t.statement_id, t.bank_id, t.qb_id)
@@ -1587,6 +2335,7 @@ BEGIN
         IS DISTINCT FROM (t.user_id, t.client_id, t.qb_book, t.qb_date, t.qb_amount)
      OR (s.user_id, s.client_entity_id, s.ledger_book_id, s.file_name, s.upload_date)
         IS DISTINCT FROM (t.user_id, t.client_id, t.stmt_book, t.stmt_file, t.stmt_upload)
+     OR {_client_entities_drift_cond()}
      OR m.confidence IS DISTINCT FROM t.confidence
      OR m.matched_by IS DISTINCT FROM t.matched_by
      OR m.matched_at IS DISTINCT FROM t.matched_at
@@ -1617,6 +2366,21 @@ BEGIN
                    - (SELECT q.amount FROM public.qb_transactions q WHERE q.id = m.qb_transaction_id)) > 0.01));
   IF v_bad > 0 THEN
     RAISE EXCEPTION 'STOP: % stage-2 rows drifted from the expected approval state', v_bad;
+  END IF;
+
+  -- 2b. (Apply mode) exact clean pre-state: no supersession fields on any
+  --     candidate or guard row.
+  IF v_mode = 'apply' THEN
+    SELECT count(*) INTO v_bad
+    FROM zaki_manifest t
+    JOIN public.reconciliation_matches m ON m.id = t.match_id
+    WHERE m.superseded_at IS NOT NULL
+       OR m.superseded_by_match_id IS NOT NULL
+       OR m.supersede_reason IS NOT NULL
+       OR m.supersede_operation_id IS NOT NULL;
+    IF v_bad > 0 THEN
+      RAISE EXCEPTION 'STOP: % stage-2 rows carry stale supersession fields before execution', v_bad;
+    END IF;
   END IF;
 
   -- 3. Duplicate-endpoint set must be exactly the post-stage-1 set (apply
@@ -1700,21 +2464,23 @@ BEGIN
 
   PERFORM 1 FROM public.reconciliation_matches m
   JOIN zaki_manifest t ON t.match_id = m.id
-  WHERE t.role = 'target'
-    AND t.authorization_status = 'APPROVED_FOR_RETIREMENT'
+  WHERE t.role = 'candidate'
     AND t.accountant_decision = 'RETIRE'
+    AND t.authorization_status = 'APPROVED_FOR_RETIREMENT'
   ORDER BY m.id
   FOR UPDATE;
 
+  -- The survivor is the committed-basis survivor (t.survivor_id), never a
+  -- value from the authorization manifest.
   UPDATE public.reconciliation_matches m SET
     superseded_at = now(),
     superseded_by_match_id = t.survivor_id,
     supersede_reason = t.reason,
     supersede_operation_id = '{STAGE2_OPERATION_ID}'
   FROM zaki_manifest t
-  WHERE t.role = 'target'
-    AND t.authorization_status = 'APPROVED_FOR_RETIREMENT'
+  WHERE t.role = 'candidate'
     AND t.accountant_decision = 'RETIRE'
+    AND t.authorization_status = 'APPROVED_FOR_RETIREMENT'
     AND t.match_id = m.id;
   GET DIAGNOSTICS v_rows = ROW_COUNT;
   IF v_rows <> {n_exec} THEN
@@ -1734,48 +2500,14 @@ BEGIN
     t.accountant_identity, now(),
     t.confidence, t.confidence, t.client_id, t.user_id,
     '{STAGE2_OPERATION_ID}',
-    jsonb_build_object(
-      'approved_at', t.approved_at,
-      'approved_by', t.approved_by,
-      'confidence', t.confidence,
-      'matched_by', t.matched_by,
-      'flagged_level', t.flagged_level,
-      'superseded_at', NULL,
-      'superseded_by_match_id', NULL,
-      'supersede_reason', NULL,
-      'supersede_operation_id', NULL
-    ),
-    jsonb_build_object(
-      'approved_at', t.approved_at,
-      'approved_by', t.approved_by,
-      'confidence', t.confidence,
-      'matched_by', t.matched_by,
-      'flagged_level', t.flagged_level,
-      'superseded_at', now(),
-      'superseded_by_match_id', t.survivor_id,
-      'supersede_reason', t.reason,
-      'supersede_operation_id', '{STAGE2_OPERATION_ID}'
-    ),
-    jsonb_build_object(
-      'stage', '2',
-      'class', t.class,
-      'reason', t.reason,
-      'old_match_id', t.match_id,
-      'survivor_match_id', t.survivor_id,
-      'previous_approved_at', t.approved_at,
-      'previous_approved_by', t.approved_by,
-      'previous_confidence', t.confidence,
-      'accountant_identity', t.accountant_identity,
-      'confirmation_timestamp', t.confirmation_timestamp,
-      'authorization_status', t.authorization_status,
-      'stage1_manifest_sha256', NULL,
-      'authorization_manifest_sha256', '{auth_manifest_sha}'
-    )
+    {previous_state},
+    {resulting_state},
+    {evidence}
   FROM zaki_manifest t
   JOIN public.reconciliation_matches m ON m.id = t.match_id
-  WHERE t.role = 'target'
-    AND t.authorization_status = 'APPROVED_FOR_RETIREMENT'
+  WHERE t.role = 'candidate'
     AND t.accountant_decision = 'RETIRE'
+    AND t.authorization_status = 'APPROVED_FOR_RETIREMENT'
     AND m.superseded_at IS NOT NULL
     AND m.supersede_operation_id = '{STAGE2_OPERATION_ID}';
   GET DIAGNOSTICS v_rows = ROW_COUNT;
@@ -1799,8 +2531,8 @@ BEGIN
     ((SELECT match_id FROM zaki_s1_targets)
      UNION ALL
      (SELECT match_id FROM zaki_manifest
-      WHERE role = 'target' AND authorization_status = 'APPROVED_FOR_RETIREMENT'
-        AND accountant_decision = 'RETIRE'))
+      WHERE role = 'candidate' AND accountant_decision = 'RETIRE'
+        AND authorization_status = 'APPROVED_FOR_RETIREMENT'))
     EXCEPT
     (SELECT id FROM public.reconciliation_matches WHERE superseded_at IS NOT NULL)
   ) THEN
@@ -1812,8 +2544,8 @@ BEGIN
     ((SELECT match_id FROM zaki_s1_targets)
      UNION ALL
      (SELECT match_id FROM zaki_manifest
-      WHERE role = 'target' AND authorization_status = 'APPROVED_FOR_RETIREMENT'
-        AND accountant_decision = 'RETIRE'))
+      WHERE role = 'candidate' AND accountant_decision = 'RETIRE'
+        AND authorization_status = 'APPROVED_FOR_RETIREMENT'))
   ) THEN
     RAISE EXCEPTION 'FAIL: a row outside the authorized sets was superseded';
   END IF;
@@ -1829,9 +2561,9 @@ BEGIN
   IF EXISTS (
     SELECT 1 FROM zaki_manifest t
     JOIN public.reconciliation_matches m ON m.id = t.match_id
-    WHERE t.role = 'target'
-      AND t.authorization_status = 'APPROVED_FOR_RETIREMENT'
+    WHERE t.role = 'candidate'
       AND t.accountant_decision = 'RETIRE'
+      AND t.authorization_status = 'APPROVED_FOR_RETIREMENT'
       AND (m.supersede_operation_id IS DISTINCT FROM '{STAGE2_OPERATION_ID}'
            OR m.supersede_reason IS DISTINCT FROM t.reason
            OR m.superseded_by_match_id IS DISTINCT FROM t.survivor_id)
@@ -1853,8 +2585,8 @@ BEGIN
      WHERE action = '{AUDIT_ACTION}' AND operation_id = '{STAGE2_OPERATION_ID}')
     EXCEPT
     (SELECT match_id FROM zaki_manifest
-     WHERE role = 'target' AND authorization_status = 'APPROVED_FOR_RETIREMENT'
-       AND accountant_decision = 'RETIRE')
+     WHERE role = 'candidate' AND accountant_decision = 'RETIRE'
+       AND authorization_status = 'APPROVED_FOR_RETIREMENT')
   ) THEN
     RAISE EXCEPTION 'FAIL: a stage-2 audit row exists for a non-authorized row';
   END IF;
@@ -1868,8 +2600,8 @@ BEGIN
   END IF;
   IF EXISTS (
     (SELECT match_id FROM zaki_manifest
-     WHERE role = 'target' AND authorization_status = 'APPROVED_FOR_RETIREMENT'
-       AND accountant_decision = 'RETIRE')
+     WHERE role = 'candidate' AND accountant_decision = 'RETIRE'
+       AND authorization_status = 'APPROVED_FOR_RETIREMENT')
     EXCEPT
     (SELECT reconciliation_match_id FROM public.reconciliation_audit_log
      WHERE action = '{AUDIT_ACTION}' AND operation_id = '{STAGE2_OPERATION_ID}')
@@ -1887,16 +2619,27 @@ BEGIN
     RAISE EXCEPTION 'FAIL: a target has more than one repair audit row';
   END IF;
 
-  -- 4. Stage-2 audit rows record the confirming accountant, never the system.
+  -- 4. FULL AUDIT IDEMPOTENCY (Phase 8): every stage-2 repair audit row must
+  --    record the confirming accountant and carry the byte-exact expected
+  --    evidence (incl. manifest hashes, environment mode, artifact identity,
+  --    stage-1 artifact/proof hashes). An altered audit row is an ABORT,
+  --    never a silent no-op.
   IF EXISTS (
-    SELECT 1 FROM public.reconciliation_audit_log a
-    JOIN zaki_manifest t ON t.match_id = a.reconciliation_match_id
-    WHERE a.operation_id = '{STAGE2_OPERATION_ID}'
-      AND (a.action_by IS DISTINCT FROM t.accountant_identity
-           OR a.action_by IS NULL
-           OR a.action_by = '{STAGE1_ACTOR}')
+    SELECT 1
+    FROM zaki_manifest t
+    JOIN public.reconciliation_matches m ON m.id = t.match_id
+    JOIN public.reconciliation_audit_log a
+      ON a.reconciliation_match_id = t.match_id
+     AND a.action = '{AUDIT_ACTION}'
+     AND a.operation_id = '{STAGE2_OPERATION_ID}'
+    WHERE t.role = 'candidate'
+      AND t.accountant_decision = 'RETIRE'
+      AND t.authorization_status = 'APPROVED_FOR_RETIREMENT'
+      AND (a.action_by IS NULL
+           OR a.action_by = '{STAGE1_ACTOR}'
+           OR NOT ({ev_match}))
   ) THEN
-    RAISE EXCEPTION 'FAIL: a stage-2 audit row does not carry the confirming accountant identity';
+    RAISE EXCEPTION 'FAIL: a stage-2 repair audit row does not carry the confirming accountant identity or carries altered evidence';
   END IF;
 
   -- 5. Intended survivors unchanged: live, approved, same stamps.
@@ -1913,20 +2656,54 @@ BEGIN
     RAISE EXCEPTION 'FAIL: an intended survivor was modified or superseded';
   END IF;
 
-  -- 6. Non-executed candidates remain untouched and live.
+  -- 6. Non-executed candidates remain untouched and live, with their exact
+  --    approval stamps.
   IF EXISTS (
     SELECT 1 FROM zaki_manifest t
     JOIN public.reconciliation_matches m ON m.id = t.match_id
-    WHERE t.role = 'target'
-      AND NOT (t.authorization_status = 'APPROVED_FOR_RETIREMENT'
-               AND t.accountant_decision = 'RETIRE')
-      AND m.superseded_at IS NOT NULL
+    WHERE t.role = 'candidate'
+      AND NOT (t.accountant_decision = 'RETIRE'
+               AND t.authorization_status = 'APPROVED_FOR_RETIREMENT')
+      AND (m.superseded_at IS NOT NULL
+           OR m.approved_at IS DISTINCT FROM t.approved_at
+           OR m.approved_by IS DISTINCT FROM t.approved_by
+           OR m.confidence IS DISTINCT FROM t.confidence)
   ) THEN
-    RAISE EXCEPTION 'FAIL: a non-authorized candidate was superseded';
+    RAISE EXCEPTION 'FAIL: a non-authorized candidate was superseded or modified';
+  END IF;
+
+  -- 7. R6 pair integrity: at most one member of each R6 pair is superseded
+  --    by this operation, and every basis endpoint keeps at least one live
+  --    automatic row.
+  IF EXISTS (
+    SELECT 1 FROM (
+      SELECT t.qb_id
+      FROM zaki_manifest t
+      JOIN public.reconciliation_matches m ON m.id = t.match_id
+      WHERE t.class = 'R6'
+        AND m.superseded_at IS NOT NULL
+        AND m.supersede_operation_id = '{STAGE2_OPERATION_ID}'
+      GROUP BY t.qb_id
+      HAVING count(*) > 1
+    ) d
+  ) THEN
+    RAISE EXCEPTION 'FAIL: an R6 pair has more than one member retired by stage 2';
+  END IF;
+  -- R5 (synthetic test rows) legitimately ends with ZERO live rows; R3 and
+  -- R6 endpoints must keep their survivor.
+  IF EXISTS (
+    SELECT 1
+    FROM (SELECT DISTINCT qb_id FROM zaki_manifest
+          WHERE class IN ('R3', 'R6')) e
+    WHERE (SELECT count(*) FROM public.reconciliation_matches m
+           WHERE m.qb_transaction_id = e.qb_id
+             AND m.superseded_at IS NULL) < 1
+  ) THEN
+    RAISE EXCEPTION 'FAIL: a basis endpoint lost all of its live rows';
   END IF;
 
   IF v_mode = 'apply' THEN
-    -- 7. Global invariants + exact counts.
+    -- 8. Global invariants + exact counts.
     SELECT count(*) INTO v FROM public.reconciliation_matches;
     IF v <> {EXPECTED['total_matches']} THEN
       RAISE EXCEPTION 'FAIL: total matches changed to % (no deletes allowed)', v;
@@ -1950,7 +2727,7 @@ BEGIN
       RAISE EXCEPTION 'FAIL: % superseded rows lack a reason', v;
     END IF;
 
-    -- 8. Exact remaining duplicate-endpoint set.
+    -- 9. Exact remaining duplicate-endpoint set.
     IF EXISTS (
       (SELECT qb_transaction_id FROM (
          SELECT qb_transaction_id FROM public.reconciliation_matches
@@ -1974,7 +2751,7 @@ BEGIN
       RAISE EXCEPTION 'FAIL: an endpoint expected to remain duplicate was resolved early';
     END IF;
   ELSE
-    RAISE NOTICE 'STAGE 2: ALREADY APPLIED — verified % authorized rows carry this operation with correct fields and audit rows; no-op commit', {n_exec};
+    RAISE NOTICE 'STAGE 2: ALREADY APPLIED — verified % authorized rows carry this operation with correct fields and byte-exact audit evidence; no-op commit', {n_exec};
   END IF;
 END;
 $post$;
@@ -1984,81 +2761,495 @@ COMMIT;
     return s2
 
 
-def stage1_id_values(s1t):
-    return sql_values(["match_id"], [{"match_id": r["match_id"]} for r in s1t])
+# Decision columns appended to candidate rows for the stage-2 manifest load.
+AUTH_ROW_HEADER = CORE_HEADER + [
+    "accountant_decision", "accountant_identity", "confirmation_timestamp",
+    "authorization_status", "accountant_note",
+]
 
 
-def stage2_endpoint_values(rows):
-    return sql_values(
-        ["qb_transaction_id", "still_duplicate"],
-        [
-            {
-                "qb_transaction_id": r["qb_transaction_id"],
-                "still_duplicate": r["still_duplicate"],
-            }
-            for r in rows
-        ],
-    )
+def auth_row_values(rows):
+    return sql_values(AUTH_ROW_HEADER, rows)
 
 
-def cmd_sql(auth_manifest, snapshot_dir, dry_run=False):
-    snap = load_snapshot(snapshot_dir)
-    (s1t, s1g, s2t, s2g, dup_eps, dup_after_s1, r6) = build_rows(snap)
+def join_decisions(basis_rows, decisions):
+    """Fill decision columns on basis rows from the validated manifest.
 
-    stage1_manifest_path = MANIFEST_DIR / "stage1-unapproved-targets.csv"
-    stage1_manifest_sha = sha256_file(stage1_manifest_path)
-
-    auth_rows = read_csv(auth_manifest)
-    auth_sha = sha256_file(auth_manifest)
-    auth_targets = [r for r in auth_rows if r["role"] == "target"]
-    auth_guards = [r for r in auth_rows if r["role"] == "survivor_guard"]
-    if len(auth_targets) != EXPECTED["stage2_candidates"]:
-        raise SystemExit(
-            f"authorization manifest has {len(auth_targets)} candidates, "
-            f"expected {EXPECTED['stage2_candidates']}"
-        )
-    if len(auth_guards) != EXPECTED["stage2_guards"]:
-        raise SystemExit(
-            f"authorization manifest has {len(auth_guards)} guards, "
-            f"expected {EXPECTED['stage2_guards']}"
-        )
-    n_exec = sum(
-        1 for r in auth_targets
-        if r["authorization_status"] == "APPROVED_FOR_RETIREMENT"
-        and r["accountant_decision"] == "RETIRE"
-    )
-    # Every authorized retiree must reference a live guard (its survivor);
-    # a NULL survivor (R5 synthetic test rows) is legitimate.
-    guard_ids = {r["match_id"] for r in auth_guards}
-    for r in auth_targets:
-        if (
-            r["authorization_status"] == "APPROVED_FOR_RETIREMENT"
-            and r["accountant_decision"] == "RETIRE"
-            and r["intended_survivor_match_id"]
-            and r["intended_survivor_match_id"] not in guard_ids
-        ):
-            raise SystemExit(
-                f"authorized retiree {r['match_id']} references survivor "
-                f"{r['intended_survivor_match_id']} which is not guarded"
+    Returns (candidates, guards) with decision fields. Rows without a
+    decision carry NULL decision columns (asserted untouched).
+    """
+    by_id = {d["match_id"]: d for d in decisions}
+    out = []
+    for r in basis_rows:
+        row = dict(r)
+        d = by_id.get(r["match_id"])
+        if d is not None:
+            row["accountant_decision"] = d["decision"]
+            row["accountant_identity"] = d["accountant_identity"]
+            row["confirmation_timestamp"] = d["confirmation_timestamp"]
+            row["authorization_status"] = (
+                "APPROVED_FOR_RETIREMENT"
+                if d["decision"] == "RETIRE"
+                else d["decision"]
             )
+            row["accountant_note"] = d.get("note") or ""
+        else:
+            for c in ("accountant_decision", "accountant_identity",
+                      "confirmation_timestamp", "authorization_status",
+                      "accountant_note"):
+                row[c] = ""
+        out.append(row)
+    candidates = [r for r in out if r["role"] == "candidate"]
+    guards = [r for r in out if r["role"] == "survivor_guard"]
+    return candidates, guards
 
-    s1_sql = stage1_sql(s1t, s1g, dup_eps, dup_after_s1, stage1_manifest_sha)
-    s2_sql = stage2_sql(auth_targets, auth_guards, s1t, dup_after_s1,
-                        auth_sha, n_exec)
 
-    if dry_run:
-        print(s1_sql)
-        print("=" * 80)
-        print(s2_sql)
-        return
+# ---------------------------------------------------------------------------
+# manifests subcommand
+# ---------------------------------------------------------------------------
 
+MANIFEST_FILES = [
+    "duplicate-endpoints.csv",
+    "stage1-unapproved-targets.csv",
+    "stage2-approved-candidates.csv",
+    "r6-review.csv",
+    "stage2-immutable-basis.json",
+    "stage2-test-decisions.json",
+    "stage2-authorization-manifest-template.json",
+    "stage2-rehearsal-authorization-manifest.json",
+]
+
+
+def cmd_manifests(snapshot_dir, out_dir):
+    snap = load_snapshot(snapshot_dir)
+    (s1t, s1g, s2c, s2g, dup_eps, dup_after_s1, r6) = build_rows(snap)
+
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+
+    # 1. Duplicate-endpoint inventory (107 rows).
+    write_csv(out / "duplicate-endpoints.csv", DUP_ENDPOINTS_HEADER, dup_eps)
+
+    # 2. Stage-1 manifest: 154 targets + 101 survivor guards.
+    write_csv(
+        out / "stage1-unapproved-targets.csv",
+        CORE_HEADER, s1t + s1g,
+    )
+
+    # 3. Committed stage-2 immutable basis (189 rows: 102 decision-permitted
+    #    candidates + 87 survivor guards) — the authorization contract.
+    basis_rows = build_basis_rows(s2c, s2g)
+    write_json(out / "stage2-immutable-basis.json", basis_document(basis_rows))
+
+    # 4. Stage-2 candidate inventory (102 decision-permitted rows, no
+    #    decisions; permitted survivor/decision sets are committed columns).
+    candidates_csv = []
+    for r in basis_rows:
+        if r["role"] != "candidate":
+            continue
+        row = dict(r)
+        row["permitted_survivor_match_ids"] = ";".join(
+            r["permitted_survivor_match_ids"])
+        row["permitted_decisions"] = ";".join(r["permitted_decisions"])
+        candidates_csv.append(row)
+    write_csv(
+        out / "stage2-approved-candidates.csv",
+        CANDIDATES_HEADER, candidates_csv,
+    )
+
+    # 5. R6 human-review rows (4 endpoints).
+    write_csv(out / "r6-review.csv", R6_HEADER, r6)
+
+    # 6. REHEARSAL test choices (the fixed 98 decisions, no identity/ts).
+    test_decisions = build_test_decisions(r6, s2c)
+    write_json(out / "stage2-test-decisions.json", {
+        "package": "repair-013-pre",
+        "test_decisions_schema_version": 1,
+        "choices": test_decisions,
+    })
+
+    # 7. Authorization-manifest TEMPLATE (empty decisions, REHEARSAL mode).
+    #    The basis hash is filled after the basis sha is computed below.
+    write_json(out / "stage2-authorization-manifest-template.json",
+               auth_manifest_document("", "REHEARSAL", []))
+
+    # 8. REHEARSAL-ONLY test authorization manifest (all 98 signed with a
+    #    clearly marked test identity and a fixed timestamp). Documentation
+    #    of the rehearsal choices; the rehearsal chain re-stamps a fresh
+    #    confirmation timestamp via the rehearsal-manifest subcommand so the
+    #    post-stage-1 ordering check is exercised at run time.
+    rehearsal_decisions = []
+    for d in test_decisions:
+        rehearsal_decisions.append({
+            "match_id": d["match_id"],
+            "decision": d["decision"],
+            "accountant_identity": TEST_ACCOUNTANT,
+            "confirmation_timestamp": TEST_CONFIRMATION_TS,
+            "note": d.get("note", ""),
+        })
+    write_json(out / "stage2-rehearsal-authorization-manifest.json",
+               auth_manifest_document("", "REHEARSAL", rehearsal_decisions))
+
+    # The basis sha is needed by the two JSON manifests; compute after the
+    # basis file is on disk, then rewrite them.
+    basis_sha = sha256_file(out / "stage2-immutable-basis.json")
+    write_json(out / "stage2-authorization-manifest-template.json",
+               auth_manifest_document(basis_sha, "REHEARSAL", []))
+    write_json(out / "stage2-rehearsal-authorization-manifest.json",
+               auth_manifest_document(basis_sha, "REHEARSAL",
+                                      rehearsal_decisions))
+
+    # 9. Identity registry.
+    def manifest_row_count(name):
+        path = out / name
+        if name.endswith(".csv"):
+            return len(read_csv(path))
+        doc = json.load(open(path, encoding="utf-8"))
+        for key in ("rows", "choices", "decisions"):
+            if isinstance(doc.get(key), list):
+                return len(doc[key])
+        return 0
+
+    identities = {
+        "package": {
+            "stage1_operation_id": STAGE1_OPERATION_ID,
+            "stage2_operation_id": STAGE2_OPERATION_ID,
+            "snapshot_provenance": {
+                name: {"sha256": h} for name, h in snap["hashes"].items()
+            },
+            "accepted_classification": EXPECTED,
+            "production_project_ref": PROD_PROJECT_REF,
+        },
+        "manifests": {
+            name: {
+                "sha256": sha256_file(out / name),
+                "rows": manifest_row_count(name),
+            }
+            for name in MANIFEST_FILES
+        },
+    }
+    with open(out / "manifest-identities.json", "w", encoding="utf-8") as f:
+        json.dump(identities, f, indent=2)
+        f.write("\n")
+
+    print(f"manifests written to {out}")
+    for name, meta in identities["manifests"].items():
+        print(f"  {name}: {meta['rows']} rows  sha256={meta['sha256'][:16]}…")
+
+
+# ---------------------------------------------------------------------------
+# sql subcommand (REHEARSAL-only regeneration of the committed working copies)
+# ---------------------------------------------------------------------------
+
+def cmd_sql(auth_manifest, snapshot_dir):
+    """Regenerate the committed 14a/14b working copies (REHEARSAL mode).
+
+    --auth-manifest is REQUIRED: there is no default authorization input —
+    omitting it fails closed. Reads only COMMITTED files (never the
+    snapshot): the stage-2 build is a function of the committed basis and
+    the supplied authorization manifest.
+    """
+    if not auth_manifest:
+        raise SystemExit(
+            "sql requires --auth-manifest <path>: missing authorization "
+            "input fails closed (there is no default manifest)"
+        )
+    pkg = load_committed_package()
+    decisions, auth_manifest_sha = validate_auth_manifest(
+        auth_manifest, "REHEARSAL"
+    )
+    s2c_rows, s2g_rows = join_decisions(pkg["basis_rows"], decisions)
+    n_exec = sum(
+        1 for d in decisions if d.get("decision") == "RETIRE"
+    )
+
+    mode = "REHEARSAL"
+    project_ref = None
+    proof_sha = ""
+    identity = artifact_identity_stage1(
+        mode, pkg["stage1_manifest_sha"], pkg["basis_sha"], project_ref
+    )
+    s1_sql = stage1_sql(
+        pkg["s1t"], pkg["s1g"], pkg["s2c"], pkg["dup_after_s1"],
+        pkg["stage1_manifest_sha"], pkg["basis_sha"], mode, project_ref,
+        identity,
+    )
     SQL_STAGE1.write_text(s1_sql, encoding="utf-8")
+    # The stage-2 artifact binds the stage-1 artifact it sequences on: the
+    # sha of the exact 14a file just written (an operator runs a FROZEN
+    # stage-1 artifact; see `freeze`).
+    stage1_artifact_sha = sha256_file(SQL_STAGE1)
+    identity2 = artifact_identity_stage2(
+        mode, pkg["stage1_manifest_sha"], pkg["basis_sha"],
+        auth_manifest_sha, stage1_artifact_sha, proof_sha, project_ref,
+    )
+    s2_sql = stage2_sql(
+        s2c_rows, s2g_rows, pkg["s1t"], pkg["dup_after_s1"],
+        auth_manifest_sha, pkg["basis_sha"], stage1_artifact_sha, proof_sha,
+        mode, project_ref, identity2, n_exec,
+        stage1_manifest_sha=pkg["stage1_manifest_sha"],
+    )
+
     SQL_STAGE2.write_text(s2_sql, encoding="utf-8")
-    print(f"wrote {SQL_STAGE1}")
-    print(f"wrote {SQL_STAGE2} (authorization manifest sha256={auth_sha[:16]}…, {n_exec} authorized)")
+    print(f"wrote {SQL_STAGE1} (REHEARSAL, artifact identity {identity[:16]}…)")
+    print(f"wrote {SQL_STAGE2} (REHEARSAL, authorization manifest "
+          f"sha256={auth_manifest_sha[:16]}…, {n_exec} authorized)")
+    print("note: these working copies are REHEARSAL-mode documentation "
+          "artifacts; execution uses `freeze` + the hash-verified runner.")
 
 
-def cmd_verify(snapshot_dir, auth_manifest=None):
+# ---------------------------------------------------------------------------
+# freeze subcommand (immutable execution artifact + freeze record)
+# ---------------------------------------------------------------------------
+
+def _freeze_record_doc(stage, mode, artifact_file, artifact_sha,
+                       artifact_identity, stage1_manifest_sha, basis_sha,
+                       auth_manifest_sha, stage1_artifact_sha, proof_sha,
+                       project_ref, frozen_at):
+    doc = {
+        "package": "repair-013-pre",
+        "freeze_schema_version": 1,
+        "stage": stage,
+        "environment_mode": mode,
+        "artifact_file": artifact_file,
+        "artifact_sha256": artifact_sha,
+        "artifact_identity": artifact_identity,
+        "stage1_operation_id": STAGE1_OPERATION_ID,
+        "stage2_operation_id": STAGE2_OPERATION_ID,
+        "stage1_manifest_sha256": stage1_manifest_sha,
+        "stage2_basis_sha256": basis_sha,
+        "project_ref": project_ref or "-",
+        "frozen_at": frozen_at,
+    }
+    if stage == 2:
+        doc["authorization_manifest_sha256"] = auth_manifest_sha
+        doc["stage1_artifact_sha256"] = stage1_artifact_sha
+        doc["stage1_execution_proof_sha256"] = proof_sha
+    return doc
+
+
+def cmd_freeze(stage, mode, auth_manifest, stage1_artifact,
+               stage1_execution_proof, project_ref, out_dir, frozen_at):
+    if stage not in (1, 2):
+        raise SystemExit("freeze --stage must be 1 or 2")
+    if mode not in MODES:
+        raise SystemExit(f"--environment-mode must be one of {MODES}")
+
+    if mode == "PRODUCTION":
+        if project_ref != PROD_PROJECT_REF:
+            raise SystemExit(
+                f"PRODUCTION freeze requires --project-ref "
+                f"{PROD_PROJECT_REF} (got {project_ref!r}); production "
+                f"artifacts bind to the exact project identity"
+            )
+        if not frozen_at:
+            frozen_at = datetime.datetime.now(
+                datetime.timezone.utc).isoformat(timespec="seconds")
+    else:
+        project_ref = None
+        if not frozen_at:
+            frozen_at = datetime.datetime.now(
+                datetime.timezone.utc).isoformat(timespec="seconds")
+
+    pkg = load_committed_package()
+
+    proof_sha = ""
+    auth_manifest_sha = ""
+    decisions = []
+    if stage == 2:
+        if not auth_manifest:
+            raise SystemExit(
+                "freeze --stage 2 requires --auth-manifest <path>: missing "
+                "authorization input fails closed"
+            )
+        if not stage1_artifact or not stage1_execution_proof:
+            raise SystemExit(
+                "freeze --stage 2 requires --stage1-artifact <frozen 14a> "
+                "and --stage1-execution-proof <proof.json>: stage-2 "
+                "authorization is only buildable after the stage-1 "
+                "checkpoint"
+            )
+        check_stage1_artifact_content(stage1_artifact, mode)
+        proof = load_stage1_proof(stage1_execution_proof, mode,
+                                  stage1_artifact)
+        proof_sha = sha256_file(stage1_execution_proof)
+        decisions, auth_manifest_sha = validate_auth_manifest(
+            auth_manifest, mode, proof=proof
+        )
+        if not decisions:
+            raise SystemExit(
+                "authorization manifest contains no decisions; refusing to "
+                "freeze a stage-2 artifact that could do nothing (explicit "
+                "authorization required)"
+            )
+        stage1_artifact_sha = sha256_file(stage1_artifact)
+        s2c_rows, s2g_rows = join_decisions(pkg["basis_rows"], decisions)
+        n_exec = sum(1 for d in decisions if d.get("decision") == "RETIRE")
+        identity = artifact_identity_stage2(
+            mode, pkg["stage1_manifest_sha"], pkg["basis_sha"],
+            auth_manifest_sha, stage1_artifact_sha, proof_sha, project_ref,
+        )
+        sql = stage2_sql(
+            s2c_rows, s2g_rows, pkg["s1t"], pkg["dup_after_s1"],
+            auth_manifest_sha, pkg["basis_sha"], stage1_artifact_sha,
+            proof_sha, mode, project_ref, identity, n_exec,
+            stage1_manifest_sha=pkg["stage1_manifest_sha"],
+        )
+        stem = f"14b-stage2-approved-repair-{mode}-{auth_manifest_sha[:12]}"
+    else:
+        if auth_manifest or stage1_artifact or stage1_execution_proof:
+            raise SystemExit(
+                "freeze --stage 1 does not accept --auth-manifest/"
+                "--stage1-artifact/--stage1-execution-proof"
+            )
+        identity = artifact_identity_stage1(
+            mode, pkg["stage1_manifest_sha"], pkg["basis_sha"], project_ref
+        )
+        sql = stage1_sql(
+            pkg["s1t"], pkg["s1g"], pkg["s2c"], pkg["dup_after_s1"],
+            pkg["stage1_manifest_sha"], pkg["basis_sha"], mode, project_ref,
+            identity,
+        )
+        stem = f"14a-stage1-unapproved-repair-{mode}-{pkg['stage1_manifest_sha'][:12]}"
+
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    artifact_path = out / f"{stem}.sql"
+    record_path = out / f"freeze-{stem}.json"
+
+    artifact_sha = sha256_text(sql)
+    if artifact_path.exists():
+        raise SystemExit(
+            f"refusing to overwrite frozen artifact {artifact_path} — "
+            f"stage artifacts are immutable once frozen"
+        )
+    if record_path.exists():
+        raise SystemExit(
+            f"refusing to overwrite freeze record {record_path}"
+        )
+    artifact_path.write_text(sql, encoding="utf-8")
+    record = _freeze_record_doc(
+        stage, mode, artifact_path.name, sha256_file(artifact_path),
+        identity, pkg["stage1_manifest_sha"], pkg["basis_sha"],
+        auth_manifest_sha, stage1_artifact_sha if stage == 2 else "",
+        proof_sha, project_ref, frozen_at,
+    )
+    write_json(record_path, record)
+    print(f"frozen artifact: {artifact_path}")
+    print(f"  sha256:        {sha256_file(artifact_path)}")
+    print(f"  identity:      {identity}")
+    print(f"  mode:          {mode}")
+    print(f"  frozen at:     {frozen_at}")
+    if stage == 2:
+        print(f"  authorized:    {n_exec} rows")
+        print(f"  basis:         {pkg['basis_sha']}")
+        print(f"  manifest:      {auth_manifest_sha}")
+        print(f"  stage-1 proof: {proof_sha}")
+    print(f"freeze record:  {record_path}")
+
+
+# ---------------------------------------------------------------------------
+# verify subcommand
+# ---------------------------------------------------------------------------
+
+def verify_frozen_artifact(record_path):
+    try:
+        record = json.load(open(record_path, encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        raise SystemExit(f"freeze record unreadable: {e}")
+    errors = []
+    if record.get("freeze_schema_version") != 1:
+        errors.append("unsupported freeze record schema version")
+    artifact_file = record.get("artifact_file") or ""
+    artifact_path = Path(record_path).resolve().parent / artifact_file
+    if not artifact_path.exists():
+        errors.append(f"frozen artifact missing: {artifact_path}")
+    else:
+        got = sha256_file(artifact_path)
+        if got != record.get("artifact_sha256"):
+            errors.append(
+                f"frozen artifact sha256 {got} != freeze record "
+                f"{record.get('artifact_sha256')}"
+            )
+        content = artifact_path.read_text(encoding="utf-8")
+        if record.get("artifact_identity") not in content:
+            errors.append("frozen artifact does not embed its artifact identity")
+        for op in (record.get("stage1_operation_id"),
+                   record.get("stage2_operation_id")):
+            if op and op not in content:
+                errors.append(f"frozen artifact missing operation id {op}")
+        mode = record.get("environment_mode")
+        mark = (MODE_GATE_REHEARSAL_MARK if mode == "REHEARSAL"
+                else MODE_GATE_PRODUCTION_MARK)
+        if mark not in content:
+            errors.append(
+                f"frozen artifact does not carry the {mode} environment-mode gate"
+            )
+        if record.get("stage1_manifest_sha256") not in content:
+            errors.append("frozen artifact does not embed the stage-1 manifest sha")
+        if record.get("stage2_basis_sha256") not in content:
+            errors.append("frozen artifact does not embed the committed basis sha")
+        if record.get("stage") == 2:
+            if record.get("authorization_manifest_sha256") not in content:
+                errors.append("frozen artifact does not embed the authorization manifest sha")
+            if record.get("stage1_artifact_sha256") not in content:
+                errors.append("frozen artifact does not embed the stage-1 artifact sha")
+            if record.get("stage1_execution_proof_sha256") not in content:
+                errors.append("frozen artifact does not embed the stage-1 proof sha")
+        if mode == "PRODUCTION":
+            if record.get("project_ref") != PROD_PROJECT_REF:
+                errors.append("PRODUCTION freeze record carries the wrong project_ref")
+            if PROD_PROJECT_REF not in content:
+                errors.append("PRODUCTION artifact does not embed the project ref")
+    # Cross-check the binding inputs against the committed files.
+    pkg = load_committed_package()
+    if record.get("stage1_manifest_sha256") != pkg["stage1_manifest_sha"]:
+        errors.append("freeze record stage-1 manifest sha does not match the committed manifest")
+    if record.get("stage2_basis_sha256") != pkg["basis_sha"]:
+        errors.append("freeze record basis sha does not match the committed basis")
+    if record.get("stage") == 2:
+        # The authorization manifest referenced by the freeze record must
+        # exist and hash to the recorded value.
+        manifest_sha = record.get("authorization_manifest_sha256")
+        found = None
+        for cand in (REHEARSAL_MANIFEST_PATH,):
+            if cand.exists() and sha256_file(cand) == manifest_sha:
+                found = cand
+                break
+        if found is None:
+            for cand in Path(record_path).resolve().parent.parent.glob(
+                    "**/*.json"):
+                try:
+                    if sha256_file(cand) == manifest_sha:
+                        found = cand
+                        break
+                except OSError:
+                    continue
+        if found is None:
+            errors.append(
+                "authorization manifest referenced by the freeze record was "
+                "not found at its recorded sha"
+            )
+    if errors:
+        print("VERIFY FAILED:")
+        for e in errors:
+            print(f"  - {e}")
+        sys.exit(1)
+    print(f"VERIFY OK: frozen artifact {artifact_path.name} is hash-verified "
+          f"and bound (identity {record.get('artifact_identity', '')[:16]}…, "
+          f"mode {record.get('environment_mode')}).")
+
+
+def cmd_verify(snapshot_dir, auth_manifest=None, artifact=None):
+    if artifact:
+        verify_frozen_artifact(artifact)
+        return
+    if not auth_manifest:
+        raise SystemExit(
+            "verify requires --auth-manifest <path> for the stage-2 SQL "
+            "binding (no default authorization input) or --artifact "
+            "<freeze.json> for a frozen artifact"
+        )
     errors = []
     identities = json.load(open(MANIFEST_DIR / "manifest-identities.json"))
 
@@ -2071,8 +3262,6 @@ def cmd_verify(snapshot_dir, auth_manifest=None):
         got = sha256_file(path)
         if got != meta["sha256"]:
             errors.append(f"manifest {name} hash mismatch: {got} != {meta['sha256']}")
-        if len(read_csv(path)) != meta["rows"]:
-            errors.append(f"manifest {name} row count changed")
 
     # 2. Snapshot provenance hashes still match (if the snapshot dir exists).
     snap_dir = Path(snapshot_dir)
@@ -2087,16 +3276,34 @@ def cmd_verify(snapshot_dir, auth_manifest=None):
     else:
         print(f"note: snapshot dir {snap_dir} absent — provenance not re-checked")
 
-    # 3. Classification still reproducible from the snapshot.
+    # 3. Classification + committed basis still reproducible from the
+    #    snapshot (byte-identical regeneration).
     if snap_dir.exists():
         try:
             snap = load_snapshot(str(snap_dir))
-            build_rows(snap)
+            (s1t, s1g, s2c, s2g, dup_eps, dup_after_s1, r6) = build_rows(snap)
+            regen_basis = basis_document(build_basis_rows(s2c, s2g))
+            committed_basis = json.load(open(BASIS_PATH, encoding="utf-8"))
+            if regen_basis != committed_basis:
+                errors.append(
+                    "committed stage-2 basis is not byte-identical to a "
+                    "regeneration from the accepted snapshot"
+                )
+            regen_decisions = build_test_decisions(r6, s2c)
+            committed_decisions = json.load(
+                open(TEST_DECISIONS_PATH, encoding="utf-8")
+            ).get("choices")
+            if regen_decisions != committed_decisions:
+                errors.append(
+                    "committed stage-2 test decisions are not byte-identical "
+                    "to a regeneration from the accepted snapshot"
+                )
         except SystemExit as e:
             errors.append(f"classification re-derivation failed: {e}")
 
-    # 4. Stage-1 SQL binds the current stage-1 manifest hash and the fixed
-    #    operation ids.
+    # 4. Stage-1 SQL binds the current stage-1 manifest hash, the committed
+    #    basis hash, the REHEARSAL gate, and the fixed operation ids — and
+    #    is byte-identical to a regeneration.
     s1 = SQL_STAGE1.read_text(encoding="utf-8")
     want_sha = identities["manifests"]["stage1-unapproved-targets.csv"]["sha256"]
     if want_sha not in s1:
@@ -2104,55 +3311,97 @@ def cmd_verify(snapshot_dir, auth_manifest=None):
     for op in (STAGE1_OPERATION_ID,):
         if op not in s1:
             errors.append(f"stage-1 SQL missing operation id {op}")
+    if MODE_GATE_REHEARSAL_MARK not in s1:
+        errors.append("stage-1 SQL missing the REHEARSAL environment-mode gate")
 
-    # 5. Stage-2 SQL binds the authorization manifest it was generated from.
+    # 5. Stage-2 SQL binds the authorization manifest it was generated from
+    #    (the explicit --auth-manifest), the committed basis, and the
+    #    REHEARSAL gate.
     s2 = SQL_STAGE2.read_text(encoding="utf-8")
-    auth_name = auth_manifest or "stage2-test-authorization-manifest.csv"
-    auth_path = (
-        Path(auth_manifest) if auth_manifest else MANIFEST_DIR / auth_name
-    )
+    auth_path = Path(auth_manifest)
     auth_sha = sha256_file(auth_path)
     if auth_sha not in s2:
         errors.append(
-            f"stage-2 SQL does not embed the hash of {auth_name} "
+            f"stage-2 SQL does not embed the hash of {auth_manifest} "
             f"({auth_sha})"
         )
+    if MODE_GATE_REHEARSAL_MARK not in s2:
+        errors.append("stage-2 SQL missing the REHEARSAL environment-mode gate")
     if STAGE2_OPERATION_ID not in s2:
-        errors.append(f"stage-2 SQL missing operation id {STAGE2_OPERATION_ID}")
+        errors.append("stage-2 SQL missing operation id " + STAGE2_OPERATION_ID)
     if STAGE1_OPERATION_ID not in s2:
         errors.append("stage-2 SQL missing the stage-1 sequencing operation id")
 
-    # 6. Determinism: regenerating the SQL must be byte-identical.
-    import io
-    import contextlib
-    snap = load_snapshot(str(snap_dir)) if snap_dir.exists() else None
-    if snap is not None:
-        (s1t, s1g, s2t, s2g, dup_eps, dup_after_s1, r6) = build_rows(snap)
-        stage1_manifest_sha = sha256_file(
-            MANIFEST_DIR / "stage1-unapproved-targets.csv"
-        )
-        regen1 = stage1_sql(s1t, s1g, dup_eps, dup_after_s1, stage1_manifest_sha)
-        auth_rows = read_csv(auth_path)
-        auth_targets = [r for r in auth_rows if r["role"] == "target"]
-        auth_guards = [r for r in auth_rows if r["role"] == "survivor_guard"]
-        n_exec = sum(
-            1 for r in auth_targets
-            if r["authorization_status"] == "APPROVED_FOR_RETIREMENT"
-            and r["accountant_decision"] == "RETIRE"
-        )
-        regen2 = stage2_sql(auth_targets, auth_guards, s1t, dup_after_s1,
-                            auth_sha, n_exec)
-        if regen1 != s1:
-            errors.append("stage-1 SQL is not byte-identical to a regeneration")
-        if regen2 != s2:
-            errors.append("stage-2 SQL is not byte-identical to a regeneration")
+    # 6. Determinism: regenerating both SQL files from the committed package
+    #    files must be byte-identical.
+    pkg = load_committed_package()
+    decisions, _ = validate_auth_manifest(auth_manifest, "REHEARSAL")
+    s2c_rows, s2g_rows = join_decisions(pkg["basis_rows"], decisions)
+    n_exec = sum(1 for d in decisions if d.get("decision") == "RETIRE")
+    mode = "REHEARSAL"
+    stage1_artifact_sha = sha256_file(SQL_STAGE1)
+    identity1 = artifact_identity_stage1(
+        mode, pkg["stage1_manifest_sha"], pkg["basis_sha"], None
+    )
+    regen1 = stage1_sql(
+        pkg["s1t"], pkg["s1g"], pkg["s2c"], pkg["dup_after_s1"],
+        pkg["stage1_manifest_sha"], pkg["basis_sha"], mode, None, identity1,
+    )
+    identity2 = artifact_identity_stage2(
+        mode, pkg["stage1_manifest_sha"], pkg["basis_sha"], auth_sha,
+        stage1_artifact_sha, "", None,
+    )
+    regen2 = stage2_sql(
+        s2c_rows, s2g_rows, pkg["s1t"], pkg["dup_after_s1"], auth_sha,
+        pkg["basis_sha"], stage1_artifact_sha, "", mode, None, identity2,
+        n_exec, stage1_manifest_sha=pkg["stage1_manifest_sha"],
+    )
+    if regen1 != s1:
+        errors.append("stage-1 SQL is not byte-identical to a regeneration")
+    if regen2 != s2:
+        errors.append("stage-2 SQL is not byte-identical to a regeneration")
 
     if errors:
         print("VERIFY FAILED:")
         for e in errors:
             print(f"  - {e}")
         sys.exit(1)
-    print("VERIFY OK: manifests, hashes, classification, and SQL binding all consistent.")
+    print("VERIFY OK: manifests, hashes, classification, committed basis, "
+          "and SQL binding all consistent.")
+
+
+# ---------------------------------------------------------------------------
+# rehearsal-manifest subcommand
+# ---------------------------------------------------------------------------
+
+def cmd_rehearsal_manifest(confirmation_timestamp, identity, out_path):
+    """Generate the per-run REHEARSAL authorization manifest from the
+    committed test-decisions list, stamped with a fresh confirmation
+    timestamp. The rehearsal chain calls this AFTER the stage-1 proof
+    exists, so the post-stage-1 ordering check is genuinely exercised."""
+    pkg = load_committed_package()
+    try:
+        test = json.load(open(TEST_DECISIONS_PATH, encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        raise SystemExit(f"test decisions unreadable: {e}")
+    choices = test.get("choices")
+    if not isinstance(choices, list) or len(choices) != EXPECTED["stage2_retireable"]:
+        raise SystemExit("committed test decisions are malformed")
+    decisions = []
+    for c in choices:
+        decisions.append({
+            "match_id": c["match_id"],
+            "decision": c["decision"],
+            "accountant_identity": identity or TEST_ACCOUNTANT,
+            "confirmation_timestamp": confirmation_timestamp,
+            "note": c.get("note", ""),
+        })
+    doc = auth_manifest_document(pkg["basis_sha"], "REHEARSAL", decisions)
+    write_json(Path(out_path), doc)
+    print(f"wrote {out_path} "
+          f"(REHEARSAL, {len(decisions)} test decisions, "
+          f"confirmation_timestamp={confirmation_timestamp}, "
+          f"sha256={sha256_file(Path(out_path))[:16]}…)")
 
 
 # ---------------------------------------------------------------------------
@@ -2162,29 +3411,58 @@ def main():
     p.add_argument("--snapshot-dir", default="/tmp/zaki-repair-design")
     sub = p.add_subparsers(dest="command", required=True)
     sub.add_parser("manifests")
+
     sp = sub.add_parser("sql")
     sp.add_argument(
         "--auth-manifest",
         default=None,
-        help="signed stage-2 authorization manifest CSV "
-             "(default: manifests/stage2-test-authorization-manifest.csv)",
+        required=True,
+        help="signed stage-2 authorization manifest JSON (REQUIRED — no "
+             "default; missing authorization input fails closed)",
     )
+
+    fp = sub.add_parser("freeze")
+    fp.add_argument("--stage", type=int, required=True, choices=(1, 2))
+    fp.add_argument("--environment-mode", required=True, choices=MODES)
+    fp.add_argument("--auth-manifest", default=None)
+    fp.add_argument("--stage1-artifact", default=None)
+    fp.add_argument("--stage1-execution-proof", default=None)
+    fp.add_argument("--project-ref", default=None)
+    fp.add_argument("--out-dir", default=str(ROOT / "artifacts"))
+    fp.add_argument("--frozen-at", default=None,
+                    help="freeze timestamp (ISO-8601; default: now)")
+
     vp = sub.add_parser("verify")
     vp.add_argument("--auth-manifest", default=None)
+    vp.add_argument("--artifact", default=None,
+                    help="freeze record JSON of a frozen artifact")
+
+    rp = sub.add_parser("rehearsal-manifest")
+    rp.add_argument("--confirmation-timestamp", required=True,
+                    help="ISO-8601 timestamp AFTER the stage-1 checkpoint")
+    rp.add_argument("--identity", default=TEST_ACCOUNTANT)
+    rp.add_argument("--out", required=True)
+
     args = p.parse_args()
 
     if args.command == "manifests":
         cmd_manifests(args.snapshot_dir, MANIFEST_DIR)
     elif args.command == "sql":
-        auth = (
-            Path(args.auth_manifest)
-            if args.auth_manifest
-            else MANIFEST_DIR / "stage2-test-authorization-manifest.csv"
+        cmd_sql(args.auth_manifest, args.snapshot_dir)
+    elif args.command == "freeze":
+        cmd_freeze(
+            args.stage, args.environment_mode, args.auth_manifest,
+            args.stage1_artifact, args.stage1_execution_proof,
+            args.project_ref, args.out_dir, args.frozen_at,
         )
-        cmd_sql(auth, args.snapshot_dir)
     elif args.command == "verify":
-        cmd_verify(args.snapshot_dir, args.auth_manifest)
+        cmd_verify(args.snapshot_dir, args.auth_manifest, args.artifact)
+    elif args.command == "rehearsal-manifest":
+        cmd_rehearsal_manifest(
+            args.confirmation_timestamp, args.identity, args.out,
+        )
 
 
 if __name__ == "__main__":
     main()
+

@@ -6,3 +6,9 @@ dist/
 *.log
 .DS_Store
 supabase/config.toml
+
+# Historical repair rehearsal run products (hashes are recorded in
+# rehearsal/EVIDENCE.md; frozen artifacts + freeze records + proofs are
+# committed under repair-013-pre/artifacts/ when they are the recorded
+# evidence). Per-run generated manifests/logs are not committed.
+supabase/repair-013-pre/rehearsal/generated/

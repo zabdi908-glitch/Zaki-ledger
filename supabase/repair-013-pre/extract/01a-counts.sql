@@ -1,0 +1,27 @@
+SET default_transaction_read_only = on;
+SELECT jsonb_build_object(
+  'k','all',
+  'bank_statements',(SELECT count(*) FROM public.bank_statements),
+  'bank_transactions',(SELECT count(*) FROM public.bank_transactions),
+  'qb_transactions',(SELECT count(*) FROM public.qb_transactions),
+  'reconciliation_matches',(SELECT count(*) FROM public.reconciliation_matches),
+  'reconciliation_reports',(SELECT count(*) FROM public.reconciliation_reports),
+  'reconciliation_decisions',(SELECT count(*) FROM public.reconciliation_decisions),
+  'reconciliation_audit_log',(SELECT count(*) FROM public.reconciliation_audit_log),
+  'default_tenant_identities',(SELECT count(*) FROM public.default_tenant_identities),
+  'canonical_audit_ledger',(SELECT count(*) FROM public.canonical_audit_ledger),
+  'auto_rows',(SELECT count(*) FROM public.reconciliation_matches WHERE matched_by='auto'),
+  'manual_rows',(SELECT count(*) FROM public.reconciliation_matches WHERE matched_by='manual'),
+  'approved_rows',(SELECT count(*) FROM public.reconciliation_matches WHERE approved_at IS NOT NULL),
+  'unapproved_rows',(SELECT count(*) FROM public.reconciliation_matches WHERE approved_at IS NULL),
+  'min_matched_at',(SELECT min(matched_at) FROM public.reconciliation_matches),
+  'max_matched_at',(SELECT max(matched_at) FROM public.reconciliation_matches),
+  'dup_endpoints',(SELECT count(*) FROM (SELECT qb_transaction_id FROM public.reconciliation_matches WHERE matched_by='auto' AND qb_transaction_id IS NOT NULL GROUP BY qb_transaction_id HAVING count(*)>1) d),
+  'dup_rows',(SELECT count(*) FROM public.reconciliation_matches m JOIN (SELECT qb_transaction_id FROM public.reconciliation_matches WHERE matched_by='auto' AND qb_transaction_id IS NOT NULL GROUP BY qb_transaction_id HAVING count(*)>1) d USING (qb_transaction_id) WHERE m.matched_by='auto'),
+  'dup_approved',(SELECT count(*) FROM public.reconciliation_matches m JOIN (SELECT qb_transaction_id FROM public.reconciliation_matches WHERE matched_by='auto' AND qb_transaction_id IS NOT NULL GROUP BY qb_transaction_id HAVING count(*)>1) d USING (qb_transaction_id) WHERE m.matched_by='auto' AND m.approved_at IS NOT NULL),
+  'dup_unapproved',(SELECT count(*) FROM public.reconciliation_matches m JOIN (SELECT qb_transaction_id FROM public.reconciliation_matches WHERE matched_by='auto' AND qb_transaction_id IS NOT NULL GROUP BY qb_transaction_id HAVING count(*)>1) d USING (qb_transaction_id) WHERE m.matched_by='auto' AND m.approved_at IS NULL),
+  'dup_all_unapproved_endpoints',(SELECT count(*) FROM (SELECT qb_transaction_id FROM public.reconciliation_matches WHERE matched_by='auto' AND qb_transaction_id IS NOT NULL GROUP BY qb_transaction_id HAVING count(*)>1 AND count(*) FILTER (WHERE approved_at IS NOT NULL)=0) d),
+  'dup_2plus_approved_endpoints',(SELECT count(*) FROM (SELECT qb_transaction_id FROM public.reconciliation_matches WHERE matched_by='auto' AND qb_transaction_id IS NOT NULL GROUP BY qb_transaction_id HAVING count(*)>1 AND count(*) FILTER (WHERE approved_at IS NOT NULL)>=2) d),
+  'dup_same_statement_multiplicity',(SELECT count(*) FROM (SELECT qb_transaction_id, statement_id FROM public.reconciliation_matches WHERE matched_by='auto' AND qb_transaction_id IS NOT NULL GROUP BY qb_transaction_id, statement_id HAVING count(*)>1) d),
+  'dup_multi_statement',(SELECT count(*) FROM (SELECT qb_transaction_id FROM public.reconciliation_matches WHERE matched_by='auto' AND qb_transaction_id IS NOT NULL GROUP BY qb_transaction_id HAVING count(*) > 1 AND count(DISTINCT statement_id) > 1) d)
+) AS result;

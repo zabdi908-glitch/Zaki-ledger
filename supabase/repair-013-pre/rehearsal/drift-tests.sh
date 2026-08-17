@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Drift / failure-injection rehearsal: five deliberate mutations of the
-# scratch snapshot, each followed by a stage-1 run that MUST abort with zero
-# partial changes (single-transaction rollback).
+# scratch snapshot, each followed by a stage-1 run of the FROZEN,
+# SHA-verified REHEARSAL artifact that MUST abort with zero partial changes
+# (single-transaction rollback).
 #
 # Cases (spec: Phase 14 failure/drift tests):
 #   1. change one target approval
@@ -15,14 +16,31 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+BUILDER="$ROOT/bin/build_repair_package.py"
 CONTAINER="${CONTAINER:-supabase_db_Zaki-ledger}"
 DB="${DB:-repair_drill}"
+ARTIFACT_DIR="$ROOT/artifacts/drift-tests"   # private to this test run
 LOG_DIR="${LOG_DIR:-/tmp/zaki-repair-rehearsal}"
 RESTORE="$ROOT/rehearsal/restore-scratch.sh"
 
-mkdir -p "$LOG_DIR"
+rm -rf "$ARTIFACT_DIR"
+mkdir -p "$ARTIFACT_DIR" "$LOG_DIR"
 PSQL="docker exec -i $CONTAINER psql -U supabase_admin -d $DB"
 PSQL_STRICT="docker exec -i $CONTAINER psql -v ON_ERROR_STOP=1 -U supabase_admin -d $DB"
+
+# Freeze + verify the REHEARSAL stage-1 artifact once; every case executes
+# exactly these bytes.
+python3 "$BUILDER" freeze --stage 1 --environment-mode REHEARSAL --out-dir "$ARTIFACT_DIR"
+STAGE1_ARTIFACT="$ARTIFACT_DIR/$(python3 - "$ARTIFACT_DIR" <<'PY'
+import json, glob, sys, os
+records = sorted(glob.glob(os.path.join(sys.argv[1], "freeze-14a-*.json")))
+if not records:
+    raise SystemExit("no stage-1 freeze record found")
+print(json.load(open(records[-1]))["artifact_file"])
+PY
+)"
+STAGE1_RECORD="$ARTIFACT_DIR/freeze-$(basename "$STAGE1_ARTIFACT" .sql).json"
+python3 "$BUILDER" verify --artifact "$STAGE1_RECORD"
 
 # Fixed targets (from manifests/stage1-unapproved-targets.csv, first row):
 #   target 00d77a13-2a24-4fb9-a760-70761628a85c  (R3 unapproved)
@@ -59,7 +77,7 @@ SQL
   # output (every fail-closed precondition raises a STOP/FAIL exception)
   # and proven by the zero-partial-change verification below.
   local out
-  out=$($PSQL < "$ROOT/14a-stage1-unapproved-repair.sql" 2>&1) || true
+  out=$($PSQL < "$STAGE1_ARTIFACT" 2>&1) || true
   echo "$out" | tee "$LOG_DIR/drift-$name.log"
   if echo "$out" | grep -q "STAGE 1: superseded 154 rows"; then
     echo "FAIL: stage 1 applied despite the injection ($name)"

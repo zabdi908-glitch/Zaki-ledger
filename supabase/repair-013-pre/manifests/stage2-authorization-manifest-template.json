@@ -1,0 +1,7 @@
+{
+  "package": "repair-013-pre",
+  "manifest_schema_version": 1,
+  "environment_mode": "REHEARSAL",
+  "basis_sha256": "751d9b04ac3695da82821af311a20de7b45fd8bcfd7633f4cd4eb813793bf271",
+  "decisions": []
+}
