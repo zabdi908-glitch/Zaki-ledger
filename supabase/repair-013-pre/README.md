@@ -21,14 +21,24 @@ not authorized for production use.
 repair-013-pre/
   13-repair-prep.sql                prep: supersession columns + audit-evidence
                                     immutability (identical DDL to 013 Z1/Z1b)
+                                    + the stage-1 execution receipt table
+                                    (immutable, the stage-2 authorization root)
   14a-stage1-unapproved-repair.sql  STAGE 1 — supersedes EXACTLY the 154
                                     unapproved rows in the stage-1 manifest
-                                    (REHEARSAL-mode working copy)
+                                    and writes its execution receipt in the
+                                    SAME transaction (REHEARSAL-mode working
+                                    copy)
   14b-stage2-approved-repair.sql    STAGE 2 — supersedes only the rows whose
                                     committed-basis candidates carry a signed
-                                    RETIRE decision (REHEARSAL-mode working
-                                    copy, bound to the committed rehearsal
-                                    authorization manifest)
+                                    RETIRE decision; validates the actual
+                                    database-side stage-1 receipt and
+                                    recomputes the stage-1 state first
+                                    (REHEARSAL-mode working copy, bound to
+                                    the committed rehearsal authorization
+                                    manifest, empty receipt placeholder)
+  EXECUTION_PACKAGE.md              the stable EXECUTION_PACKAGE_SHA256:
+                                    documented file list, ordering,
+                                    algorithm, exclusions, P/E commit model
   manifests/
     duplicate-endpoints.csv                107 endpoints (exact identity set)
     stage1-unapproved-targets.csv          154 targets + 101 survivor guards
@@ -48,10 +58,15 @@ repair-013-pre/
                                            provenance + accepted counts
   bin/
     build_repair_package.py        deterministic builder/verifier/freezer
+                                   (subcommands: manifests, package-sha, sql,
+                                   freeze, verify, rehearsal-manifest)
     test_builder_binding.py        builder-level authorization-binding
-                                   failure/substitution tests (no DB)
+                                   failure/substitution tests (no DB),
+                                   incl. the clean-clone verification
   extract/                         committed read-only production capture
-                                   queries (see extract/README.md)
+                                   queries (see extract/README.md), incl.
+                                   13-stage1-receipt.sql (receipt export —
+                                   operator evidence only)
   authorization-manifest-schema.md committed basis + decision-only manifest
   r6-review-packet.md              R6 human review evidence + decisions
   execution-window.md              REPAIR-ONLY production runbook (23 steps,
@@ -59,30 +74,34 @@ repair-013-pre/
                                    migration/deploy/unfreeze)
   artifacts/                       committed rehearsal evidence: frozen stage
                                    artifacts + freeze records + stage-1
-                                   execution proof + executed rehearsal
+                                   receipt export + executed rehearsal
                                    authorization manifest
   rehearsal/                       drivers + evidence (sanitized)
     restore-scratch.sh             scratch restore (REQUIRED --schema-dump/
                                    --data-dump — no defaults + hash
                                    verification)
     run-stage.sh                   hash-verified frozen-artifact runner
-                                   (passes the artifact sha GUC; generates
-                                   the schema-v2 stage-1 proof)
+                                   (passes the artifact-sha + package-sha
+                                   GUCs; exports the stage-1 database-side
+                                   receipt after apply)
     state-digest.sh                deterministic FULL-STATE digest of all
                                    11 relevant tables
     rehearsal-chain.sh             REHEARSAL-ONLY chain: prep -> freeze/verify/
-                                   execute stage 1 -> checkpoint proof ->
+                                   execute stage 1 -> receipt checkpoint ->
                                    sign manifest -> freeze/verify/execute
                                    stage 2 -> reruns (NO migration 013)
     run-migration-013.sh           REHEARSAL-ONLY separate migration check
     drift-tests.sh                 5 stage-1 drift injections (abort + FULL-
                                    STATE digest equality)
-    authorization-drift-tests.sh   18 authorization/identity/failure cases:
+    authorization-drift-tests.sh   21 authorization/identity/failure cases:
                                    G1-G9 drift + G10-G14 post-checkpoint
                                    stage-1 mutations (stage-2 abort) + G15
                                    candidate/survivor substitution + G16
                                    lock timeout 55P03 + G17 statement
-                                   timeout 57014 + G18 missing-sha GUC
+                                   timeout 57014 + G18 missing-sha GUC +
+                                   G19 missing package-sha GUC + G20 forged
+                                   receipt (stage 2 without stage 1) + G21
+                                   receipt tamper (immutability)
     parity-check.sql               restore parity assertions
     make-local-auth-bootstrap.sh   local auth-schema bootstrap generator
     EVIDENCE.md                    committed rehearsal evidence
@@ -142,15 +161,28 @@ repair-013-pre/
   fingerprints, and byte-exact audit rows (incl. the stage-1 artifact sha).
   "Superseded and has an audit row" is never sufficient — any drift aborts
   stage 2 with zero stage-2 changes.
-- **Schema-v2 stage-1 checkpoint proof.** The proof is BUILDER-GENERATED
-  (stage1-proof subcommand) and binds: the package git sha, the frozen
-  artifact sha + byte-identity regeneration, the committed manifest/basis
-  hashes, the exact 154 target ids, survivor mappings, the postcondition
-  digest, the audit digest, and the execution-log hash where retained.
-  Caller-created JSON is rejected unless every derivable field matches the
-  builder's independent recomputation. What the proof does NOT prove
-  (driver-recorded execution facts) is documented in execution-window.md §5
-  step 15.
+- **Database-side stage-1 execution receipt (the authorization root).**
+  Stage 1 writes an immutable receipt row INSIDE THE SAME TRANSACTION as
+  the 154 supersessions and audit rows, with database-derived time and
+  digests (exact 154-target digest, survivor-mapping digest, stage-1 audit
+  digest, postcondition digest, execution-package sha, stage-1 artifact
+  sha, operation id, mode/project identity, executed_at from database
+  time). Stage 2 validates the ACTUAL database row (exactly one;
+  canonical-hash recomputation; package/artifact/mode/project/manifest
+  bindings) and INDEPENDENTLY RECOMPUTES those digests from live state
+  before any stage-2 work. A caller-fabricated stage-1 "proof" JSON is
+  operator evidence only and can never authorize stage 2 (rehearsal case
+  G20 proves a forged-but-derivably-correct export is rejected by the
+  database-side check with zero writes).
+- **Stable EXECUTION_PACKAGE_SHA256 binding.** Every artifact, the receipt,
+  the audit evidence, and every freeze record bind the content-based
+  package identity (sha256sum-style digest over the documented sorted file
+  list — `EXECUTION_PACKAGE.md`, `bin/build_repair_package.py
+  package-sha`). The driver must supply the identical value via the
+  `zaki.repair_package_sha256` GUC (P0b2 gate). Unlike a git-HEAD binding
+  this identity is stable across evidence-only commits: git commits are
+  used separately — P = execution-package commit, E = evidence-only
+  descendant proving P (E is never rehearsed itself).
 - **Independent frozen-artifact verification.** `verify --artifact`
   REGENERATES the expected artifact bytes into a temporary location from
   the committed basis + authorization inputs and requires byte-identity +
@@ -160,10 +192,10 @@ repair-013-pre/
   have NO default authorization input: omitting `--auth-manifest` is a hard
   error.
 - **Immutable frozen artifacts.** Execution uses the `freeze` subcommand:
-  build from committed basis + signed decisions (+ stage-1 proof for stage
-  2) → SHA-256 → freeze record → `verify --artifact` independently re-proves
-  the frozen bytes → only that hash-verified file is executed. Overwrite is
-  refused.
+  build from committed basis + signed decisions (+ stage-1 receipt export
+  for stage 2) → SHA-256 → freeze record → `verify --artifact`
+  independently re-proves the frozen bytes → only that hash-verified file
+  is executed. Overwrite is refused.
 - **Exact-ID, basis-bound SQL.** Each stage embeds its manifest/basis rows
   and fails closed on any drift — including `client_entities` practice
   identity, stale supersession fields, `approved_by` drift, and unexpected
@@ -195,23 +227,25 @@ python3 bin/build_repair_package.py sql \
 python3 bin/build_repair_package.py --snapshot-dir /tmp/zaki-repair-design verify \
   --auth-manifest manifests/stage2-rehearsal-authorization-manifest.json
 
+# print the stable package identity + its per-file digest lines
+python3 bin/build_repair_package.py package-sha
+
 # freeze an immutable stage artifact (rehearsal)
 python3 bin/build_repair_package.py freeze --stage 1 \
   --environment-mode REHEARSAL --out-dir artifacts
 
 # production window: stage 2 requires the signed manifest + the executed
-# stage-1 artifact + its execution proof (see execution-window.md §5)
+# stage-1 artifact + the stage-1 receipt EXPORT (operator evidence; the
+# artifact validates the actual database-side receipt row) — see
+# execution-window.md §5
 python3 bin/build_repair_package.py freeze --stage 2 \
   --environment-mode PRODUCTION --auth-manifest <signed.json> \
   --stage1-artifact <window-artifacts>/14a-*.sql \
-  --stage1-execution-proof <proof.json> \
+  --stage1-receipt <window-artifacts>/stage1-receipt-*.json \
   --project-ref fqvekbzwghjurkcawpgg --out-dir <window-artifacts>
 
-# generate the stage-1 checkpoint execution proof (schema v2) after the run
-python3 bin/build_repair_package.py stage1-proof \
-  --artifact <frozen-14a.sql> --environment-mode REHEARSAL \
-  --database repair_drill --executed-at <iso> --result APPLIED \
-  --execution-log <run.log> --out <proof.json>
+# export the database-side stage-1 receipt after the stage-1 run
+# (extract/13-stage1-receipt.sql; operator evidence only)
 
 # independently re-prove a frozen stage-1 artifact before execution
 python3 bin/build_repair_package.py verify --artifact artifacts/freeze-14a-*.json
@@ -220,9 +254,10 @@ python3 bin/build_repair_package.py verify --artifact artifacts/freeze-14a-*.jso
 # byte-identity; explicit authorization inputs REQUIRED)
 python3 bin/build_repair_package.py verify --artifact artifacts/freeze-14b-*.json \
   --stage1-artifact artifacts/14a-*.sql --auth-manifest <signed.json> \
-  --stage1-execution-proof <proof.json>
+  --stage1-receipt artifacts/stage1-receipt-*.json
 
-# builder-level authorization-binding tests (no database)
+# builder-level authorization-binding tests (no database), incl. the
+# clean-clone verification of the committed HEAD
 python3 bin/test_builder_binding.py
 ```
 
@@ -234,24 +269,34 @@ identity artifacts, and the capture queries are committed in `extract/`.
 
 ## Rehearsal status
 
-Rehearsed end-to-end on a faithful scratch restore of the production dumps:
+Rehearsed end-to-end on a faithful scratch restore of the production dumps
+(the execution-package commit P; the evidence commit E records the run):
 
 - restore parity (9/9 tables + reconciliation + canonical/audit) PASS;
-- stage 1 applies 154 and reruns as a byte-exact no-op; stage 2 (rehearsal
-  authorization manifest, signed post-stage-1) applies 98 and reruns as a
-  byte-exact no-op; stage 1 after stage 2 verifies its own state; every
-  audit row carries the exact frozen artifact sha256;
+- stage 1 applies 154, writes its immutable execution receipt in the same
+  transaction, and reruns as a byte-exact no-op; stage 2 (rehearsal
+  authorization manifest, signed post-stage-1) validates the actual
+  database-side receipt (digests recomputed from live state), applies 98,
+  and reruns as a byte-exact no-op; stage 1 after stage 2 verifies its own
+  state; every audit row carries the exact frozen artifact sha256; exactly
+  one receipt row remains;
 - migration 013 then applies cleanly (separate rehearsal-only check);
-- five stage-1 drift injections and eighteen
+- five stage-1 drift injections and twenty-one
   authorization/identity/failure injections each abort with zero partial
   changes — every case proven by FULL-STATE digest equality across all 11
   relevant tables, including the post-checkpoint stage-1 mutations
   (reason/survivor/operation/approval/audit drift aborts stage 2), the
   candidate/survivor substitution, the held-lock timeout (55P03), the
-  statement-timeout contract (57014), and the missing-artifact-sha gate;
+  statement-timeout contract (57014), the missing-artifact-sha gate, the
+  missing-package-sha gate (P0b2), the forged-receipt rejection (stage 2
+  without stage 1 — the Codex exploit, G20), and the receipt tamper
+  cases (immutability trigger + UNIQUE, G21);
 - builder-level binding tests (reversal, replacement, smuggling, missing
-  manifest, mode barrier, R6 ordering, freeze immutability, schema-v2 proof
+  manifest, mode barrier, R6 ordering, freeze immutability, receipt
   tampering, coordinated SQL+freeze-record tamper, independent
-  regeneration verification) all pass.
+  regeneration verification, EXECUTION_PACKAGE_SHA256 determinism, and
+  the clean-clone verification of the committed HEAD) all pass;
+- package-level `verify` reports `VERIFY OK` — the committed working
+  copies regenerate byte-identically from the committed inputs.
 
-Evidence: `rehearsal/EVIDENCE.md`.
+Per-run hashes and the receipt digest: `rehearsal/EVIDENCE.md`.

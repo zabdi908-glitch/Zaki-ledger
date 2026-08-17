@@ -40,6 +40,8 @@ invocation must abort before taking or waiting on any lock):
 --      before anything else on a wrong database identity)
 -- P0a finite timeouts (SET LOCAL; see §1.4)
 -- P0b frozen-artifact sha gate (driver-supplied GUC; see §1.5)
+-- P0b2 execution-package sha gate (driver-supplied GUC, embedded-literal
+--      match; see §1.5 and EXECUTION_PACKAGE.md)
 SELECT pg_advisory_xact_lock(0x5A414B49);                 -- 'ZAKI', shared by both stages
 LOCK TABLE public.bank_statements        IN ACCESS EXCLUSIVE MODE;
 LOCK TABLE public.bank_transactions      IN ACCESS EXCLUSIVE MODE;
@@ -126,22 +128,34 @@ rehearsal suite proves the contract: `auth-g16-lock-timeout` (held
 conflicting lock → 55P03, full-state digest identical) and
 `auth-g17-statement-timeout` (57014 + rollback semantics, zero changes).
 
-### 1.5 Frozen-artifact sha binding (driver-supplied GUC)
+### 1.5 Frozen-artifact + execution-package binding (driver-supplied GUCs)
 
 The execution driver verifies the artifact SHA-256 against its freeze
-record, then passes it into the repair transaction via PGOPTIONS:
+record AND the stable EXECUTION_PACKAGE_SHA256 against the checked-out
+package (`bin/build_repair_package.py package-sha` — see
+EXECUTION_PACKAGE.md), then passes both into the repair transaction via
+PGOPTIONS:
 
 ```bash
 PGOPTIONS="-c zaki.repair_project_ref=fqvekbzwghjurkcawpgg \
-           -c zaki.repair_artifact_sha256=<artifact-sha256>" \
+           -c zaki.repair_artifact_sha256=<artifact-sha256> \
+           -c zaki.repair_package_sha256=<execution-package-sha256>" \
   psql "$PROD_CONN" -v ON_ERROR_STOP=1 -f <frozen.sql>
 ```
 
-The SQL-side gate (P0b) aborts on a missing/malformed value, and the value
-is recorded verbatim into every repair audit row's immutable evidence —
-including the exact frozen stage-2 artifact SHA-256 (blocker 4). The
-no-op/idempotency revalidation compares it byte-exactly, so a rerun only
+The SQL-side gates abort on a missing/malformed/mismatched value: P0b
+(artifact sha, recorded verbatim into every repair audit row's immutable
+evidence — including the exact frozen stage-2 artifact SHA-256, blocker 4)
+and P0b2 (execution-package sha, which must equal the literal embedded in
+the artifact — the content-based package identity is stable across
+evidence-only commits, unlike a git-HEAD binding). The no-op/idempotency
+revalidation compares the artifact sha byte-exactly, so a rerun only
 verifies as a no-op when the exact frozen artifact sha is supplied.
+
+The stage-1 execution receipt (public.repair_stage1_receipt) additionally
+records the execution-package sha and the stage-1 artifact sha; the
+stage-2 artifact validates the actual receipt row and independently
+recomputes the exact stage-1 state before any stage-2 work.
 
 ---
 
@@ -229,14 +243,19 @@ never substitute.
 
 ## 5. Production-window sequence (REPAIR ONLY — exact order, 23 steps)
 
-1. **Verify the exact final Git SHA.** On the authorized operator machine,
-   check out the exact package commit recorded in the authorization; run
-   `git rev-parse HEAD` and record the FULL sha. It must equal the
-   `package_commit_sha256` recorded in `rehearsal/EVIDENCE.md` and the
-   authorization record. Then run
-   `python3 bin/build_repair_package.py verify --auth-manifest
-   manifests/stage2-rehearsal-authorization-manifest.json` (must print
-   `VERIFY OK`) and `python3 bin/test_builder_binding.py` (all pass).
+1. **Verify the exact final Git SHA AND the execution-package identity.**
+   On the authorized operator machine, check out the exact package commit
+   recorded in the authorization (P = execution-package commit; E =
+   evidence-only descendant); run `git rev-parse HEAD` and record the FULL
+   sha. It must equal the package commit recorded in
+   `rehearsal/EVIDENCE.md` and the authorization record. Then run
+   `python3 bin/build_repair_package.py package-sha` and confirm it prints
+   the recorded `EXECUTION_PACKAGE_SHA256` (the stable content-based
+   identity the artifacts bind — the artifacts bind this, never the git
+   HEAD). Then run `python3 bin/build_repair_package.py verify
+   --auth-manifest manifests/stage2-rehearsal-authorization-manifest.json`
+   (must print `VERIFY OK`) and `python3 bin/test_builder_binding.py`
+   (all pass, including the clean-clone verification).
 2. **Verify all relevant artifact hashes.** Re-check the SHAs recorded in
    `manifests/manifest-identities.json` and `rehearsal/EVIDENCE.md`
    (manifests, immutable basis, migration 013
@@ -276,27 +295,27 @@ never substitute.
     verifier regenerates the expected bytes and requires byte-identity).
     Record the artifact sha256.
 14. **Execute stage 1.** Only the hash-verified file, with the production
-    driver (§1.5, BOTH GUCs set), inside the window. Expected: `STAGE 1:
-    superseded 154 rows`, `STAGE 1: wrote 154 audit rows`, all P2
-    postconditions pass, COMMIT.
-15. **Stage-1 full-state + exact checkpoint proof.** (a) Re-execute the
-    identical frozen file once: the dispatcher must report a verified NO-OP
-    with byte-exact audit evidence. (b) Generate the schema-v2 checkpoint
-    proof with the builder (`stage1-proof --artifact <frozen-14a.sql>
-    --environment-mode PRODUCTION --database postgres --executed-at <iso>
-    --result APPLIED --execution-log <run.log> --out <proof.json>`) — it
-    binds the package git sha, the artifact sha + byte-identity
-    regeneration, the committed manifest/basis hashes, the exact 154 target
-    ids, survivor mappings, the postcondition digest, the audit digest, and
-    the execution-log hash. Record the proof sha. (What the proof proves:
-    artifact/commit/basis binding and the expected post-state. What it does
-    not prove: the driver-recorded execution facts — compensated by (a) and
-    by the stage-2 artifact's in-database revalidation of the EXACT stage-1
-    state, step 21.)
+    driver (§1.5, ALL GUCs set), inside the window. Expected: `STAGE 1:
+    superseded 154 rows`, `STAGE 1: wrote 154 audit rows`, `STAGE 1: wrote
+    execution receipt <sha>`, all P2 postconditions pass, COMMIT.
+15. **Stage-1 full-state + exact database-side checkpoint.** (a) Re-execute
+    the identical frozen file once: the dispatcher must report a verified
+    NO-OP with byte-exact audit evidence. (b) Export the database-side
+    execution receipt written by stage 1 inside its own transaction
+    (`extract/13-stage1-receipt.sql` → `<window-artifacts>/stage1-receipt-
+    PRODUCTION-<sha12>.json`) and record its canonical sha. The receipt
+    binds the execution-package sha, the stage-1 artifact sha, the
+    operation id, mode/project identity, the target-manifest sha, the
+    exact 154-target digest, the survivor-mapping digest, the stage-1
+    audit digest, the postcondition digest, and database-time executed_at.
+    The EXPORT is operator evidence only — the immutable receipt ROW is
+    the authorization root that the stage-2 artifact validates (step 21);
+    a caller-created stage-1 "proof" JSON is never accepted as
+    authorization (rehearsal case G20).
 16. **STOP — authorization checkpoint.** No stage-2 artifact exists or can
     be built before this point. Report the exact intermediate state: 573
     total, 154 superseded, 419 live, 91 duplicate live-auto endpoints, 154
-    repair audit rows. End the session.
+    repair audit rows, 1 stage-1 execution receipt row. End the session.
 17. **Accountant reviews and authorizes stage 2 (including R6).** The
     accountant reviews `r6-review-packet.md` + the post-stage-1 state, and
     signs the decision-only JSON authorization manifest
@@ -306,37 +325,47 @@ never substitute.
 18. **Build the exact production stage-2 artifact.** `freeze --stage 2
     --environment-mode PRODUCTION --auth-manifest <signed.json>
     --stage1-artifact <window-artifacts>/14a-*.sql
-    --stage1-execution-proof <proof.json> --project-ref
-    fqvekbzwghjurkcawpgg --out-dir <window-artifacts>` (the freeze
-    independently revalidates the proof and the frozen stage-1 artifact).
+    --stage1-receipt <window-artifacts>/stage1-receipt-*.json
+    --project-ref fqvekbzwghjurkcawpgg --out-dir <window-artifacts>` (the
+    freeze independently revalidates every derivable field of the receipt
+    export and the frozen stage-1 artifact; the actual authorization is
+    the database-side receipt row, validated by the artifact itself).
 19. **Regenerate + independently verify.** `verify --artifact
     <window-artifacts>/freeze-14b-*.json --stage1-artifact
     <window-artifacts>/14a-*.sql --auth-manifest <signed.json>
-    --stage1-execution-proof <proof.json>` (must print `VERIFY OK`): the
-    verifier REGENERATES the expected stage-2 bytes into a temporary
-    location and requires byte-identity + SHA-256 match with the freeze
-    record — a coordinated SQL+freeze-record modification fails here.
+    --stage1-receipt <window-artifacts>/stage1-receipt-*.json` (must print
+    `VERIFY OK`): the verifier REGENERATES the expected stage-2 bytes into
+    a temporary location and requires byte-identity + SHA-256 match with
+    the freeze record — a coordinated SQL+freeze-record modification
+    fails here.
 20. **Hash/freeze record.** Record the freeze record sha and the frozen
     artifact sha256 in the window log; the artifact is immutable and
     hash-bound.
 21. **Execute the exact frozen stage-2 artifact.** Only the hash-verified
     file, inside the window, with the production driver (§1.5). Expected:
-    `STAGE 2: superseded <n> authorized rows` (n = signed RETIRE decisions),
-    all P2 postconditions pass, COMMIT. Every stage-2 audit row records the
-    confirming accountant's identity AND the exact frozen stage-2 artifact
-    SHA-256 in immutable evidence. The stage-2 artifact first revalidates
-    the EXACT stage-1 result (all 154 targets: operation id, reason,
-    survivor, original unapproved state, accounting identity, byte-exact
-    audit rows — any drift aborts). Re-execute once more: verified NO-OP
-    with byte-exact audit evidence (altered evidence aborts).
+    `STAGE 2: stage-1 execution receipt <sha> validated (digests recomputed
+    from live state)`, `STAGE 2: superseded <n> authorized rows` (n =
+    signed RETIRE decisions), all P2 postconditions pass, COMMIT. Every
+    stage-2 audit row records the confirming accountant's identity AND the
+    exact frozen stage-2 artifact SHA-256 in immutable evidence. The
+    stage-2 artifact first validates the ACTUAL database-side stage-1
+    receipt (exactly one row; canonical hash recomputed; package/artifact/
+    mode/project/manifest bindings; target/survivor/audit/postcondition
+    digests recomputed from live state) and revalidates the EXACT stage-1
+    result (all 154 targets: operation id, reason, survivor, original
+    unapproved state, accounting identity, byte-exact audit rows — any
+    drift aborts). Re-execute once more: verified NO-OP with byte-exact
+    audit evidence (altered evidence aborts).
 22. **Verify the exact final repair state.** Report: 573 total,
     154 + n superseded, live count, remaining duplicate live-auto endpoints
     (0 if fully authorized), repair audit rows 154 + n, per-operation
     verification (154 rows carry the stage-1 operation id, n the stage-2
-    operation id). Capture the full-state digest
-    (`rehearsal/state-digest.sh` logic) and record it in the window log.
-23. **STOP.** Archive the window log: package commit SHA, artifact SHAs,
-    freeze records, proof sha, manifest hashes, dump hashes, execution
+    operation id), 1 intact stage-1 execution receipt. Capture the
+    full-state digest (`rehearsal/state-digest.sh` logic) and record it in
+    the window log.
+23. **STOP.** Archive the window log: package commit SHA,
+    EXECUTION_PACKAGE_SHA256, artifact SHAs, freeze records, stage-1
+    receipt canonical sha, manifest hashes, dump hashes, execution
     outputs, rerun outputs, and the final-state digest.
 
 Migration 013 application, app deployment, and unfreezing are NOT part of
@@ -351,6 +380,8 @@ stage-1/stage-2 outputs, rerun no-ops, the drift/failure-injection cases
 (all with FULL-STATE digest equality), the post-checkpoint stage-1 mutation
 cases (reason/survivor/operation/approval/audit drift — stage 2 aborts with
 zero changes), the lock-timeout case (55P03), the statement-timeout contract
-(57014), the missing-sha-GUC gate, and the builder-level binding tests —
-every one fails closed with zero partial changes (single transaction
-rollback).
+(57014), the missing-sha-GUC gate, the missing-package-sha-GUC gate, the
+forged-receipt rejection (stage 2 without a database-side receipt — zero
+writes), the receipt-immutability tamper cases, and the builder-level
+binding tests — every one fails closed with zero partial changes (single
+transaction rollback).

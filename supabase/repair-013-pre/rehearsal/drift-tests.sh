@@ -54,9 +54,18 @@ PY
 STAGE1_RECORD="$ARTIFACT_DIR/freeze-$(basename "$STAGE1_ARTIFACT" .sql).json"
 python3 "$BUILDER" verify --artifact "$STAGE1_RECORD"
 STAGE1_SHA="$(sha256sum "$STAGE1_ARTIFACT" | awk '{print $1}')"
-# The execution driver's artifact-sha GUC (recorded into the audit evidence
-# by the SQL; the gate aborts if missing/malformed).
-GUC="-czaki.repair_artifact_sha256=$STAGE1_SHA"
+# The execution driver's GUCs (artifact sha recorded into the audit
+# evidence, package sha gate-checked against the embedded literal; the
+# gates abort if missing/mismatched).
+PACKAGE_SHA="$(python3 - "$BUILDER" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("build_repair_package", sys.argv[1])
+bp = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(bp)
+print(bp.execution_package_sha256())
+PY
+)"
+GUC="-czaki.repair_artifact_sha256=$STAGE1_SHA -czaki.repair_package_sha256=$PACKAGE_SHA"
 
 # Fixed targets (from manifests/stage1-unapproved-targets.csv, first row):
 #   target 00d77a13-2a24-4fb9-a760-70761628a85c  (R3 unapproved)

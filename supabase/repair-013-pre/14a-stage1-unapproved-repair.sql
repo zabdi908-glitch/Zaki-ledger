@@ -12,10 +12,17 @@
 --                  (stage 1 identity-checks all 102 approved candidate rows
 --                   of the committed basis that protect the affected
 --                   endpoints, in addition to the 101 survivor guards)
--- Artifact identity: 6e36e7ad0b0b61385b2fffe604a0a8b2a0fbd8fc9f40a65dc9493b1dcfafbff1
+-- Execution package: SHA-256 d9b2eaa66233240d79e008267ede0f4a883e124627b7994ba9c415a1f581ace1
+--                  (EXECUTION_PACKAGE_SHA256 — the stable content-based
+--                   identity of the production-relevant package files, per
+--                   EXECUTION_PACKAGE.md; embedded as a literal AND
+--                   required from the execution driver via the
+--                   zaki.repair_package_sha256 GUC, so the binding is
+--                   independent of any later evidence-only git commit)
+-- Artifact identity: f52f965491ea482cccdda2a72f340f3cfa21c0bd2500ecc37ad3a237f0af3753
 --                  (sha256 of operation id | mode | stage-1 manifest |
---                   stage-2 basis | project ref; recomputed by
---                   bin/build_repair_package.py verify)
+--                   stage-2 basis | execution package | project ref;
+--                   recomputed by bin/build_repair_package.py verify)
 -- Snapshot:        production fqvekbzwghjurkcawpgg, captured 2026-08-16
 --                  (docs/RECONCILIATION_HISTORICAL_REPAIR_DESIGN_REPORT.md §2)
 -- Operation:       0a1a1a01-4a5e-4b1a-8c01-013000000001  (fixed per package release —
@@ -43,6 +50,17 @@
 -- Artifact-sha gate (P0b): the exact frozen artifact sha256 is supplied by
 --        the execution driver (PGOPTIONS GUC) and recorded verbatim into
 --        the immutable audit evidence.
+--
+-- Execution-package gate (P0b2): the EXECUTION_PACKAGE_SHA256 GUC must
+--        equal the literal embedded above (stable across evidence commits).
+--
+-- Execution receipt (P1b): the stage-1 apply writes an immutable
+--        database-side execution receipt (public.repair_stage1_receipt)
+--        INSIDE THE SAME TRANSACTION as the 154 supersessions and audit
+--        rows, with database-derived time/state digests. Stage 2 validates
+--        that receipt row and recomputes the exact stage-1 state before
+--        any stage-2 work — a caller-fabricated stage-1 "proof" JSON is
+--        operator evidence only and is NEVER the authorization root.
 --
 -- Semantic idempotency (P0e): re-running after success proves every target
 --        already carries THIS operation id with correct reason/survivor and
@@ -104,6 +122,25 @@ BEGIN
   END IF;
 END;
 $artifact_sha_gate$;
+
+-- ===========================================================================
+-- P0b2. Execution-package sha gate (driver-supplied, embedded-literal match)
+-- ===========================================================================
+-- The execution driver passes EXECUTION_PACKAGE_SHA256 via PGOPTIONS. The
+-- artifact embeds the same value as a literal (the package identity is
+-- content-based over the documented package file list — see
+-- EXECUTION_PACKAGE.md — so it is known at build time and stable across
+-- evidence-only commits). A missing or different value aborts BEFORE any
+-- lock or write.
+DO $package_sha_gate$
+DECLARE
+  v_sha text := current_setting('zaki.repair_package_sha256', true);
+BEGIN
+  IF v_sha IS DISTINCT FROM 'd9b2eaa66233240d79e008267ede0f4a883e124627b7994ba9c415a1f581ace1' THEN
+    RAISE EXCEPTION 'STOP: zaki.repair_package_sha256 must be % (got %) — the execution driver must pass the EXECUTION_PACKAGE_SHA256 of the checked-out package', 'd9b2eaa66233240d79e008267ede0f4a883e124627b7994ba9c415a1f581ace1', COALESCE(v_sha, '<unset>');
+  END IF;
+END;
+$package_sha_gate$;
 
 -- Serialize repair attempts. Both stages share this key, so stage 1 and
 -- stage 2 also serialize against each other.
@@ -675,7 +712,7 @@ BEGIN
 END $$;
 
 -- ===========================================================================
--- P0e. Stage dispatcher (semantic idempotency on THIS operation id)
+-- P0f. Stage dispatcher (semantic idempotency on THIS operation id)
 -- ===========================================================================
 -- A row superseded by this operation counts as DONE only if its audit row
 -- carries the byte-exact expected evidence (actor, action_at, previous_state,
@@ -752,8 +789,9 @@ BEGIN
        'previous_confidence', t.confidence,
        'stage1_manifest_sha256', 'c182b4a64148ad697a9a4e7561f3ea38aa14f9193ca790beee9dfafa1c6b61fb',
        'stage2_basis_sha256', '751d9b04ac3695da82821af311a20de7b45fd8bcfd7633f4cd4eb813793bf271',
+       'execution_package_sha256', 'd9b2eaa66233240d79e008267ede0f4a883e124627b7994ba9c415a1f581ace1',
        'environment_mode', 'REHEARSAL',
-       'artifact_identity', '6e36e7ad0b0b61385b2fffe604a0a8b2a0fbd8fc9f40a65dc9493b1dcfafbff1',
+       'artifact_identity', 'f52f965491ea482cccdda2a72f340f3cfa21c0bd2500ecc37ad3a237f0af3753',
        'artifact_sha256', current_setting('zaki.repair_artifact_sha256', true));
 
   -- Targets superseded by a different operation (foreign state).
@@ -778,7 +816,7 @@ BEGIN
 END $$;
 
 -- ===========================================================================
--- P0f. Exact drift preconditions (every manifest row vs live DB state)
+-- P0g. Exact drift preconditions (every manifest row vs live DB state)
 -- ===========================================================================
 DO $$
 DECLARE
@@ -1019,8 +1057,9 @@ BEGIN
        'previous_confidence', t.confidence,
        'stage1_manifest_sha256', 'c182b4a64148ad697a9a4e7561f3ea38aa14f9193ca790beee9dfafa1c6b61fb',
        'stage2_basis_sha256', '751d9b04ac3695da82821af311a20de7b45fd8bcfd7633f4cd4eb813793bf271',
+       'execution_package_sha256', 'd9b2eaa66233240d79e008267ede0f4a883e124627b7994ba9c415a1f581ace1',
        'environment_mode', 'REHEARSAL',
-       'artifact_identity', '6e36e7ad0b0b61385b2fffe604a0a8b2a0fbd8fc9f40a65dc9493b1dcfafbff1',
+       'artifact_identity', 'f52f965491ea482cccdda2a72f340f3cfa21c0bd2500ecc37ad3a237f0af3753',
        'artifact_sha256', current_setting('zaki.repair_artifact_sha256', true))
   FROM zaki_manifest t
   JOIN public.reconciliation_matches m ON m.id = t.match_id
@@ -1036,13 +1075,122 @@ END;
 $apply$;
 
 -- ===========================================================================
+-- P1b. Stage-1 execution receipt (database-side checkpoint — the
+--      authorization root for stage 2). Written INSIDE THE SAME
+--      TRANSACTION as the supersessions and audit rows above: a committed
+--      stage-1 result always carries its receipt, and no receipt can exist
+--      without the exact stage-1 state. Digests are computed here from
+--      LIVE database state with database time (executed_at = now(), the
+--      same value as the audit rows' action_at). The receipt row is
+--      UPDATE/DELETE-immutable (prep trigger) and unique per operation id.
+-- ===========================================================================
+DO $receipt$
+DECLARE
+  v_target_digest   text;
+  v_survivor_digest text;
+  v_audit_digest    text;
+  v_post_digest     text;
+  v_sha             text;
+BEGIN
+  IF current_setting('zaki.repair_mode') <> 'apply' THEN
+    RAISE NOTICE 'STAGE 1: dispatch mode is noop — the existing receipt is validated in the postconditions';
+    RETURN;
+  END IF;
+
+  SELECT encode(extensions.digest(convert_to((SELECT string_agg(match_id::text, ',' ORDER BY match_id) FROM zaki_manifest WHERE role = 'target'), 'UTF8'), 'sha256'), 'hex') INTO v_target_digest;
+  SELECT encode(extensions.digest(convert_to((SELECT string_agg(match_id::text || ':' || COALESCE(NULLIF(survivor_id::text, ''), ''), ',' ORDER BY match_id) FROM zaki_manifest WHERE role = 'target'), 'UTF8'), 'sha256'), 'hex') INTO v_survivor_digest;
+  SELECT encode(extensions.digest(convert_to(coalesce((SELECT jsonb_agg(to_jsonb(a) ORDER BY a.reconciliation_match_id)::text FROM public.reconciliation_audit_log a WHERE a.action = 'match_repair_superseded' AND a.operation_id = '0a1a1a01-4a5e-4b1a-8c01-013000000001'), '[]'), 'UTF8'), 'sha256'), 'hex') INTO v_audit_digest;
+  SELECT encode(extensions.digest(convert_to(coalesce((SELECT jsonb_agg(jsonb_build_object('role', t.role, 'match_id', m.id, 'superseded_at', m.superseded_at, 'superseded_by_match_id', m.superseded_by_match_id, 'supersede_reason', m.supersede_reason, 'supersede_operation_id', m.supersede_operation_id, 'approved_at', m.approved_at, 'approved_by', m.approved_by, 'confidence', m.confidence) ORDER BY t.role, m.id)::text FROM zaki_manifest t JOIN public.reconciliation_matches m ON m.id = t.match_id), '[]'), 'UTF8'), 'sha256'), 'hex') INTO v_post_digest;
+
+  SELECT encode(extensions.digest(convert_to(
+    jsonb_build_object(
+  'execution_package_sha256', 'd9b2eaa66233240d79e008267ede0f4a883e124627b7994ba9c415a1f581ace1',
+  'artifact_sha256', current_setting('zaki.repair_artifact_sha256', true),
+  'operation_id', '0a1a1a01-4a5e-4b1a-8c01-013000000001',
+  'environment_mode', 'REHEARSAL',
+  'project_ref', NULL,
+  'target_manifest_sha256', 'c182b4a64148ad697a9a4e7561f3ea38aa14f9193ca790beee9dfafa1c6b61fb',
+  'target_digest_sha256', v_target_digest,
+  'survivor_mapping_digest_sha256', v_survivor_digest,
+  'audit_digest_sha256', v_audit_digest,
+  'postcondition_digest_sha256', v_post_digest,
+  'executed_at', now(),
+  'db_identity', current_database())::text, 'UTF8'), 'sha256'), 'hex') INTO v_sha;
+
+  INSERT INTO public.repair_stage1_receipt
+    (receipt_sha256, execution_package_sha256, artifact_sha256, operation_id,
+     environment_mode, project_ref, target_manifest_sha256,
+     target_digest_sha256, survivor_mapping_digest_sha256,
+     audit_digest_sha256, postcondition_digest_sha256, executed_at,
+     db_identity)
+  VALUES
+    (v_sha, 'd9b2eaa66233240d79e008267ede0f4a883e124627b7994ba9c415a1f581ace1',
+     current_setting('zaki.repair_artifact_sha256', true),
+     '0a1a1a01-4a5e-4b1a-8c01-013000000001', 'REHEARSAL', NULL,
+     'c182b4a64148ad697a9a4e7561f3ea38aa14f9193ca790beee9dfafa1c6b61fb',
+     v_target_digest, v_survivor_digest, v_audit_digest, v_post_digest,
+     now(), current_database());
+  RAISE NOTICE 'STAGE 1: wrote execution receipt %', v_sha;
+END;
+$receipt$;
+
+-- ===========================================================================
 -- P2. Exact postconditions (set identity, not just counts)
 -- ===========================================================================
 DO $post$
 DECLARE
   v int;
   v_mode text := current_setting('zaki.repair_mode');
+  v_rec public.repair_stage1_receipt%ROWTYPE;
 BEGIN
+  -- 0. STAGE-1 EXECUTION RECEIPT (both modes): exactly one immutable
+  --    database-side receipt row must exist for this operation and carry
+  --    the exact package/artifact/mode/manifest bindings and the
+  --    database-derived digests of the state this artifact produced
+  --    (apply mode: just written by P1b; noop mode: written by the
+  --    original apply). The canonical hash must recompute from the stored
+  --    row — the receipt row itself is the authorization root, never a
+  --    caller-supplied JSON.
+  IF (SELECT count(*) FROM public.repair_stage1_receipt) <> 1 THEN
+    RAISE EXCEPTION 'FAIL: expected exactly one stage-1 execution receipt, found % — stage-1 state without its receipt was not produced by this package',
+      (SELECT count(*) FROM public.repair_stage1_receipt);
+  END IF;
+  SELECT * INTO v_rec FROM public.repair_stage1_receipt;
+  IF v_rec.operation_id IS DISTINCT FROM '0a1a1a01-4a5e-4b1a-8c01-013000000001'::uuid THEN
+    RAISE EXCEPTION 'FAIL: stage-1 receipt records a different operation id';
+  END IF;
+  IF v_rec.environment_mode IS DISTINCT FROM 'REHEARSAL' THEN
+    RAISE EXCEPTION 'FAIL: stage-1 receipt records a different environment mode';
+  END IF;
+  IF v_rec.project_ref IS DISTINCT FROM NULL THEN
+    RAISE EXCEPTION 'FAIL: stage-1 receipt records a different project identity';
+  END IF;
+  IF v_rec.execution_package_sha256 IS DISTINCT FROM 'd9b2eaa66233240d79e008267ede0f4a883e124627b7994ba9c415a1f581ace1' THEN
+    RAISE EXCEPTION 'FAIL: stage-1 receipt binds a different execution package';
+  END IF;
+  IF v_rec.artifact_sha256 IS DISTINCT FROM current_setting('zaki.repair_artifact_sha256', true) THEN
+    RAISE EXCEPTION 'FAIL: stage-1 receipt records a different stage-1 artifact sha than this artifact';
+  END IF;
+  IF v_rec.target_manifest_sha256 IS DISTINCT FROM 'c182b4a64148ad697a9a4e7561f3ea38aa14f9193ca790beee9dfafa1c6b61fb' THEN
+    RAISE EXCEPTION 'FAIL: stage-1 receipt binds a different stage-1 manifest';
+  END IF;
+  IF v_rec.target_digest_sha256 IS DISTINCT FROM (encode(extensions.digest(convert_to((SELECT string_agg(match_id::text, ',' ORDER BY match_id) FROM zaki_manifest WHERE role = 'target'), 'UTF8'), 'sha256'), 'hex')) THEN
+    RAISE EXCEPTION 'FAIL: stage-1 receipt target digest does not match the committed stage-1 manifest';
+  END IF;
+  IF v_rec.survivor_mapping_digest_sha256 IS DISTINCT FROM (encode(extensions.digest(convert_to((SELECT string_agg(match_id::text || ':' || COALESCE(NULLIF(survivor_id::text, ''), ''), ',' ORDER BY match_id) FROM zaki_manifest WHERE role = 'target'), 'UTF8'), 'sha256'), 'hex')) THEN
+    RAISE EXCEPTION 'FAIL: stage-1 receipt survivor-mapping digest does not match the committed stage-1 manifest';
+  END IF;
+  IF v_rec.audit_digest_sha256 IS DISTINCT FROM (encode(extensions.digest(convert_to(coalesce((SELECT jsonb_agg(to_jsonb(a) ORDER BY a.reconciliation_match_id)::text FROM public.reconciliation_audit_log a WHERE a.action = 'match_repair_superseded' AND a.operation_id = '0a1a1a01-4a5e-4b1a-8c01-013000000001'), '[]'), 'UTF8'), 'sha256'), 'hex')) THEN
+    RAISE EXCEPTION 'FAIL: stage-1 receipt audit digest does not match the live stage-1 audit rows';
+  END IF;
+  IF v_rec.postcondition_digest_sha256 IS DISTINCT FROM (encode(extensions.digest(convert_to(coalesce((SELECT jsonb_agg(jsonb_build_object('role', t.role, 'match_id', m.id, 'superseded_at', m.superseded_at, 'superseded_by_match_id', m.superseded_by_match_id, 'supersede_reason', m.supersede_reason, 'supersede_operation_id', m.supersede_operation_id, 'approved_at', m.approved_at, 'approved_by', m.approved_by, 'confidence', m.confidence) ORDER BY t.role, m.id)::text FROM zaki_manifest t JOIN public.reconciliation_matches m ON m.id = t.match_id), '[]'), 'UTF8'), 'sha256'), 'hex')) THEN
+    RAISE EXCEPTION 'FAIL: stage-1 receipt postcondition digest does not match the live stage-1 state';
+  END IF;
+  IF encode(extensions.digest(convert_to((to_jsonb(v_rec) - 'receipt_sha256')::text, 'UTF8'), 'sha256'), 'hex')
+     IS DISTINCT FROM v_rec.receipt_sha256 THEN
+    RAISE EXCEPTION 'FAIL: stage-1 receipt canonical hash does not recompute from the stored row (tampered receipt)';
+  END IF;
+
   -- 1. Every stage-1 target is superseded (both modes). The superseded set
   --    being EXACTLY the 154 targets holds only in apply mode: after stage 2
   --    has legitimately superseded its own rows, a stage-1 rerun verifies
@@ -1148,8 +1296,9 @@ BEGIN
        'previous_confidence', t.confidence,
        'stage1_manifest_sha256', 'c182b4a64148ad697a9a4e7561f3ea38aa14f9193ca790beee9dfafa1c6b61fb',
        'stage2_basis_sha256', '751d9b04ac3695da82821af311a20de7b45fd8bcfd7633f4cd4eb813793bf271',
+       'execution_package_sha256', 'd9b2eaa66233240d79e008267ede0f4a883e124627b7994ba9c415a1f581ace1',
        'environment_mode', 'REHEARSAL',
-       'artifact_identity', '6e36e7ad0b0b61385b2fffe604a0a8b2a0fbd8fc9f40a65dc9493b1dcfafbff1',
+       'artifact_identity', 'f52f965491ea482cccdda2a72f340f3cfa21c0bd2500ecc37ad3a237f0af3753',
        'artifact_sha256', current_setting('zaki.repair_artifact_sha256', true)))
   ) THEN
     RAISE EXCEPTION 'FAIL: a stage-1 repair audit row carries altered evidence (action/actor/action_at/previous_state/resulting_state/evidence mismatch)';

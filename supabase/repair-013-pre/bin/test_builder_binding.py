@@ -18,16 +18,31 @@ Cases:
   B7  missing --auth-manifest on `sql` / stage-2 freeze — hard failure
   B8  rehearsal manifest in production mode — reject
   B9  production build against a wrong project identity — reject
-  B10 R6 decision timestamp before the stage-1 checkpoint (proof) — reject
+  B10 R6 decision timestamp before the stage-1 checkpoint (receipt) — reject
   B11 wrong basis_sha256 in a manifest — reject
   B12 legacy CSV-shaped authorization manifest — reject
-  B13 stage-2 freeze without a stage-1 execution proof — reject
-  B14 stage-1 execution proof bound to a different stage-1 artifact — reject
+  B13 stage-2 freeze without a stage-1 receipt export — reject
+  B14 receipt export bound to a different stage-1 artifact — reject
   B15 frozen artifacts are immutable (second freeze of identical inputs
       refuses to overwrite)
-  B16 generated SQL carries the mode gates, operation ids, and binding
-      hashes (REHEARSAL + PRODUCTION)
+  B16 generated SQL carries the mode gates, operation ids, package-sha
+      bindings, the receipt validation, and the binding hashes
+      (REHEARSAL + PRODUCTION)
   B17 SQL emission is deterministic (byte-identical regeneration)
+  B18 receipt tampering (survivor-mapping digest) — reject
+  B19 receipt tampering (target digest) — reject
+  B20 receipt tampering (postcondition digest format) — reject
+  B21 receipt tampering (execution package sha) — reject
+  B22 coordinated artifact+receipt tamper rejected by regeneration
+  B23 arbitrary caller-fabricated stage-1 proof JSON — reject (missing
+      receipt fields; no proof schema is accepted)
+  B24 valid stage-2 freeze passes independent regeneration verification
+  B25 coordinated SQL+freeze-record tamper FAILS verification
+  B26 stale freeze-record sha FAILS verification
+  B27 EXECUTION_PACKAGE_SHA256 determinism + file-list coverage (the
+      content-based package identity, stable across evidence commits)
+  B28 clean-clone verification (skipped when run inside a clone): the
+      committed HEAD must pass `verify` + this suite from a fresh clone
 
 Usage: python3 bin/test_builder_binding.py   (exit 0 = all pass)
 """
@@ -222,7 +237,7 @@ def b5():
     partner = member["intended_survivor_match_id"]
     assert partner and partner != member["match_id"]
 
-    proof = {
+    receipt = {
         "executed_at": bp.parse_iso_ts("2026-08-17T09:00:00+00:00"),
         "executed_at_iso": "2026-08-17T09:00:00+00:00",
     }
@@ -230,7 +245,7 @@ def b5():
 
     def _inner():
         decisions, _ = bp.validate_auth_manifest(manifest, "REHEARSAL",
-                                                 proof=proof)
+                                                 receipt=receipt)
         assert len(decisions) == 1
         assert decisions[0]["match_id"] == member["match_id"]
         cands, guards = bp.join_decisions(rows, decisions)
@@ -324,7 +339,7 @@ def b10():
     rows = basis()["rows"]
     r6 = [r for r in rows if r["class"] == "R6"]
     member = r6[0]
-    proof = {
+    receipt = {
         "executed_at": bp.parse_iso_ts("2026-08-17T12:00:00+00:00"),
         "executed_at_iso": "2026-08-17T12:00:00+00:00",
     }
@@ -333,7 +348,8 @@ def b10():
         mode="PRODUCTION")
     expect_reject(
         "B10 R6 decision before the stage-1 checkpoint",
-        lambda: bp.validate_auth_manifest(manifest, "PRODUCTION", proof=proof),
+        lambda: bp.validate_auth_manifest(manifest, "PRODUCTION",
+                                          receipt=receipt),
         "stage-1 checkpoint",
     )
 
@@ -374,42 +390,68 @@ def b12():
 
 
 # ---------------------------------------------------------------------------
-# B13/B14 — stage-2 freeze proof requirements.
+# B13/B14 — stage-2 freeze receipt requirements. The receipt export is
+#           OPERATOR EVIDENCE ONLY: the freeze revalidates its derivable
+#           fields (consistency), while the actual authorization is the
+#           immutable database-side receipt row validated by the stage-2
+#           artifact at execution (see the G20 execution-level case).
 # ---------------------------------------------------------------------------
-def make_stage1_artifact_proof(tmp, mode="REHEARSAL"):
-    """Deterministic stage-1 artifact + schema-v2 execution proof pair."""
+def make_stage1_receipt_export(tmp, mode="REHEARSAL"):
+    """Deterministic stage-1 artifact + a fabricated-but-derivably-correct
+    receipt export. Exactly what a forged caller-created export looks like
+    when every derivable field matches the committed package: the freeze
+    accepts it by design (evidence consistency), and only the database-side
+    receipt validation can reject it (G20)."""
     pkg = bp.load_committed_package()
     ident1 = bp.artifact_identity_stage1(
-        mode, pkg["stage1_manifest_sha"], pkg["basis_sha"], None)
+        mode, pkg["stage1_manifest_sha"], pkg["basis_sha"],
+        bp.execution_package_sha256(), None)
     sql1 = bp.stage1_sql(
         pkg["s1t"], pkg["s1g"], pkg["s2c"], pkg["dup_after_s1"],
-        pkg["stage1_manifest_sha"], pkg["basis_sha"], mode, None, ident1)
+        pkg["stage1_manifest_sha"], pkg["basis_sha"], mode, None, ident1,
+        bp.execution_package_sha256())
     s1_path = Path(tmp) / "14a-frozen.sql"
     s1_path.write_text(sql1, encoding="utf-8")
-    proof_path = Path(tmp) / "proof.json"
-    bp.build_stage1_proof(
-        s1_path, mode, "repair_drill", "2026-08-17T09:00:00+00:00",
-        "APPLIED", None, None, proof_path)
-    return s1_path, proof_path
+    receipt_path = Path(tmp) / "receipt-export.json"
+    doc = {
+        "receipt_sha256": "f" * 64,
+        "execution_package_sha256": bp.execution_package_sha256(),
+        "artifact_sha256": bp.sha256_file(s1_path),
+        "operation_id": bp.STAGE1_OPERATION_ID,
+        "environment_mode": mode,
+        "project_ref": None,
+        "target_manifest_sha256": pkg["stage1_manifest_sha"],
+        "target_digest_sha256": bp.stage1_target_digest(pkg["s1t"]),
+        "survivor_mapping_digest_sha256": (
+            bp.stage1_survivor_mapping_digest(pkg["s1t"])),
+        "audit_digest_sha256": "a" * 64,
+        "postcondition_digest_sha256": "b" * 64,
+        "executed_at": "2026-08-17T09:00:00+00:00",
+        "db_identity": "repair_drill",
+    }
+    with open(receipt_path, "w", encoding="utf-8") as f:
+        json.dump(doc, f, indent=2)
+        f.write("\n")
+    return s1_path, receipt_path
 
 
 def b13():
     with tempfile.TemporaryDirectory() as tmp:
-        s1_path, _ = make_stage1_artifact_proof(tmp)
+        s1_path, _ = make_stage1_receipt_export(tmp)
         cand = find_first("candidate", "R3")
         manifest = make_manifest([decision(cand["match_id"])])
         expect_reject(
-            "B13 stage-2 freeze without a stage-1 execution proof",
+            "B13 stage-2 freeze without a stage-1 receipt export",
             lambda: bp.cmd_freeze(2, "REHEARSAL", manifest, s1_path, None,
                                   None, tmp, None),
-            "stage-1 checkpoint",
+            "stage-1 database-side checkpoint",
         )
 
 
 def b14():
     with tempfile.TemporaryDirectory() as tmp:
-        s1_path, proof_path = make_stage1_artifact_proof(tmp)
-        # A DIFFERENT artifact file (edited bytes) with the same proof.
+        s1_path, receipt_path = make_stage1_receipt_export(tmp)
+        # A DIFFERENT artifact file (edited bytes) with the same receipt.
         other = Path(tmp) / "14a-other.sql"
         other.write_text(
             s1_path.read_text(encoding="utf-8").replace(
@@ -418,9 +460,9 @@ def b14():
         cand = find_first("candidate", "R3")
         manifest = make_manifest([decision(cand["match_id"])])
         expect_reject(
-            "B14 proof bound to a different stage-1 artifact",
+            "B14 receipt bound to a different stage-1 artifact",
             lambda: bp.cmd_freeze(2, "REHEARSAL", manifest, other,
-                                  proof_path, None, tmp, None),
+                                  receipt_path, None, tmp, None),
             "different artifact",
         )
 
@@ -442,32 +484,40 @@ def b15():
 
 # ---------------------------------------------------------------------------
 # B16 — SQL carries the mode gates, operation ids, binding hashes, the
-#       artifact-sha GUC, the finite timeouts, and the exact stage-1
-#       revalidation manifest.
+#       artifact-sha + package-sha GUC gates, the finite timeouts, the
+#       database-side receipt machinery, and the exact stage-1 revalidation
+#       manifest.
 # ---------------------------------------------------------------------------
 def b16():
     def _inner():
         pkg = bp.load_committed_package()
+        package_sha = bp.execution_package_sha256()
         cand = find_first("candidate", "R3")
         manifest = make_manifest([decision(cand["match_id"])])
         decisions, manifest_sha = bp.validate_auth_manifest(manifest,
                                                             "REHEARSAL")
         s2c_rows, s2g_rows = bp.join_decisions(pkg["basis_rows"], decisions)
         stage1_artifact_sha = "a" * 64
-        proof_sha = "b" * 64
+        receipt_sha = "b" * 64
         ident = bp.artifact_identity_stage2(
             "REHEARSAL", pkg["stage1_manifest_sha"], pkg["basis_sha"],
-            manifest_sha, stage1_artifact_sha, proof_sha, None)
+            manifest_sha, stage1_artifact_sha, receipt_sha, package_sha,
+            None)
         sql = bp.stage2_sql(
             s2c_rows, s2g_rows, pkg["s1t"], pkg["s1g"], pkg["dup_after_s1"],
-            manifest_sha, pkg["basis_sha"], stage1_artifact_sha, proof_sha,
-            "REHEARSAL", None, ident, 1)
+            manifest_sha, pkg["basis_sha"], stage1_artifact_sha, receipt_sha,
+            package_sha, "REHEARSAL", None, ident, 1)
         for needle in (bp.MODE_GATE_REHEARSAL_MARK, bp.STAGE1_OPERATION_ID,
                        bp.STAGE2_OPERATION_ID, manifest_sha,
-                       pkg["basis_sha"], stage1_artifact_sha, proof_sha,
-                       ident, bp.REPAIR_ARTIFACT_SHA_GUC, "artifact_sha256",
+                       pkg["basis_sha"], stage1_artifact_sha, receipt_sha,
+                       package_sha, ident, bp.REPAIR_ARTIFACT_SHA_GUC,
+                       bp.REPAIR_PACKAGE_SHA_GUC, "artifact_sha256",
+                       "execution_package_sha256", "stage1_receipt_sha256",
                        bp.LOCK_TIMEOUT, bp.STATEMENT_TIMEOUT,
-                       "Stage-1 checkpoint revalidation"):
+                       "Stage-1 checkpoint revalidation",
+                       "Stage-1 execution receipt",
+                       "repair_stage1_receipt",
+                       "expected exactly one stage-1 execution receipt"):
             assert needle in sql, f"stage-2 SQL missing {needle}"
         assert bp.MODE_GATE_PRODUCTION_MARK not in sql
         # The FULL committed stage-1 manifest is embedded for the exact
@@ -479,41 +529,48 @@ def b16():
         assert s1_guard in sql, "stage-2 SQL does not embed stage-1 guards"
 
         ident1 = bp.artifact_identity_stage1(
-            "REHEARSAL", pkg["stage1_manifest_sha"], pkg["basis_sha"], None)
+            "REHEARSAL", pkg["stage1_manifest_sha"], pkg["basis_sha"],
+            package_sha, None)
         sql1 = bp.stage1_sql(
             pkg["s1t"], pkg["s1g"], pkg["s2c"], pkg["dup_after_s1"],
             pkg["stage1_manifest_sha"], pkg["basis_sha"], "REHEARSAL", None,
-            ident1)
+            ident1, package_sha)
         for needle in (bp.MODE_GATE_REHEARSAL_MARK, bp.STAGE1_OPERATION_ID,
-                       pkg["stage1_manifest_sha"], pkg["basis_sha"], ident1):
+                       pkg["stage1_manifest_sha"], pkg["basis_sha"], ident1,
+                       package_sha, bp.REPAIR_PACKAGE_SHA_GUC,
+                       "repair_stage1_receipt",
+                       "STAGE 1: wrote execution receipt"):
             assert needle in sql1, f"stage-1 SQL missing {needle}"
 
         ident_p = bp.artifact_identity_stage1(
             "PRODUCTION", pkg["stage1_manifest_sha"], pkg["basis_sha"],
-            bp.PROD_PROJECT_REF)
+            package_sha, bp.PROD_PROJECT_REF)
         sql_p = bp.stage1_sql(
             pkg["s1t"], pkg["s1g"], pkg["s2c"], pkg["dup_after_s1"],
             pkg["stage1_manifest_sha"], pkg["basis_sha"], "PRODUCTION",
-            bp.PROD_PROJECT_REF, ident_p)
+            bp.PROD_PROJECT_REF, ident_p, package_sha)
         for needle in (bp.MODE_GATE_PRODUCTION_MARK, bp.PROD_PROJECT_REF,
-                       "server_version_num", bp.PROJECT_REF_GUC):
+                       "server_version_num", bp.PROJECT_REF_GUC,
+                       package_sha):
             assert needle in sql_p, f"PRODUCTION SQL missing {needle}"
         assert bp.MODE_GATE_REHEARSAL_MARK not in sql_p
 
-    run("B16 SQL carries mode gates, operation ids, and binding hashes",
-        _inner)
+    run("B16 SQL carries mode gates, operation ids, package-sha and "
+        "receipt bindings", _inner)
 
 
 # ---------------------------------------------------------------------------
-# B18-B22 — stage-1 proof tampering (schema v2, blocker 2): the builder
-#           revalidates every derivable field; caller-created JSON is not
-#           accepted merely because fields are present.
+# B18-B23 — stage-1 receipt tampering: the builder revalidates every
+#           DERIVABLE field of the export; caller-created proof JSON is not
+#           accepted (only a database receipt export has the required
+#           fields). The database-side digests are format-checked here and
+#           validated against live state by the stage-2 artifact (G20).
 # ---------------------------------------------------------------------------
-def _tampered_proof(tmp, mutate):
-    s1_path, proof_path = make_stage1_artifact_proof(tmp)
-    doc = json.load(open(proof_path, encoding="utf-8"))
+def _tampered_receipt(tmp, mutate):
+    s1_path, receipt_path = make_stage1_receipt_export(tmp)
+    doc = json.load(open(receipt_path, encoding="utf-8"))
     mutate(doc)
-    bad = Path(tmp) / "proof-tampered.json"
+    bad = Path(tmp) / "receipt-tampered.json"
     with open(bad, "w", encoding="utf-8") as f:
         json.dump(doc, f, indent=2)
         f.write("\n")
@@ -522,83 +579,86 @@ def _tampered_proof(tmp, mutate):
 
 def b18():
     with tempfile.TemporaryDirectory() as tmp:
-        s1, bad = _tampered_proof(tmp, lambda d: d.update(
-            survivor_mappings={
-                k: ("tampered" if i == 0 else v)
-                for i, (k, v) in enumerate(d["survivor_mappings"].items())}))
+        s1, bad = _tampered_receipt(tmp, lambda d: d.update(
+            survivor_mapping_digest_sha256="0" * 64))
         expect_reject(
-            "B18 proof tampering (survivor mapping) rejected",
-            lambda: bp.load_stage1_proof(bad, "REHEARSAL", s1),
-            "survivor_mappings",
+            "B18 receipt tampering (survivor-mapping digest) rejected",
+            lambda: bp.load_stage1_receipt(bad, "REHEARSAL", s1),
+            "survivor_mapping_digest_sha256",
         )
 
 
 def b19():
     with tempfile.TemporaryDirectory() as tmp:
-        s1, bad = _tampered_proof(tmp, lambda d: d.update(
-            target_ids=list(reversed(d["target_ids"]))))
+        s1, bad = _tampered_receipt(
+            tmp, lambda d: d.update(target_digest_sha256="0" * 64))
         expect_reject(
-            "B19 proof tampering (target ids re-sequenced) rejected",
-            lambda: bp.load_stage1_proof(bad, "REHEARSAL", s1),
-            "target_ids",
+            "B19 receipt tampering (target digest) rejected",
+            lambda: bp.load_stage1_receipt(bad, "REHEARSAL", s1),
+            "target_digest_sha256",
         )
 
 
 def b20():
     with tempfile.TemporaryDirectory() as tmp:
-        s1, bad = _tampered_proof(
-            tmp, lambda d: d.update(postcondition_digest_sha256="0" * 64))
+        s1, bad = _tampered_receipt(
+            tmp, lambda d: d.update(postcondition_digest_sha256="not-a-hash"))
         expect_reject(
-            "B20 proof tampering (postcondition digest) rejected",
-            lambda: bp.load_stage1_proof(bad, "REHEARSAL", s1),
-            "postcondition digest",
+            "B20 receipt tampering (postcondition digest format) rejected",
+            lambda: bp.load_stage1_receipt(bad, "REHEARSAL", s1),
+            "postcondition_digest_sha256",
         )
 
 
 def b21():
     with tempfile.TemporaryDirectory() as tmp:
-        s1, bad = _tampered_proof(
-            tmp, lambda d: d.update(package_git_sha="0" * 40))
+        s1, bad = _tampered_receipt(
+            tmp, lambda d: d.update(execution_package_sha256="0" * 64))
         expect_reject(
-            "B21 proof tampering (package git sha) rejected",
-            lambda: bp.load_stage1_proof(bad, "REHEARSAL", s1),
-            "package_git_sha",
+            "B21 receipt tampering (execution package sha) rejected",
+            lambda: bp.load_stage1_receipt(bad, "REHEARSAL", s1),
+            "EXECUTION_PACKAGE_SHA256",
         )
 
 
 def b22():
-    # Coordinated tamper of artifact bytes AND the proof's recorded sha:
+    # Coordinated tamper of artifact bytes AND the receipt's recorded sha:
     # the sha matches again, but the byte-identity regeneration check still
     # rejects the edited artifact.
     with tempfile.TemporaryDirectory() as tmp:
-        s1_path, proof_path = make_stage1_artifact_proof(tmp)
+        s1_path, receipt_path = make_stage1_receipt_export(tmp)
         edited = Path(tmp) / "14a-edited.sql"
         edited.write_text(
             s1_path.read_text(encoding="utf-8").replace(
                 "-- Package:", "-- Package (edited):", 1),
             encoding="utf-8")
-        doc = json.load(open(proof_path, encoding="utf-8"))
+        doc = json.load(open(receipt_path, encoding="utf-8"))
         doc["artifact_sha256"] = bp.sha256_file(edited)
-        with open(proof_path, "w", encoding="utf-8") as f:
+        with open(receipt_path, "w", encoding="utf-8") as f:
             json.dump(doc, f, indent=2)
             f.write("\n")
         expect_reject(
-            "B22 coordinated artifact+proof tamper rejected by regeneration",
-            lambda: bp.load_stage1_proof(proof_path, "REHEARSAL", edited),
+            "B22 coordinated artifact+receipt tamper rejected by "
+            "regeneration",
+            lambda: bp.load_stage1_receipt(receipt_path, "REHEARSAL",
+                                           edited),
             "not byte-identical",
         )
 
 
 # ---------------------------------------------------------------------------
-# B23 — legacy schema-v1 proof is refused outright.
+# B23 — arbitrary caller-fabricated stage-1 proof JSON is refused outright:
+#       no proof schema of any version is accepted; only a database receipt
+#       export (with the receipt fields) passes the field checks, and its
+#       derivable fields must match the committed package.
 # ---------------------------------------------------------------------------
 def b23():
     with tempfile.TemporaryDirectory() as tmp:
-        s1_path, _ = make_stage1_artifact_proof(tmp)
-        legacy = Path(tmp) / "proof-v1.json"
-        legacy.write_text(json.dumps({
+        s1_path, _ = make_stage1_receipt_export(tmp)
+        fake = Path(tmp) / "fake-proof.json"
+        fake.write_text(json.dumps({
             "package": "repair-013-pre",
-            "proof_schema_version": 1,
+            "proof_schema_version": 2,
             "stage": 1,
             "artifact_file": s1_path.name,
             "artifact_sha256": bp.sha256_file(s1_path),
@@ -608,9 +668,9 @@ def b23():
             "result": "APPLIED",
         }, indent=2) + "\n", encoding="utf-8")
         expect_reject(
-            "B23 legacy v1 caller-created proof rejected",
-            lambda: bp.load_stage1_proof(legacy, "REHEARSAL", s1_path),
-            "no longer accepted",
+            "B23 arbitrary caller-fabricated stage-1 proof JSON rejected",
+            lambda: bp.load_stage1_receipt(fake, "REHEARSAL", s1_path),
+            "missing field",
         )
 
 
@@ -620,28 +680,28 @@ def b23():
 #           record must still FAIL because the regenerated bytes differ.
 # ---------------------------------------------------------------------------
 def _freeze_stage2(tmp):
-    s1_path, proof_path = make_stage1_artifact_proof(tmp)
+    s1_path, receipt_path = make_stage1_receipt_export(tmp)
     cand = find_first("candidate", "R3")
     manifest = make_manifest([decision(cand["match_id"])])
-    bp.cmd_freeze(2, "REHEARSAL", manifest, s1_path, proof_path, None,
+    bp.cmd_freeze(2, "REHEARSAL", manifest, s1_path, receipt_path, None,
                   tmp, None)
     records = sorted(glob.glob(os.path.join(tmp, "freeze-14b-*.json")))
     assert records, "no stage-2 freeze record produced"
     record = Path(records[-1])
     artifact = Path(tmp) / json.load(open(record, encoding="utf-8"))[
         "artifact_file"]
-    return s1_path, proof_path, manifest, artifact, record
+    return s1_path, receipt_path, manifest, artifact, record
 
 
 def b24():
     # Valid stage-2 freeze passes independent verification.
     with tempfile.TemporaryDirectory() as tmp:
-        s1, proof, manifest, artifact, record = _freeze_stage2(tmp)
+        s1, receipt, manifest, artifact, record = _freeze_stage2(tmp)
 
         def _inner():
             bp.verify_frozen_artifact(
                 str(record), stage1_artifact=str(s1),
-                auth_manifest=str(manifest), stage1_proof=str(proof))
+                auth_manifest=str(manifest), stage1_receipt=str(receipt))
 
         run("B24 valid stage-2 freeze passes independent regeneration "
             "verification", _inner)
@@ -651,7 +711,7 @@ def b25():
     # Coordinated tamper: edit BOTH the frozen SQL and the freeze record
     # (recorded sha recomputed). Byte-identity regeneration must FAIL.
     with tempfile.TemporaryDirectory() as tmp:
-        s1, proof, manifest, artifact, record = _freeze_stage2(tmp)
+        s1, receipt, manifest, artifact, record = _freeze_stage2(tmp)
         content = artifact.read_text(encoding="utf-8")
         assert "unsupported_approved_claim" in content
         tampered = content.replace(
@@ -666,7 +726,7 @@ def b25():
             "B25 coordinated SQL+freeze-record tamper FAILS verification",
             lambda: bp.verify_frozen_artifact(
                 str(record), stage1_artifact=str(s1),
-                auth_manifest=str(manifest), stage1_proof=str(proof)),
+                auth_manifest=str(manifest), stage1_receipt=str(receipt)),
             "NOT byte-identical",
         )
 
@@ -675,7 +735,7 @@ def b26():
     # Freeze-record-only tamper (sha re-recorded, SQL untouched is already
     # covered by B25; here: sha left stale) must also FAIL.
     with tempfile.TemporaryDirectory() as tmp:
-        s1, proof, manifest, artifact, record = _freeze_stage2(tmp)
+        s1, receipt, manifest, artifact, record = _freeze_stage2(tmp)
         doc = json.load(open(record, encoding="utf-8"))
         doc["artifact_sha256"] = "0" * 64
         with open(record, "w", encoding="utf-8") as f:
@@ -685,9 +745,130 @@ def b26():
             "B26 stale freeze-record sha FAILS verification",
             lambda: bp.verify_frozen_artifact(
                 str(record), stage1_artifact=str(s1),
-                auth_manifest=str(manifest), stage1_proof=str(proof)),
+                auth_manifest=str(manifest), stage1_receipt=str(receipt)),
             "sha256",
         )
+
+
+# ---------------------------------------------------------------------------
+# B27 — EXECUTION_PACKAGE_SHA256: deterministic, content-based (never git
+#       HEAD), and computed over a documented file list that fully exists
+#       on disk. This is the stable identity the artifacts bind — it does
+#       NOT change when an evidence-only commit is added (Codex finding 3).
+# ---------------------------------------------------------------------------
+def b27():
+    def _inner():
+        a = bp.execution_package_sha256()
+        b = bp.execution_package_sha256()
+        assert a == b, "package sha is not deterministic"
+        assert len(a) == 64 and all(c in "0123456789abcdef" for c in a)
+        assert bp.EXECUTION_PACKAGE_FILES == sorted(
+            bp.EXECUTION_PACKAGE_FILES), "package file list must be sorted"
+        for rel in bp.EXECUTION_PACKAGE_FILES:
+            assert (bp.ROOT / rel).is_file(), f"package file missing: {rel}"
+        # Migration 013 and the prep must be in the list (production inputs).
+        assert "13-repair-prep.sql" in bp.EXECUTION_PACKAGE_FILES
+        assert ("../migrations/013_reconciliation_claim_hardening.sql"
+                in bp.EXECUTION_PACKAGE_FILES)
+        # Generated outputs and narrative evidence are excluded.
+        assert "14a-stage1-unapproved-repair.sql" not in (
+            bp.EXECUTION_PACKAGE_FILES)
+
+    run("B27 EXECUTION_PACKAGE_SHA256 deterministic with full file-list "
+        "coverage", _inner)
+
+
+# ---------------------------------------------------------------------------
+# B28 — clean-clone verification: the committed HEAD must pass the package
+#       `verify` and this suite from a FRESH CLONE (no local state). The
+#       committed frozen artifacts (freeze records) must each pass
+#       `verify --artifact` against their bound committed inputs, found by
+#       sha. Skipped when run inside a clone (env-guarded) to avoid
+#       recursion.
+# ---------------------------------------------------------------------------
+def b28():
+    if os.environ.get("ZAKI_REPAIR_NO_CLEAN_CLONE"):
+        print("SKIP: B28 clean-clone verification (already inside a clone)")
+        return
+
+    def _inner():
+        repo = bp.ROOT.parent.parent  # the Zaki-ledger git root
+        with tempfile.TemporaryDirectory() as tmp:
+            clone = Path(tmp) / "clone"
+            r = subprocess.run(
+                ["git", "clone", "--quiet", str(repo), str(clone)],
+                capture_output=True, text=True,
+            )
+            if r.returncode != 0:
+                raise AssertionError(f"git clone failed: {r.stderr}")
+            env = dict(os.environ)
+            env["ZAKI_REPAIR_NO_CLEAN_CLONE"] = "1"
+            v = subprocess.run(
+                [sys.executable,
+                 str(clone / "supabase/repair-013-pre/bin/"
+                     "build_repair_package.py"),
+                 "verify",
+                 "--auth-manifest",
+                 "manifests/stage2-rehearsal-authorization-manifest.json"],
+                cwd=str(clone / "supabase/repair-013-pre"),
+                capture_output=True, text=True, env=env,
+            )
+            if v.returncode != 0 or "VERIFY OK" not in v.stdout:
+                raise AssertionError(
+                    f"clean-clone verify failed: {v.stdout} {v.stderr}")
+            t = subprocess.run(
+                [sys.executable,
+                 str(clone / "supabase/repair-013-pre/bin/"
+                     "test_builder_binding.py")],
+                cwd=str(clone / "supabase/repair-013-pre"),
+                capture_output=True, text=True, env=env,
+            )
+            if t.returncode != 0:
+                raise AssertionError(
+                    f"clean-clone builder tests failed: {t.stdout} "
+                    f"{t.stderr}")
+            # Committed frozen artifacts (present after the rehearsal
+            # evidence commit): each freeze record must verify against its
+            # bound committed inputs, located by recorded sha.
+            art_dir = clone / "supabase/repair-013-pre/artifacts"
+            records = sorted(art_dir.glob("freeze-14b-*.json"))
+            for record in records:
+                rec = json.load(open(record, encoding="utf-8"))
+                bound = {}
+                want = {
+                    "stage1_artifact_sha256": "stage1-artifact",
+                    "authorization_manifest_sha256": "auth-manifest",
+                    "stage1_receipt_sha256": "stage1-receipt",
+                }
+                for sha_key, label in want.items():
+                    found = [
+                        p for p in art_dir.iterdir()
+                        if p.is_file()
+                        and bp.sha256_file(p) == rec.get(sha_key)
+                    ]
+                    if len(found) != 1:
+                        raise AssertionError(
+                            f"clean-clone: cannot locate {label} bound by "
+                            f"{record.name} ({sha_key}={rec.get(sha_key)})")
+                    bound[label] = str(found[0])
+                a = subprocess.run(
+                    [sys.executable,
+                     str(clone / "supabase/repair-013-pre/bin/"
+                         "build_repair_package.py"),
+                     "verify", "--artifact", str(record),
+                     "--stage1-artifact", bound["stage1-artifact"],
+                     "--auth-manifest", bound["auth-manifest"],
+                     "--stage1-receipt", bound["stage1-receipt"]],
+                    cwd=str(clone / "supabase/repair-013-pre"),
+                    capture_output=True, text=True, env=env,
+                )
+                if a.returncode != 0 or "VERIFY OK" not in a.stdout:
+                    raise AssertionError(
+                        f"clean-clone verify --artifact {record.name} "
+                        f"failed: {a.stdout} {a.stderr}")
+
+    run("B28 clean-clone verification (verify + builder tests + committed "
+        "frozen artifacts from a fresh clone)", _inner)
 
 
 # ---------------------------------------------------------------------------
@@ -696,14 +877,18 @@ def b26():
 def b17():
     def _inner():
         pkg = bp.load_committed_package()
+        package_sha = bp.execution_package_sha256()
         ident1 = bp.artifact_identity_stage1(
-            "REHEARSAL", pkg["stage1_manifest_sha"], pkg["basis_sha"], None)
+            "REHEARSAL", pkg["stage1_manifest_sha"], pkg["basis_sha"],
+            package_sha, None)
         a = bp.stage1_sql(pkg["s1t"], pkg["s1g"], pkg["s2c"],
                           pkg["dup_after_s1"], pkg["stage1_manifest_sha"],
-                          pkg["basis_sha"], "REHEARSAL", None, ident1)
+                          pkg["basis_sha"], "REHEARSAL", None, ident1,
+                          package_sha)
         b = bp.stage1_sql(pkg["s1t"], pkg["s1g"], pkg["s2c"],
                           pkg["dup_after_s1"], pkg["stage1_manifest_sha"],
-                          pkg["basis_sha"], "REHEARSAL", None, ident1)
+                          pkg["basis_sha"], "REHEARSAL", None, ident1,
+                          package_sha)
         assert a == b
 
     run("B17 SQL emission is deterministic", _inner)
@@ -736,5 +921,7 @@ if __name__ == "__main__":
     b24()
     b25()
     b26()
+    b27()
+    b28()
     print(f"\n{PASS} passed, {FAIL} failed")
     sys.exit(1 if FAIL else 0)

@@ -35,6 +35,16 @@
 #       build time, this proves the timeout/rollback contract)
 #   G18 missing artifact-sha GUC — the P0b gate aborts before any lock or
 #       write, zero mutation
+#   G19 missing package-sha GUC (zaki.repair_package_sha256) — the P0b2
+#       gate aborts before any lock or write, zero mutation
+#   G20 FORGED STAGE-1 RECEIPT (the Codex exploit): a caller-fabricated
+#       receipt export with all derivable fields correct is accepted by the
+#       freeze (consistency validation only) — the stage-2 artifact's
+#       DATABASE-side receipt validation rejects it because stage 1 never
+#       ran: zero writes, full-state digest identical
+#   G21 receipt tamper (rollback-only): UPDATE/DELETE refused by the
+#       immutability trigger (42806), duplicate-INSERT refused by
+#       UNIQUE(operation_id) — zero changes
 #
 # All cases prove zero partial changes after the abort.
 set -euo pipefail
@@ -103,11 +113,22 @@ stage1_record="$ARTIFACT_DIR/freeze-$(basename "$stage1_artifact" .sql).json"
 stage1_path="$ARTIFACT_DIR/$stage1_artifact"
 STAGE1_SHA="$(sha256sum "$stage1_path" | awk '{print $1}')"
 
-# Run a stage artifact with the driver's artifact-sha GUC (the SQL gate
-# requires it; the driver verifies the sha against the freeze record first).
+# The stable execution-package sha of the checked-out package (driver GUC).
+PACKAGE_SHA="$(python3 - "$BUILDER" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("build_repair_package", sys.argv[1])
+bp = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(bp)
+print(bp.execution_package_sha256())
+PY
+)"
+
+# Run a stage artifact with the driver's GUCs (artifact sha + package sha;
+# the SQL gates require them and the driver verifies both against the
+# freeze record and the checked-out package first).
 run_with_guc() {
   local artifact="$1" sha="$2"
-  docker exec -e "PGOPTIONS=-czaki.repair_artifact_sha256=$sha" -i "$CONTAINER" \
+  docker exec -e "PGOPTIONS=-czaki.repair_artifact_sha256=$sha -czaki.repair_package_sha256=$PACKAGE_SHA" -i "$CONTAINER" \
     psql -U supabase_admin -d "$DB" < "$artifact" 2>&1 || true
 }
 
@@ -206,15 +227,16 @@ expect_abort_and_clean "$LOG_DIR/auth-g4-stale-supersession.log" "G4"
 # ---------------------------------------------------------------------------
 apply_stage1() {
   fresh_restore_prep
-  # Each case is an independent execution of the same frozen artifact, and
-  # the builder refuses to OVERWRITE a proof (immutability — a fresh
-  # execution legitimately differs by executed_at + execution-log hash).
-  # The proof name is deterministic on the artifact sha, so the suite must
-  # drop the previous case's proof from its private dir before the runner
-  # generates the new one.
-  rm -f "$ARTIFACT_DIR"/stage1-proof-REHEARSAL-*.json
+  # Each case is an independent execution of the same frozen artifact; the
+  # receipt export name is deterministic on the artifact sha, so the suite
+  # must drop the previous case's receipt from its private dir before the
+  # runner exports the new one (the DATABASE row is recreated by each fresh
+  # apply inside the artifact's own transaction).
+  rm -f "$ARTIFACT_DIR"/stage1-receipt-REHEARSAL-*.json
   ARTIFACT_DIR="$ARTIFACT_DIR" "$RUNNER" --stage 1 --artifact "$stage1_path" --freeze-record "$stage1_record" --expect apply >/dev/null
-  STAGE1_PROOF="$ARTIFACT_DIR/$(ls "$ARTIFACT_DIR" | grep '^stage1-proof-REHEARSAL-' | sort | tail -1)"
+  STAGE1_RECEIPT="$ARTIFACT_DIR/$(ls "$ARTIFACT_DIR" | grep '^stage1-receipt-REHEARSAL-' | sort | tail -1)"
+  [ -n "$STAGE1_RECEIPT" ] && [ -f "$STAGE1_RECEIPT" ] \
+    || { echo "FAIL: stage-1 execution receipt export missing after stage 1 apply" >&2; exit 1; }
 }
 
 freeze_stage2() {
@@ -223,7 +245,7 @@ freeze_stage2() {
   python3 "$BUILDER" rehearsal-manifest --confirmation-timestamp "$CONFIRM_TS" --out "$manifest" >/dev/null
   python3 "$BUILDER" freeze --stage 2 --environment-mode REHEARSAL \
     --auth-manifest "$manifest" --stage1-artifact "$stage1_path" \
-    --stage1-execution-proof "$STAGE1_PROOF" --out-dir "$ARTIFACT_DIR" >/dev/null
+    --stage1-receipt "$STAGE1_RECEIPT" --out-dir "$ARTIFACT_DIR" >/dev/null
   python3 - "$ARTIFACT_DIR" <<'PY'
 import json, glob, sys, os
 records = sorted(glob.glob(os.path.join(sys.argv[1], "freeze-14b-*.json")))
@@ -246,7 +268,7 @@ apply_stage1
 stage2_artifact="$(freeze_stage2)"
 stage2_record="$ARTIFACT_DIR/freeze-$(basename "$stage2_artifact" .sql).json"
 "$RUNNER" --stage 2 --artifact "$ARTIFACT_DIR/$stage2_artifact" --freeze-record "$stage2_record" \
-  --stage1-proof "$STAGE1_PROOF" --expect apply >/dev/null
+  --stage1-receipt "$STAGE1_RECEIPT" --expect apply >/dev/null
 STAGE2_SHA="$(sha256sum "$ARTIFACT_DIR/$stage2_artifact" | awk '{print $1}')"
 $PSQL_STRICT <<SQL >/dev/null
 INSERT INTO public.reconciliation_audit_log
@@ -328,16 +350,24 @@ expect_abort_and_clean "$LOG_DIR/auth-g7-partial-altered-audit.log" "G7"
 #    (and before the sha gate — environment identity is validated first).
 # ---------------------------------------------------------------------------
 echo "=== G8: rehearsal artifact against non-rehearsal database identity ==="
+G8_BEFORE="$("$DIGEST" postgres)"
 out=$(docker exec -i "$CONTAINER" psql -v ON_ERROR_STOP=0 -U supabase_admin -d postgres \
   < "$stage1_path" 2>&1) || true
 echo "$out" | tee "$LOG_DIR/auth-g8-rehearsal-vs-devdb.log"
 grep -q "REHEARSAL artifact refuses database identity" "$LOG_DIR/auth-g8-rehearsal-vs-devdb.log" \
   || { echo "FAIL: G8 rehearsal artifact did not refuse the non-rehearsal database identity" >&2; exit 1; }
-echo "PASS: G8 rehearsal artifact refused the non-rehearsal database identity"
+G8_AFTER="$("$DIGEST" postgres)"
+if [ "$G8_BEFORE" != "$G8_AFTER" ]; then
+  echo "FAIL: G8 full-state digest of the target database changed (before != after)" >&2
+  echo "before: $G8_BEFORE" >&2
+  echo "after:  $G8_AFTER" >&2
+  exit 1
+fi
+echo "PASS: G8 rehearsal artifact refused the non-rehearsal database identity with zero writes (full-state digest identical)"
 
 # ---------------------------------------------------------------------------
 # G9 production artifact vs the wrong database identity (scratch restore):
-#    the PRODUCTION gate must abort before any write.
+#    the PRODUCTION gate must abort before any write — full-state digest.
 # ---------------------------------------------------------------------------
 echo "=== G9: production artifact against wrong database identity ==="
 TMP_PROD="$(mktemp -d)"
@@ -349,22 +379,22 @@ records = sorted(glob.glob(os.path.join(sys.argv[1], "freeze-14a-*.json")))
 print(json.load(open(records[-1]))["artifact_file"])
 PY
 )"
-superseded_before=$($PSQL_STRICT -tAc \
-  "SELECT count(*) FROM public.reconciliation_matches WHERE superseded_at IS NOT NULL AND supersede_operation_id = '$STAGE1_OP'")
+DIGEST_BEFORE="$("$DIGEST")"
 out=$(docker exec -e PGOPTIONS="-c zaki.repair_project_ref=fqvekbzwghjurkcawpgg" \
   -i "$CONTAINER" psql -v ON_ERROR_STOP=0 -U supabase_admin -d "$DB" \
   < "$prod_artifact" 2>&1) || true
 echo "$out" | tee "$LOG_DIR/auth-g9-production-vs-scratch.log"
 grep -q "PRODUCTION artifact requires the exact production database identity" "$LOG_DIR/auth-g9-production-vs-scratch.log" \
   || { echo "FAIL: G9 production artifact did not refuse the wrong database identity" >&2; exit 1; }
-superseded_after=$($PSQL_STRICT -tAc \
-  "SELECT count(*) FROM public.reconciliation_matches WHERE superseded_at IS NOT NULL AND supersede_operation_id = '$STAGE1_OP'")
-if [ "$superseded_after" != "$superseded_before" ]; then
-  echo "FAIL: G9 production artifact wrote to the scratch database (before=$superseded_before after=$superseded_after)" >&2
+after="$("$DIGEST")"
+if [ "$DIGEST_BEFORE" != "$after" ]; then
+  echo "FAIL: G9 production artifact changed the scratch database (full-state digest differs)" >&2
+  echo "before: $DIGEST_BEFORE" >&2
+  echo "after:  $after" >&2
   exit 1
 fi
 rm -rf "$TMP_PROD"
-echo "PASS: G9 production artifact refused the wrong database identity with zero writes"
+echo "PASS: G9 production artifact refused the wrong database identity with zero writes (full-state digest identical)"
 
 # ---------------------------------------------------------------------------
 # G10-G14: post-stage-1 checkpoint mutations (blocker 1). After a complete
@@ -536,5 +566,138 @@ echo "$out" | tee "$LOG_DIR/auth-g18-missing-sha-guc.log"
 grep -q "zaki.repair_artifact_sha256 is missing or malformed" "$LOG_DIR/auth-g18-missing-sha-guc.log" \
   || { echo "FAIL: G18 missing-sha GUC did not trip the P0b gate" >&2; exit 1; }
 expect_abort_and_clean "$LOG_DIR/auth-g18-missing-sha-guc.log" "G18"
+
+# ---------------------------------------------------------------------------
+# G19 missing package-sha GUC (zaki.repair_package_sha256): the P0b2 gate
+#    must abort before any lock or write, zero mutation.
+# ---------------------------------------------------------------------------
+echo "=== G19: missing package-sha GUC ==="
+fresh_restore_prep
+DIGEST_BEFORE="$("$DIGEST")"
+out=$(docker exec -e "PGOPTIONS=-czaki.repair_artifact_sha256=$STAGE1_SHA" -i "$CONTAINER" \
+  psql -U supabase_admin -d "$DB" < "$stage1_path" 2>&1) || true
+echo "$out" | tee "$LOG_DIR/auth-g19-missing-package-guc.log"
+grep -q "zaki.repair_package_sha256 must be" "$LOG_DIR/auth-g19-missing-package-guc.log" \
+  || { echo "FAIL: G19 missing package GUC did not trip the P0b2 gate" >&2; exit 1; }
+expect_abort_and_clean "$LOG_DIR/auth-g19-missing-package-guc.log" "G19"
+
+# ---------------------------------------------------------------------------
+# G20 FORGED STAGE-1 RECEIPT (the Codex exploit retested): fabricate a
+#    caller-created receipt export claiming a completed stage 1 WITHOUT
+#    stage 1 ever running. Every DERIVABLE field is correct (computable
+#    from the committed manifests + the frozen stage-1 artifact), so the
+#    freeze's consistency validation ACCEPTS it — by design, the freeze
+#    validates operator evidence, it does not authorize. The stage-2
+#    artifact's DATABASE-side receipt validation must reject it: no receipt
+#    row exists (stage 1 never ran), so stage 2 aborts with zero writes.
+# ---------------------------------------------------------------------------
+echo "=== G20: forged stage-1 receipt (Codex exploit) — stage 2 without stage 1 ==="
+fresh_restore_prep
+FORGED_DIR="$(mktemp -d)"
+python3 - "$stage1_path" "$BUILDER" "$FORGED_DIR/forged-receipt.json" <<'PY'
+import importlib.util, json, sys
+artifact, builder, out = sys.argv[1], sys.argv[2], sys.argv[3]
+spec = importlib.util.spec_from_file_location("build_repair_package", builder)
+bp = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(bp)
+pkg = bp.load_committed_package()
+doc = {
+    "receipt_sha256": "f" * 64,
+    "execution_package_sha256": bp.execution_package_sha256(),
+    "artifact_sha256": bp.sha256_file(artifact),
+    "operation_id": bp.STAGE1_OPERATION_ID,
+    "environment_mode": "REHEARSAL",
+    "project_ref": None,
+    "target_manifest_sha256": pkg["stage1_manifest_sha"],
+    "target_digest_sha256": bp.stage1_target_digest(pkg["s1t"]),
+    "survivor_mapping_digest_sha256": bp.stage1_survivor_mapping_digest(pkg["s1t"]),
+    "audit_digest_sha256": "a" * 64,
+    "postcondition_digest_sha256": "b" * 64,
+    "executed_at": "2026-08-17T09:00:00+00:00",
+    "db_identity": "repair_drill",
+}
+with open(out, "w", encoding="utf-8") as f:
+    json.dump(doc, f, indent=2)
+    f.write("\n")
+print("forged receipt export written (all derivable fields correct)")
+PY
+CONFIRM_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+python3 "$BUILDER" rehearsal-manifest --confirmation-timestamp "$CONFIRM_TS" \
+  --out "$FORGED_DIR/manifest.json" >/dev/null
+python3 "$BUILDER" freeze --stage 2 --environment-mode REHEARSAL \
+  --auth-manifest "$FORGED_DIR/manifest.json" \
+  --stage1-artifact "$stage1_path" \
+  --stage1-receipt "$FORGED_DIR/forged-receipt.json" \
+  --out-dir "$FORGED_DIR" >/dev/null \
+  || { echo "FAIL: G20 freeze of a forged-but-derivably-consistent receipt should succeed (consistency validation of operator evidence)" >&2; exit 1; }
+forged_record="$FORGED_DIR/$(ls "$FORGED_DIR" | grep '^freeze-14b-' | tail -1)"
+forged_artifact_file="$(python3 -c "
+import json,sys
+print(json.load(open(sys.argv[1]))['artifact_file'])" "$forged_record")"
+FORGED_SHA="$(sha256sum "$FORGED_DIR/$forged_artifact_file" | awk '{print $1}')"
+DIGEST_BEFORE="$("$DIGEST")"
+out=$(docker exec -e "PGOPTIONS=-czaki.repair_artifact_sha256=$FORGED_SHA -czaki.repair_package_sha256=$PACKAGE_SHA" \
+  -i "$CONTAINER" psql -U supabase_admin -d "$DB" \
+  < "$FORGED_DIR/$forged_artifact_file" 2>&1) || true
+echo "$out" | tee "$LOG_DIR/auth-g20-forged-receipt.log"
+grep -q "expected exactly one stage-1 execution receipt, found 0" "$LOG_DIR/auth-g20-forged-receipt.log" \
+  || { echo "FAIL: G20 stage 2 did not reject the missing database-side receipt" >&2; exit 1; }
+if grep -qE "STAGE 2: superseded [0-9]+ rows" "$LOG_DIR/auth-g20-forged-receipt.log"; then
+  echo "FAIL: G20 stage 2 applied despite the forged receipt (Codex exploit would succeed)" >&2
+  exit 1
+fi
+expect_abort_and_clean "$LOG_DIR/auth-g20-forged-receipt.log" "G20"
+rm -rf "$FORGED_DIR"
+
+# ---------------------------------------------------------------------------
+# G21 receipt tamper (rollback-only): the receipt row is UPDATE/DELETE
+#    immutable (prep trigger, ERRCODE 42806) and unique per operation id.
+#    Every tamper attempt is refused and leaves ZERO changes.
+# ---------------------------------------------------------------------------
+echo "=== G21: receipt tamper (immutability, rollback-only) ==="
+apply_stage1
+DIGEST_BEFORE="$("$DIGEST")"
+: > "$LOG_DIR/auth-g21-receipt-tamper.log"
+echo "attempt: update" | tee -a "$LOG_DIR/auth-g21-receipt-tamper.log"
+docker exec -i "$CONTAINER" psql -v ON_ERROR_STOP=0 -U supabase_admin -d "$DB" \
+  -c "UPDATE public.repair_stage1_receipt SET executed_at = now();" \
+  2>&1 | tee -a "$LOG_DIR/auth-g21-receipt-tamper.log" || true
+echo "attempt: delete" | tee -a "$LOG_DIR/auth-g21-receipt-tamper.log"
+docker exec -i "$CONTAINER" psql -v ON_ERROR_STOP=0 -U supabase_admin -d "$DB" \
+  -c "DELETE FROM public.repair_stage1_receipt;" \
+  2>&1 | tee -a "$LOG_DIR/auth-g21-receipt-tamper.log" || true
+echo "attempt: duplicate insert" | tee -a "$LOG_DIR/auth-g21-receipt-tamper.log"
+docker exec -i "$CONTAINER" psql -v ON_ERROR_STOP=0 -U supabase_admin -d "$DB" \
+  -c "INSERT INTO public.repair_stage1_receipt
+        (receipt_sha256, execution_package_sha256, artifact_sha256,
+         operation_id, environment_mode, project_ref, target_manifest_sha256,
+         target_digest_sha256, survivor_mapping_digest_sha256,
+         audit_digest_sha256, postcondition_digest_sha256, executed_at,
+         db_identity)
+      SELECT '0' || substring(receipt_sha256 from 2),
+             execution_package_sha256, artifact_sha256, operation_id,
+             environment_mode, project_ref, target_manifest_sha256,
+             target_digest_sha256, survivor_mapping_digest_sha256,
+             audit_digest_sha256, postcondition_digest_sha256, executed_at,
+             db_identity
+      FROM public.repair_stage1_receipt;" \
+  2>&1 | tee -a "$LOG_DIR/auth-g21-receipt-tamper.log" || true
+grep -q "stage-1 execution receipt is immutable" "$LOG_DIR/auth-g21-receipt-tamper.log" \
+  || { echo "FAIL: G21 receipt UPDATE/DELETE was not refused by the immutability trigger" >&2; exit 1; }
+grep -q "duplicate key" "$LOG_DIR/auth-g21-receipt-tamper.log" \
+  || { echo "FAIL: G21 duplicate receipt INSERT was not refused by UNIQUE(operation_id)" >&2; exit 1; }
+after="$("$DIGEST")"
+if [ "$DIGEST_BEFORE" != "$after" ]; then
+  echo "FAIL: G21 receipt tamper attempts left changes (digest differs)" >&2
+  echo "before: $DIGEST_BEFORE" >&2
+  echo "after:  $after" >&2
+  exit 1
+fi
+receipt_rows=$($PSQL_STRICT -tAc "SELECT count(*) FROM public.repair_stage1_receipt")
+if [ "$receipt_rows" != "1" ]; then
+  echo "FAIL: G21 receipt row count is $receipt_rows, expected 1 (tamper attempts must leave it intact)" >&2
+  exit 1
+fi
+echo "PASS: G21 receipt tamper refused (immutability trigger + UNIQUE) with zero changes"
 
 echo "ALL AUTHORIZATION DRIFT CASES PASS"

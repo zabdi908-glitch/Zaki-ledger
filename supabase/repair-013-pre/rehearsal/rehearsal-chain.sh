@@ -46,7 +46,7 @@ DATA_DUMP="${DATA_DUMP:-}"
 
 if [ "${1:-}" = "--fresh" ]; then
   rm -f "$ARTIFACT_DIR"/14a-* "$ARTIFACT_DIR"/14b-* "$ARTIFACT_DIR"/freeze-* \
-        "$ARTIFACT_DIR"/stage1-proof-* \
+        "$ARTIFACT_DIR"/stage1-proof-* "$ARTIFACT_DIR"/stage1-receipt-* \
         "$ARTIFACT_DIR"/rehearsal-authorization-manifest-* \
         "$GEN_DIR"/*.json "$GEN_DIR"/*.log
 fi
@@ -83,14 +83,23 @@ echo "== stage 1 apply =="
 echo "== stage 1 rerun (expect no-op) =="
 "$RUNNER" --stage 1 --artifact "$STAGE1_ARTIFACT" --freeze-record "$STAGE1_RECORD" --expect noop
 
-STAGE1_PROOF="$ARTIFACT_DIR/$(ls "$ARTIFACT_DIR" | grep '^stage1-proof-REHEARSAL-' | sort | tail -1)"
-[ -n "$STAGE1_PROOF" ] && [ -f "$STAGE1_PROOF" ] \
-  || { echo "error: stage-1 execution proof missing after stage 1" >&2; exit 1; }
+# STAGE-1 CHECKPOINT: the database-side execution receipt written by the
+# stage-1 artifact inside its own transaction (the stage-2 authorization
+# root). The export is operator evidence only — the stage-2 artifact
+# revalidates the actual DB row and live stage-1 state at execution.
+STAGE1_RECEIPT="$ARTIFACT_DIR/$(ls "$ARTIFACT_DIR" | grep '^stage1-receipt-REHEARSAL-' | sort | tail -1)"
+[ -n "$STAGE1_RECEIPT" ] && [ -f "$STAGE1_RECEIPT" ] \
+  || { echo "error: stage-1 execution receipt missing after stage 1" >&2; exit 1; }
+RECEIPT_TS="$(python3 -c "
+import json,sys
+print(json.load(open(sys.argv[1], encoding='utf-8'))['executed_at'])" "$STAGE1_RECEIPT")"
+echo "stage-1 receipt: $(basename "$STAGE1_RECEIPT")  executed_at=$RECEIPT_TS"
 
-# STAGE-1 CHECKPOINT. The stage-2 authorization manifest is created only
-# now, stamped with a confirmation timestamp AFTER the recorded stage-1
-# execution — the freeze below enforces the ordering. The executed manifest
-# is committed under artifacts/ as part of the rehearsal evidence.
+# The stage-2 authorization manifest is created only now, stamped with a
+# confirmation timestamp AFTER the recorded stage-1 execution — the freeze
+# below enforces the ordering against the receipt's executed_at. The
+# executed manifest is committed under artifacts/ as part of the rehearsal
+# evidence.
 echo "== authorization checkpoint: sign the rehearsal stage-2 manifest =="
 CONFIRM_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 REHEARSAL_MANIFEST="$ARTIFACT_DIR/rehearsal-authorization-manifest-${CONFIRM_TS}.json"
@@ -102,7 +111,7 @@ echo "== freeze stage 2 (REHEARSAL, post-stage-1) =="
 python3 "$BUILDER" freeze --stage 2 --environment-mode REHEARSAL \
   --auth-manifest "$REHEARSAL_MANIFEST" \
   --stage1-artifact "$STAGE1_ARTIFACT" \
-  --stage1-execution-proof "$STAGE1_PROOF" \
+  --stage1-receipt "$STAGE1_RECEIPT" \
   --out-dir "$ARTIFACT_DIR"
 STAGE2_ARTIFACT="$ARTIFACT_DIR/$(python3 - "$ARTIFACT_DIR" <<'PY'
 import json, glob, sys, os
@@ -115,20 +124,20 @@ PY
 STAGE2_RECORD="$ARTIFACT_DIR/freeze-$(basename "$STAGE2_ARTIFACT" .sql).json"
 # Independent verification with full regeneration: expected stage-2 bytes
 # are rebuilt from the committed basis + authorization manifest + stage-1
-# proof in a temporary location and must be byte-identical to the frozen
-# artifact (blocker 3).
+# receipt export in a temporary location and must be byte-identical to the
+# frozen artifact (blocker 3).
 python3 "$BUILDER" verify --artifact "$STAGE2_RECORD" \
   --stage1-artifact "$STAGE1_ARTIFACT" \
   --auth-manifest "$REHEARSAL_MANIFEST" \
-  --stage1-execution-proof "$STAGE1_PROOF"
+  --stage1-receipt "$STAGE1_RECEIPT"
 
 echo "== stage 2 apply (rehearsal authorization manifest) =="
 "$RUNNER" --stage 2 --artifact "$STAGE2_ARTIFACT" --freeze-record "$STAGE2_RECORD" \
-  --stage1-proof "$STAGE1_PROOF" --expect apply
+  --stage1-receipt "$STAGE1_RECEIPT" --expect apply
 
 echo "== stage 2 rerun (expect no-op) =="
 "$RUNNER" --stage 2 --artifact "$STAGE2_ARTIFACT" --freeze-record "$STAGE2_RECORD" \
-  --stage1-proof "$STAGE1_PROOF" --expect noop
+  --stage1-receipt "$STAGE1_RECEIPT" --expect noop
 
 echo "== stage 1 after stage 2 (expect own-state no-op) =="
 "$RUNNER" --stage 1 --artifact "$STAGE1_ARTIFACT" --freeze-record "$STAGE1_RECORD" --expect noop
@@ -145,7 +154,8 @@ SELECT (SELECT count(*) FROM public.reconciliation_matches)            AS total_
           WHERE matched_by = 'auto' AND qb_transaction_id IS NOT NULL AND superseded_at IS NULL
           GROUP BY qb_transaction_id HAVING count(*) > 1) d)           AS duplicate_live_auto_endpoints,
        (SELECT count(*) FROM public.reconciliation_audit_log
-        WHERE action = 'match_repair_superseded')                      AS repair_audit_rows;
+        WHERE action = 'match_repair_superseded')                      AS repair_audit_rows,
+       (SELECT count(*) FROM public.repair_stage1_receipt)             AS stage1_receipt_rows;
 SQL
 
 echo "rehearsal chain complete (migration 013 NOT included — run rehearsal/run-migration-013.sh explicitly)"

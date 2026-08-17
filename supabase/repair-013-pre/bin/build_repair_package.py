@@ -53,11 +53,18 @@ STAGE-2 FREEZE:
 
   Production (and rehearsal) execution uses the `freeze` subcommand: it
   builds the exact SQL artifact from the committed basis + the signed
-  authorization manifest + the stage-1 execution proof, writes it to a unique
-  immutable path (overwrite refused), records its SHA-256 and identity in a
-  freeze record, and the runner executes only a hash-verified frozen
-  artifact. `verify --artifact <freeze.json>` independently re-proves the
-  frozen bytes before execution.
+  authorization manifest + the stage-1 execution RECEIPT EXPORT (the
+  immutable database-side receipt row written by stage 1 inside its own
+  transaction is the authorization root — the export is operator evidence
+  only; the stage-2 artifact itself revalidates the actual DB row and
+  recomputes the exact stage-1 state before any stage-2 work), writes it to
+  a unique immutable path (overwrite refused), records its SHA-256 and
+  identity in a freeze record, and the runner executes only a hash-verified
+  frozen artifact. `verify --artifact <freeze.json>` independently
+  re-proves the frozen bytes before execution. Every artifact binds the
+  stable EXECUTION_PACKAGE_SHA256 (content-based package identity — see
+  EXECUTION_PACKAGE.md; `package-sha` prints it), never the git HEAD, so
+  evidence-only commits cannot invalidate the package.
 
 Accepted classification (validated on every build):
 
@@ -79,16 +86,24 @@ Subcommands:
              and candidate inventory, the R6 review rows, the test-decisions
              list, the authorization-manifest template, and the REHEARSAL
              test authorization manifest, plus manifest-identities.json.
+  package-sha  Print the stable EXECUTION_PACKAGE_SHA256 and the per-file
+             digest lines it is computed from (sha256sum format over the
+             documented sorted package file list — see EXECUTION_PACKAGE.md).
   sql        REHEARSAL-ONLY regeneration of the committed 14a/14b working
              copies. --auth-manifest is REQUIRED (no default — missing
-             authorization input fails closed).
+             authorization input fails closed). The stage-2 working copy is
+             a deterministic pre-execution staging artifact (empty stage-1
+             receipt-sha placeholder); per-run frozen artifacts are built
+             with `freeze` + `--stage1-receipt`.
   freeze     Build an immutable execution artifact (stage 1 or stage 2) +
              freeze record. Stage 2 requires --auth-manifest,
-             --stage1-artifact, and --stage1-execution-proof (schema-v2
-             checkpoint proof, independently revalidated against the
-             committed manifests and the byte-identical frozen stage-1
-             artifact). PRODUCTION mode requires --project-ref
-             fqvekbzwghjurkcawpgg. Overwrite is refused.
+             --stage1-artifact, and --stage1-receipt (the stage-1 execution
+             receipt export; every derivable field is independently
+             revalidated against the committed manifests and the
+             byte-identical frozen stage-1 artifact — the ACTUAL
+             authorization is the database-side receipt row, revalidated by
+             the stage-2 artifact at execution). PRODUCTION mode requires
+             --project-ref fqvekbzwghjurkcawpgg. Overwrite is refused.
   verify     Package consistency: manifest hashes, snapshot provenance,
              classification re-derivation, committed SQL byte-identity with
              regeneration (--auth-manifest REQUIRED for the stage-2 binding).
@@ -97,13 +112,7 @@ Subcommands:
              committed basis + authorization inputs into a temporary
              location and requiring byte-identity + SHA-256 match with the
              freeze record (stage-2 records additionally require
-             --stage1-artifact, --auth-manifest, --stage1-execution-proof).
-  stage1-proof  Generate the stage-1 checkpoint execution proof (schema v2)
-             from the committed manifests + the exact frozen stage-1
-             artifact + driver-recorded execution facts. The proof binds the
-             package git sha, artifact sha, manifest/basis hashes, the exact
-             154 target ids, survivor mappings, postcondition digest, audit
-             digest, and the execution log hash where retained.
+             --stage1-artifact, --auth-manifest, --stage1-receipt).
   rehearsal-manifest  Generate a REHEARSAL authorization manifest for the
              rehearsal chain from the committed test-decisions list, stamped
              with a fresh confirmation timestamp (post-stage-1 by
@@ -112,21 +121,18 @@ Subcommands:
 Usage:
 
   python3 bin/build_repair_package.py manifests --snapshot-dir /tmp/zaki-repair-design
+  python3 bin/build_repair_package.py package-sha
   python3 bin/build_repair_package.py sql --auth-manifest manifests/stage2-rehearsal-authorization-manifest.json
   python3 bin/build_repair_package.py verify --auth-manifest manifests/stage2-rehearsal-authorization-manifest.json
   python3 bin/build_repair_package.py freeze --stage 1 --environment-mode REHEARSAL --out-dir artifacts
   python3 bin/build_repair_package.py freeze --stage 2 --environment-mode PRODUCTION \
       --auth-manifest <signed.json> --stage1-artifact <frozen-14a.sql> \
-      --stage1-execution-proof <proof.json> --project-ref fqvekbzwghjurkcawpgg \
+      --stage1-receipt <receipt-export.json> --project-ref fqvekbzwghjurkcawpgg \
       --out-dir <window-artifacts>
-  python3 bin/build_repair_package.py stage1-proof \
-      --artifact <frozen-14a.sql> --environment-mode REHEARSAL \
-      --database repair_drill --executed-at <iso> --result APPLIED \
-      --execution-log <run.log> --out <proof.json>
   python3 bin/build_repair_package.py verify --artifact artifacts/freeze-14a-*.json
   python3 bin/build_repair_package.py verify --artifact artifacts/freeze-14b-*.json \
       --stage1-artifact artifacts/14a-*.sql --auth-manifest <signed.json> \
-      --stage1-execution-proof <proof.json>
+      --stage1-receipt <receipt-export.json>
 """
 
 import argparse
@@ -134,6 +140,7 @@ import csv
 import datetime
 import hashlib
 import json
+import re
 import sys
 import tempfile
 import unicodedata
@@ -199,6 +206,68 @@ STATEMENT_TIMEOUT = "120s"
 # expected evidence built from the current GUC (this run's sha), so a rerun
 # only verifies as a no-op when the exact frozen artifact sha is supplied.
 REPAIR_ARTIFACT_SHA_GUC = "zaki.repair_artifact_sha256"
+
+# Execution-package sha session GUC. EXECUTION_PACKAGE_SHA256 (below) is a
+# stable, content-based identity of the production-relevant package files —
+# unlike the git HEAD, it does NOT change when an evidence commit is added
+# on top. The value is known at build time (the package file list excludes
+# the generated artifacts), so every artifact embeds it as a literal AND
+# requires the driver to pass the identical value via PGOPTIONS; the
+# DB-side stage-1 receipt, the audit evidence, and the freeze records bind
+# it. Git commits are used separately: P = execution-package commit, E =
+# evidence-only descendant proving P (recorded in the evidence, never bound
+# into artifact bytes).
+REPAIR_PACKAGE_SHA_GUC = "zaki.repair_package_sha256"
+
+# ---------------------------------------------------------------------------
+# EXECUTION_PACKAGE_SHA256 — the stable package identity (deterministic,
+# content-based). sha256 over the concatenation of sha256sum-format lines
+#   "<file_sha256>  <relpath>\n"
+# for the sorted file list below (relpaths are package-relative; the 013
+# migration lives one level up and is referenced as `../migrations/…`).
+# Exactly this list and ordering are documented in EXECUTION_PACKAGE.md.
+#
+# Included: everything production-relevant — migration 013, repair prep,
+# stage-1 generator inputs (manifests), stage-2 builder + its tests
+# (validation/locking logic), the immutable candidate basis + authorization
+# template/test manifests, and the production repair runbook.
+# Excluded (narrative/evidence/regeneration outputs, documented in
+# EXECUTION_PACKAGE.md): rehearsal/ tooling, extract/ read-only queries,
+# artifacts/ (generated per-run outputs), README/reports/EVIDENCE, and the
+# generated SQL working copies — none of them is a production execution
+# input. No excluded file participates in artifact bytes.
+# ---------------------------------------------------------------------------
+EXECUTION_PACKAGE_FILES = [
+    "../migrations/013_reconciliation_claim_hardening.sql",
+    "13-repair-prep.sql",
+    "bin/build_repair_package.py",
+    "bin/test_builder_binding.py",
+    "execution-window.md",
+    "manifests/duplicate-endpoints.csv",
+    "manifests/r6-review.csv",
+    "manifests/stage1-unapproved-targets.csv",
+    "manifests/stage2-approved-candidates.csv",
+    "manifests/stage2-authorization-manifest-template.json",
+    "manifests/stage2-immutable-basis.json",
+    "manifests/stage2-rehearsal-authorization-manifest.json",
+    "manifests/stage2-test-decisions.json",
+]
+
+
+def execution_package_sha256():
+    """Stable content-based package identity (sha256sum-style digest of the
+    sorted documented file list). Deterministic: depends only on file
+    content, never on git HEAD or file timestamps."""
+    lines = []
+    for rel in EXECUTION_PACKAGE_FILES:
+        p = ROOT / rel
+        if not p.is_file():
+            raise SystemExit(
+                f"execution-package file missing: {rel} — the package "
+                f"identity is incomplete"
+            )
+        lines.append(f"{sha256_file(p)}  {rel}\n")
+    return sha256_text("".join(lines))
 
 STAGE1_ACTOR = "zaki-repair-stage1-system"
 AUDIT_ACTION = "match_repair_superseded"
@@ -332,6 +401,10 @@ def sha256_text(text):
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def _is_hex64(v):
+    return isinstance(v, str) and bool(re.fullmatch(r"[0-9a-f]{64}", v))
+
+
 def fmt_amount(v):
     return f"{float(v):.2f}"
 
@@ -350,13 +423,15 @@ def parse_iso_ts(text):
     return datetime.datetime.fromisoformat(t)
 
 
-def artifact_identity_stage1(mode, stage1_manifest_sha, basis_sha, project_ref):
+def artifact_identity_stage1(mode, stage1_manifest_sha, basis_sha,
+                             execution_package_sha, project_ref):
     return sha256_text(
         "|".join([
             STAGE1_OPERATION_ID,
             mode,
             stage1_manifest_sha,
             basis_sha,
+            execution_package_sha,
             project_ref or "-",
         ])
     )
@@ -364,7 +439,7 @@ def artifact_identity_stage1(mode, stage1_manifest_sha, basis_sha, project_ref):
 
 def artifact_identity_stage2(mode, stage1_manifest_sha, basis_sha,
                              auth_manifest_sha, stage1_artifact_sha,
-                             proof_sha, project_ref):
+                             receipt_sha, execution_package_sha, project_ref):
     return sha256_text(
         "|".join([
             STAGE1_OPERATION_ID,
@@ -374,7 +449,8 @@ def artifact_identity_stage2(mode, stage1_manifest_sha, basis_sha,
             basis_sha,
             auth_manifest_sha,
             stage1_artifact_sha,
-            proof_sha,
+            receipt_sha,
+            execution_package_sha,
             project_ref or "-",
         ])
     )
@@ -940,11 +1016,14 @@ def auth_manifest_document(basis_sha, mode, decisions):
     }
 
 
-def validate_auth_manifest(path, mode, proof=None):
+def validate_auth_manifest(path, mode, receipt=None):
     """Validate the thin authorization manifest against the COMMITTED basis.
 
     Returns (decisions, manifest_sha). Raises SystemExit on any deviation —
     the manifest is a decision over the basis, never a redefinition of it.
+    `receipt` (a load_stage1_receipt result) enforces the post-stage-1
+    ordering: every confirmation timestamp must follow the stage-1 receipt's
+    database-recorded executed_at.
     """
     manifest_path = Path(path)
     try:
@@ -1036,12 +1115,12 @@ def validate_auth_manifest(path, mode, proof=None):
                 f"decision for {match_id} has an invalid "
                 f"confirmation_timestamp {ts!r}: {e}"
             )
-        if proof is not None:
-            if parsed_ts < proof["executed_at"]:
+        if receipt is not None:
+            if parsed_ts < receipt["executed_at"]:
                 raise SystemExit(
                     f"decision for {match_id} has confirmation_timestamp "
                     f"{ts} earlier than the recorded stage-1 execution "
-                    f"{proof['executed_at_iso']} — stage-2 authorization "
+                    f"{receipt['executed_at_iso']} — stage-2 authorization "
                     f"must follow the stage-1 checkpoint"
                 )
         if decision == "RETIRE":
@@ -1143,338 +1222,174 @@ def load_committed_package():
 
 
 # ---------------------------------------------------------------------------
-# Stage-1 checkpoint proof (schema v2): a hash-chain binding from the
-# committed manifests to the exact frozen stage-1 artifact and its expected
-# database effects. The builder GENERATES the proof (stage1-proof subcommand)
-# and independently REVALIDATES every derivable field (load_stage1_proof):
+# Stage-1 execution receipt (database-side authorization root). Stage 1
+# writes an immutable receipt row INSIDE ITS OWN TRANSACTION (same
+# transaction as the 154 supersessions and audit rows), recording
+# database-derived digests of the exact state it produced. Stage 2 validates
+# that actual database row AND independently recomputes the exact stage-1
+# state before any stage-2 work. A caller-created export is OPERATOR
+# EVIDENCE ONLY — never the authorization root (Codex finding 1).
 #
-#   - artifact sha256 == sha256 of the supplied frozen artifact;
-#   - the frozen artifact is BYTE-IDENTICAL to the package's deterministic
-#     stage-1 regeneration (immutable candidate basis + committed manifest);
-#   - stage-1 manifest sha / stage-2 basis sha == the committed files;
-#   - target ids / survivor mappings / postcondition digest / audit digest
-#     are recomputed from the committed stage-1 manifest and compared
-#     exactly (counts are never sufficient);
-#   - package_git_sha == git rev-parse HEAD of the checked-out package;
-#   - execution log sha re-verified when the log file is supplied.
-#
-# What the proof does NOT prove (documented — execution-window.md §5):
-# executed_at, result, database, and the log content are recorded by the
-# execution driver and are as trustworthy as the operator that ran it. The
-# compensating controls are: (a) the stage-2 artifact's in-database
-# revalidation of the EXACT stage-1 postcondition state and audit rows
-# (blocker 1), and (b) artifact byte-identity with the deterministic
-# regeneration, which the proof itself carries.
+# Two digest families:
+#  - DERIVABLE digests (target digest, survivor-mapping digest) are computed
+#    in SQL over the manifest temp table and are also computable offline
+#    from the committed stage-1 manifest — the builder revalidates them
+#    byte-exactly (stage1_target_digest / stage1_survivor_mapping_digest).
+#  - SQL-AUTHORITY digests (audit digest, postcondition digest) are computed
+#    in SQL over LIVE rows (runtime timestamps included) with PG-specific
+#    jsonb::text rendering; they are recomputed by the stage-2 artifact in
+#    SQL from live state and compared to the receipt's recorded values. The
+#    builder checks their format only and NEVER recomputes them (PG jsonb
+#    rendering is not reproducible in Python, and the DB is the authority).
 # ---------------------------------------------------------------------------
 
-def _git_head_sha():
-    import subprocess
-    r = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        capture_output=True, text=True, cwd=str(ROOT),
-    )
-    if r.returncode != 0:
-        raise SystemExit(f"cannot read git HEAD of the package repo: {r.stderr.strip()}")
-    return r.stdout.strip()
+def stage1_target_digest(s1t):
+    """sha256 over the exact 154 stage-1 target ids, comma-joined in
+    match_id order (identical to the SQL-side string_agg)."""
+    return sha256_text(",".join(sorted(r["match_id"] for r in s1t)))
 
 
-def _canon_json(obj):
-    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-
-
-def stage1_target_ids(s1t):
-    return [r["match_id"] for r in sorted(s1t, key=lambda r: r["match_id"])]
-
-
-def stage1_survivor_mappings(s1t):
-    return {
-        r["match_id"]: r["intended_survivor_match_id"] or ""
-        for r in s1t
-    }
-
-
-def stage1_postcondition_digest(s1t, s1g):
-    """Deterministic digest of the exact expected post-stage-1 state."""
-    doc = {
-        "stage1_operation_id": STAGE1_OPERATION_ID,
-        "targets": [
-            {
-                "match_id": r["match_id"],
-                "supersede_reason": r["reason"],
-                "superseded_by_match_id": r["intended_survivor_match_id"] or "",
-                "supersede_operation_id": STAGE1_OPERATION_ID,
-            }
-            for r in sorted(s1t, key=lambda r: r["match_id"])
-        ],
-        "survivor_guards": [
-            {
-                "match_id": r["match_id"],
-                "approved_at": r["approved_at"],
-                "approved_by": r["approved_by"],
-                "confidence": r["confidence"],
-            }
-            for r in sorted(s1g, key=lambda r: r["match_id"])
-        ],
-    }
-    return sha256_text(_canon_json(doc))
-
-
-def stage1_audit_digest(s1t, mode, stage1_manifest_sha, basis_sha,
-                        artifact_identity, artifact_sha):
-    """Deterministic digest of the exact expected stage-1 repair audit rows,
-    EXCLUDING the runtime timestamps (superseded_at/action_at = now() at
-    execution time; their equality is revalidated against live state by the
-    stage-2 artifact's P0c)."""
-    rows = []
-    for r in sorted(s1t, key=lambda r: r["match_id"]):
-        previous_state = {
-            "approved_at": r["approved_at"] or None,
-            "approved_by": r["approved_by"] or None,
-            "confidence": float(r["confidence"]),
-            "matched_by": r["matched_by"],
-            "flagged_level": r["flagged_level"],
-            "superseded_at": None,
-            "superseded_by_match_id": None,
-            "supersede_reason": None,
-            "supersede_operation_id": None,
-        }
-        resulting_state = dict(previous_state)
-        resulting_state["superseded_by_match_id"] = (
-            r["intended_survivor_match_id"] or None)
-        resulting_state["supersede_reason"] = r["reason"]
-        resulting_state["supersede_operation_id"] = STAGE1_OPERATION_ID
-        evidence = {
-            "stage": "1",
-            "class": r["class"],
-            "reason": r["reason"],
-            "old_match_id": r["match_id"],
-            "survivor_match_id": r["intended_survivor_match_id"] or None,
-            "previous_approved_at": r["approved_at"] or None,
-            "previous_approved_by": r["approved_by"] or None,
-            "previous_confidence": float(r["confidence"]),
-            "stage1_manifest_sha256": stage1_manifest_sha,
-            "stage2_basis_sha256": basis_sha,
-            "environment_mode": mode,
-            "artifact_identity": artifact_identity,
-            "artifact_sha256": artifact_sha,
-        }
-        rows.append({
-            "match_id": r["match_id"],
-            "action": AUDIT_ACTION,
-            "action_by": STAGE1_ACTOR,
-            "operation_id": STAGE1_OPERATION_ID,
-            "old_confidence": float(r["confidence"]),
-            "new_confidence": float(r["confidence"]),
-            "client_entity_id": r["client_entity_id"],
-            "user_id": r["user_id"],
-            "previous_state": previous_state,
-            "resulting_state": resulting_state,
-            "evidence": evidence,
-        })
-    return sha256_text(_canon_json({
-        "operation_id": STAGE1_OPERATION_ID,
-        "action": AUDIT_ACTION,
-        "actor": STAGE1_ACTOR,
-        "rows": rows,
-    }))
+def stage1_survivor_mapping_digest(s1t):
+    """sha256 over 'match_id:survivor_id' pairs (empty for no survivor),
+    comma-joined in match_id order (identical to the SQL-side string_agg)."""
+    return sha256_text(",".join(
+        f"{r['match_id']}:{r['intended_survivor_match_id'] or ''}"
+        for r in sorted(s1t, key=lambda r: r["match_id"])
+    ))
 
 
 def expected_stage1_sql(mode, pkg, project_ref=None):
     """Deterministic stage-1 regeneration from the committed package files."""
+    package_sha = execution_package_sha256()
     identity = artifact_identity_stage1(
-        mode, pkg["stage1_manifest_sha"], pkg["basis_sha"], project_ref
+        mode, pkg["stage1_manifest_sha"], pkg["basis_sha"], package_sha,
+        project_ref,
     )
     return stage1_sql(
         pkg["s1t"], pkg["s1g"], pkg["s2c"], pkg["dup_after_s1"],
         pkg["stage1_manifest_sha"], pkg["basis_sha"], mode, project_ref,
-        identity,
+        identity, package_sha,
     )
 
 
-def build_stage1_proof(artifact, mode, database, executed_at, result,
-                       execution_log, git_sha, out_path):
-    """Generate the stage-1 execution proof (schema v2). Only bindable,
-    deterministic values are computed here; execution facts (executed_at,
-    result, database, log) are recorded by the caller (the execution
-    driver) and documented as driver-attested."""
-    artifact_path = Path(artifact)
-    if mode not in MODES:
-        raise SystemExit(f"stage1-proof requires a valid --environment-mode, got {mode!r}")
-    if result not in ("APPLIED", "NOOP"):
-        raise SystemExit(f"stage1-proof requires --result APPLIED|NOOP, got {result!r}")
+def load_stage1_receipt(path, mode, stage1_artifact_path):
+    """Independently revalidate every DERIVABLE field of a stage-1 receipt
+    export against the committed manifests and the supplied frozen stage-1
+    artifact. The receipt's canonical hash (receipt_sha256) and its
+    audit/postcondition digests are DATABASE-SIDE authorities computed
+    inside the stage-1 transaction over live state; the builder checks their
+    format only and never recomputes them (PG-specific rendering).
+
+    A caller-fabricated export therefore only satisfies this check if its
+    derivable fields genuinely match the committed package — and even then
+    it is OPERATOR EVIDENCE ONLY, never the authorization root: stage-2
+    execution validates the ACTUAL database-side receipt row and
+    independently recomputes the exact stage-1 state before any stage-2
+    work (Codex finding 1)."""
+    receipt_path = Path(path)
     try:
-        parsed_executed_at = parse_iso_ts(executed_at)
-    except (SystemExit, ValueError):
-        raise SystemExit("stage1-proof requires a valid --executed-at ISO-8601 timestamp")
+        receipt = json.load(open(receipt_path, encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        raise SystemExit(f"stage-1 receipt export unreadable: {e}")
 
     pkg = load_committed_package()
     project_ref = PROD_PROJECT_REF if mode == "PRODUCTION" else None
-    expected = expected_stage1_sql(mode, pkg, project_ref)
-    content = artifact_path.read_text(encoding="utf-8")
-    if content != expected:
-        raise SystemExit(
-            "stage-1 artifact is not byte-identical to the package's "
-            "deterministic stage-1 build from the committed manifests — "
-            "refusing to attest a foreign artifact"
+    expected_db = PROD_DB if mode == "PRODUCTION" else REHEARSAL_DB
+
+    def reject(msg):
+        raise SystemExit(f"stage-1 receipt export rejected: {msg}")
+
+    if not isinstance(receipt, dict):
+        reject("receipt must be a JSON object")
+    for key in ("receipt_sha256", "execution_package_sha256",
+                "artifact_sha256", "operation_id", "environment_mode",
+                "target_manifest_sha256", "target_digest_sha256",
+                "survivor_mapping_digest_sha256", "audit_digest_sha256",
+                "postcondition_digest_sha256", "executed_at", "db_identity"):
+        if key not in receipt:
+            reject(f"missing field '{key}' — caller-created stage-1 proof "
+                   f"JSON is not accepted; only a database receipt export")
+    if not _is_hex64(receipt.get("receipt_sha256")):
+        reject("receipt_sha256 is not a 64-hex sha256")
+    if receipt.get("execution_package_sha256") != execution_package_sha256():
+        reject(
+            "execution_package_sha256 does not match the checked-out "
+            "package's stable EXECUTION_PACKAGE_SHA256 — the receipt was "
+            "produced by a different package state"
         )
-    artifact_sha = sha256_file(artifact_path)
-    identity = artifact_identity_stage1(
-        mode, pkg["stage1_manifest_sha"], pkg["basis_sha"], project_ref
-    )
-    if not git_sha:
-        git_sha = _git_head_sha()
-
-    log_sha = ""
-    log_file = ""
-    if execution_log:
-        log_file = Path(execution_log).name
-        log_sha = sha256_file(execution_log)
-
-    doc = {
-        "package": "repair-013-pre",
-        "proof_schema_version": 2,
-        "stage": 1,
-        "environment_mode": mode,
-        "artifact_file": artifact_path.name,
-        "artifact_sha256": artifact_sha,
-        "artifact_identity": identity,
-        "stage1_operation_id": STAGE1_OPERATION_ID,
-        "stage1_manifest_sha256": pkg["stage1_manifest_sha"],
-        "stage2_basis_sha256": pkg["basis_sha"],
-        "package_git_sha": git_sha,
-        "database": database,
-        "executed_at": executed_at,
-        "result": result,
-        "target_count": EXPECTED["stage1_targets"],
-        "target_ids": stage1_target_ids(pkg["s1t"]),
-        "survivor_mappings": stage1_survivor_mappings(pkg["s1t"]),
-        "postcondition_digest_sha256": stage1_postcondition_digest(
-            pkg["s1t"], pkg["s1g"]),
-        "audit_digest_sha256": stage1_audit_digest(
-            pkg["s1t"], mode, pkg["stage1_manifest_sha"], pkg["basis_sha"],
-            identity, artifact_sha),
-        "execution_log_file": log_file,
-        "execution_log_sha256": log_sha,
-    }
-    if Path(out_path).exists():
-        raise SystemExit(f"refusing to overwrite existing proof {out_path}")
-    write_json(Path(out_path), doc)
-    print(f"wrote stage-1 execution proof {out_path} "
-          f"(sha256={sha256_file(Path(out_path))[:16]}…, "
-          f"artifact {artifact_sha[:12]}…, {len(doc['target_ids'])} targets, "
-          f"result {result})")
-
-
-def load_stage1_proof(path, mode, stage1_artifact_path,
-                      execution_log_path=None):
-    """Independently revalidate EVERY derivable field of a stage-1 execution
-    proof (schema v2) against the committed manifests and the supplied
-    frozen artifact. Arbitrary caller-created JSON is not accepted merely
-    because fields are present."""
-    proof_path = Path(path)
-    try:
-        proof = json.load(open(proof_path, encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as e:
-        raise SystemExit(f"stage-1 execution proof unreadable: {e}")
-    if proof.get("proof_schema_version") != 2:
-        raise SystemExit(
-            "unsupported stage-1 execution proof schema version "
-            "(v1 caller-created JSON proofs are no longer accepted — "
-            "regenerate with the stage1-proof subcommand)"
-        )
-    if proof.get("stage") != 1:
-        raise SystemExit("stage-2 build requires a STAGE-1 execution proof")
-    if proof.get("environment_mode") != mode:
-        raise SystemExit(
-            f"stage-1 execution proof mode {proof.get('environment_mode')!r} "
+    if receipt.get("operation_id") != STAGE1_OPERATION_ID:
+        reject("receipt records a different stage-1 operation id")
+    if receipt.get("environment_mode") != mode:
+        reject(
+            f"receipt environment_mode {receipt.get('environment_mode')!r} "
             f"does not match the requested mode {mode!r}"
         )
-    if proof.get("result") not in ("APPLIED", "NOOP"):
-        raise SystemExit("stage-1 execution proof records no completed run")
-
-    pkg = load_committed_package()
-    project_ref = PROD_PROJECT_REF if mode == "PRODUCTION" else None
-    identity = artifact_identity_stage1(
-        mode, pkg["stage1_manifest_sha"], pkg["basis_sha"], project_ref
-    )
-    if proof.get("artifact_identity") != identity:
-        raise SystemExit(
-            "stage-1 execution proof artifact_identity does not match the "
-            "recomputed identity of the committed manifests"
+    if (receipt.get("project_ref") or None) != project_ref:
+        reject(
+            f"receipt project_ref does not match the {mode} project "
+            f"identity {project_ref!r}"
         )
-    if proof.get("stage1_manifest_sha256") != pkg["stage1_manifest_sha"]:
-        raise SystemExit("proof binds a different stage-1 manifest than the committed one")
-    if proof.get("stage2_basis_sha256") != pkg["basis_sha"]:
-        raise SystemExit("proof binds a different stage-2 basis than the committed one")
-    if proof.get("stage1_operation_id") != STAGE1_OPERATION_ID:
-        raise SystemExit("proof records a different stage-1 operation id")
+    if receipt.get("target_manifest_sha256") != pkg["stage1_manifest_sha"]:
+        reject("receipt binds a different stage-1 manifest than the committed one")
+    if receipt.get("db_identity") != expected_db:
+        reject(
+            f"receipt db_identity {receipt.get('db_identity')!r} is not "
+            f"the {mode} database identity {expected_db!r}"
+        )
 
     # The frozen artifact must hash to the recorded sha AND be byte-identical
-    # to the deterministic regeneration — a proof cannot be minted for a
-    # foreign or edited artifact.
+    # to the deterministic regeneration — a receipt cannot attest a foreign
+    # or edited artifact.
     artifact_sha = sha256_file(stage1_artifact_path)
-    if proof.get("artifact_sha256") != artifact_sha:
-        raise SystemExit(
-            "stage-1 execution proof artifact_sha256 does not match the "
-            "supplied --stage1-artifact file — the proof was produced by a "
-            "different artifact"
+    if receipt.get("artifact_sha256") != artifact_sha:
+        reject(
+            "receipt artifact_sha256 does not match the supplied "
+            "--stage1-artifact file — the receipt attests a different "
+            "artifact"
         )
     content = Path(stage1_artifact_path).read_text(encoding="utf-8")
     if content != expected_stage1_sql(mode, pkg, project_ref):
-        raise SystemExit(
+        reject(
             "supplied stage-1 artifact is not byte-identical to the "
             "package's deterministic stage-1 build"
         )
 
-    # Exact target ids and survivor mappings — recomputed, never trusted.
-    if proof.get("target_count") != EXPECTED["stage1_targets"]:
-        raise SystemExit("proof target_count does not match the committed stage-1 manifest")
-    expected_ids = stage1_target_ids(pkg["s1t"])
-    if proof.get("target_ids") != expected_ids:
-        raise SystemExit(
-            "proof target_ids are not the exact committed 154 stage-1 "
-            "targets (tampered or re-sequenced proof rejected)"
+    # Derivable digests — recomputed from the committed manifest, never
+    # trusted from the export.
+    if receipt.get("target_digest_sha256") != stage1_target_digest(pkg["s1t"]):
+        reject(
+            "receipt target_digest_sha256 does not match the digest of the "
+            "exact committed 154 stage-1 targets"
         )
-    expected_survivors = stage1_survivor_mappings(pkg["s1t"])
-    if proof.get("survivor_mappings") != expected_survivors:
-        raise SystemExit(
-            "proof survivor_mappings do not match the exact committed "
-            "stage-1 survivor assignments"
+    if receipt.get("survivor_mapping_digest_sha256") != stage1_survivor_mapping_digest(
+            pkg["s1t"]):
+        reject(
+            "receipt survivor_mapping_digest_sha256 does not match the "
+            "digest of the exact committed stage-1 survivor assignments"
         )
-    if proof.get("postcondition_digest_sha256") != stage1_postcondition_digest(
-            pkg["s1t"], pkg["s1g"]):
-        raise SystemExit("proof postcondition digest does not match the recomputed stage-1 postcondition")
-    if proof.get("audit_digest_sha256") != stage1_audit_digest(
-            pkg["s1t"], mode, pkg["stage1_manifest_sha"], pkg["basis_sha"],
-            identity, artifact_sha):
-        raise SystemExit("proof audit digest does not match the recomputed stage-1 audit expectation")
-
-    if proof.get("package_git_sha") != _git_head_sha():
-        raise SystemExit(
-            f"proof package_git_sha {proof.get('package_git_sha')!r} does "
-            f"not match the checked-out package HEAD {_git_head_sha()!r} — "
-            f"the proof was produced from a different package commit"
-        )
-
-    try:
-        executed_at = parse_iso_ts(proof.get("executed_at"))
-    except (SystemExit, ValueError):
-        raise SystemExit("stage-1 execution proof has no valid executed_at")
-
-    if execution_log_path:
-        if sha256_file(execution_log_path) != proof.get("execution_log_sha256"):
-            raise SystemExit(
-                "proof execution_log_sha256 does not match the supplied "
-                "execution log"
+    for key in ("audit_digest_sha256", "postcondition_digest_sha256"):
+        if not _is_hex64(receipt.get(key)):
+            reject(
+                f"{key} is not a 64-hex sha256 (database-side digest — "
+                f"validated by the stage-2 artifact against live state, "
+                f"never recomputed here)"
             )
 
+    try:
+        executed_at = parse_iso_ts(receipt.get("executed_at"))
+    except (SystemExit, ValueError):
+        reject("receipt has no valid executed_at")
+
     return {
-        "record": proof,
+        "record": receipt,
         "executed_at": executed_at,
-        "executed_at_iso": str(proof.get("executed_at")),
+        "executed_at_iso": str(receipt.get("executed_at")),
         "artifact_sha256": artifact_sha,
-        "postcondition_digest_sha256": proof.get("postcondition_digest_sha256"),
-        "audit_digest_sha256": proof.get("audit_digest_sha256"),
+        "receipt_sha256": receipt.get("receipt_sha256"),
+        "target_digest_sha256": receipt.get("target_digest_sha256"),
+        "survivor_mapping_digest_sha256": receipt.get("survivor_mapping_digest_sha256"),
+        "audit_digest_sha256": receipt.get("audit_digest_sha256"),
+        "postcondition_digest_sha256": receipt.get("postcondition_digest_sha256"),
     }
 
 
@@ -1579,7 +1494,7 @@ def _artifact_sha_sql(literal=None):
 
 
 def _evidence_s1_sql(stage1_manifest_sha, basis_sha, mode, artifact_identity,
-                     artifact_sha_literal=None):
+                     execution_package_sha, artifact_sha_literal=None):
     return (
         "jsonb_build_object(\n"
         "       'stage', '1',\n"
@@ -1592,6 +1507,7 @@ def _evidence_s1_sql(stage1_manifest_sha, basis_sha, mode, artifact_identity,
         "       'previous_confidence', t.confidence,\n"
         f"       'stage1_manifest_sha256', '{stage1_manifest_sha}',\n"
         f"       'stage2_basis_sha256', '{basis_sha}',\n"
+        f"       'execution_package_sha256', '{execution_package_sha}',\n"
         f"       'environment_mode', '{mode}',\n"
         f"       'artifact_identity', '{artifact_identity}',\n"
         f"       'artifact_sha256', {_artifact_sha_sql(artifact_sha_literal)})"
@@ -1599,7 +1515,8 @@ def _evidence_s1_sql(stage1_manifest_sha, basis_sha, mode, artifact_identity,
 
 
 def _evidence_s2_sql(auth_manifest_sha, basis_sha, stage1_artifact_sha,
-                     proof_sha, mode, artifact_identity):
+                     receipt_sha, execution_package_sha, mode,
+                     artifact_identity):
     return (
         "jsonb_build_object(\n"
         "       'stage', '2',\n"
@@ -1616,9 +1533,10 @@ def _evidence_s2_sql(auth_manifest_sha, basis_sha, stage1_artifact_sha,
         "       'authorization_status', t.authorization_status,\n"
         "       'accountant_note', t.accountant_note,\n"
         f"       'stage1_artifact_sha256', '{stage1_artifact_sha}',\n"
-        f"       'stage1_execution_proof_sha256', '{proof_sha}',\n"
+        f"       'stage1_receipt_sha256', '{receipt_sha}',\n"
         f"       'stage2_basis_sha256', '{basis_sha}',\n"
         f"       'authorization_manifest_sha256', '{auth_manifest_sha}',\n"
+        f"       'execution_package_sha256', '{execution_package_sha}',\n"
         f"       'environment_mode', '{mode}',\n"
         f"       'artifact_identity', '{artifact_identity}',\n"
         f"       'artifact_sha256', {_artifact_sha_sql()})"
@@ -1734,6 +1652,117 @@ END;
 $artifact_sha_gate$;"""
 
 
+def _package_sha_gate_sql(package_sha):
+    """The exact EXECUTION_PACKAGE_SHA256 must be supplied by the execution
+    driver (PGOPTIONS GUC) and must equal the literal embedded in the
+    artifact. The value is known at build time (the package file list
+    excludes generated artifacts), so the literal is authoritative and the
+    driver GUC proves the operator is running this exact package state —
+    independent of any later evidence-only commits (Codex finding 3)."""
+    return f"""-- ===========================================================================
+-- P0b2. Execution-package sha gate (driver-supplied, embedded-literal match)
+-- ===========================================================================
+-- The execution driver passes EXECUTION_PACKAGE_SHA256 via PGOPTIONS. The
+-- artifact embeds the same value as a literal (the package identity is
+-- content-based over the documented package file list — see
+-- EXECUTION_PACKAGE.md — so it is known at build time and stable across
+-- evidence-only commits). A missing or different value aborts BEFORE any
+-- lock or write.
+DO $package_sha_gate$
+DECLARE
+  v_sha text := current_setting('{REPAIR_PACKAGE_SHA_GUC}', true);
+BEGIN
+  IF v_sha IS DISTINCT FROM '{package_sha}' THEN
+    RAISE EXCEPTION 'STOP: {REPAIR_PACKAGE_SHA_GUC} must be % (got %) — the execution driver must pass the EXECUTION_PACKAGE_SHA256 of the checked-out package', '{package_sha}', COALESCE(v_sha, '<unset>');
+  END IF;
+END;
+$package_sha_gate$;"""
+
+
+# ---------------------------------------------------------------------------
+# Stage-1 execution receipt SQL (database-side authorization root).
+# Digests computed inside the stage-1 transaction over LIVE state:
+#   target/survivor digests — over the manifest temp table (also derivable
+#     offline from the committed manifest; the builder revalidates them);
+#   audit digest — over the exact 154 inserted repair audit rows;
+#   postcondition digest — over the live superseded target + survivor-guard
+#     rows (runtime superseded_at included).
+# Stage 2 recomputes the SAME expressions from live state and requires
+# byte-exact equality with the receipt's recorded values. The canonical
+# receipt hash is sha256 over the full receipt JSON (minus receipt_sha256);
+# jsonb normalizes key order, so the stage-1 build_object rendering and the
+# stage-2 (to_jsonb(row) - 'receipt_sha256') rendering are byte-identical.
+# ---------------------------------------------------------------------------
+def _receipt_target_digest_expr(manifest_table):
+    return (
+        "encode(extensions.digest(convert_to("
+        f"(SELECT string_agg(match_id::text, ',' ORDER BY match_id) "
+        f"FROM {manifest_table} WHERE role = 'target'), "
+        "'UTF8'), 'sha256'), 'hex')"
+    )
+
+
+def _receipt_survivor_digest_expr(manifest_table):
+    return (
+        "encode(extensions.digest(convert_to("
+        f"(SELECT string_agg(match_id::text || ':' || "
+        f"COALESCE(NULLIF(survivor_id::text, ''), ''), ',' ORDER BY match_id) "
+        f"FROM {manifest_table} WHERE role = 'target'), "
+        "'UTF8'), 'sha256'), 'hex')"
+    )
+
+
+def _receipt_audit_digest_expr():
+    return (
+        "encode(extensions.digest(convert_to("
+        "coalesce((SELECT jsonb_agg(to_jsonb(a) "
+        "ORDER BY a.reconciliation_match_id)::text "
+        "FROM public.reconciliation_audit_log a "
+        f"WHERE a.action = '{AUDIT_ACTION}' "
+        f"AND a.operation_id = '{STAGE1_OPERATION_ID}'), '[]'), "
+        "'UTF8'), 'sha256'), 'hex')"
+    )
+
+
+def _receipt_postcondition_digest_expr(manifest_table):
+    return (
+        "encode(extensions.digest(convert_to("
+        "coalesce((SELECT jsonb_agg(jsonb_build_object("
+        "'role', t.role, 'match_id', m.id, "
+        "'superseded_at', m.superseded_at, "
+        "'superseded_by_match_id', m.superseded_by_match_id, "
+        "'supersede_reason', m.supersede_reason, "
+        "'supersede_operation_id', m.supersede_operation_id, "
+        "'approved_at', m.approved_at, 'approved_by', m.approved_by, "
+        "'confidence', m.confidence) ORDER BY t.role, m.id)::text "
+        f"FROM {manifest_table} t "
+        "JOIN public.reconciliation_matches m ON m.id = t.match_id), '[]'), "
+        "'UTF8'), 'sha256'), 'hex')"
+    )
+
+
+def _receipt_canonical_obj_sql(package_sha, mode, project_ref,
+                               target_manifest_sha,
+                               artifact_sha_literal=None):
+    """Canonical receipt body (its sha256 is receipt_sha256)."""
+    ref_sql = sql_lit(project_ref)
+    return (
+        "jsonb_build_object(\n"
+        f"  'execution_package_sha256', '{package_sha}',\n"
+        f"  'artifact_sha256', {_artifact_sha_sql(artifact_sha_literal)},\n"
+        f"  'operation_id', '{STAGE1_OPERATION_ID}',\n"
+        f"  'environment_mode', '{mode}',\n"
+        f"  'project_ref', {ref_sql},\n"
+        f"  'target_manifest_sha256', '{target_manifest_sha}',\n"
+        "  'target_digest_sha256', v_target_digest,\n"
+        "  'survivor_mapping_digest_sha256', v_survivor_digest,\n"
+        "  'audit_digest_sha256', v_audit_digest,\n"
+        "  'postcondition_digest_sha256', v_post_digest,\n"
+        "  'executed_at', now(),\n"
+        "  'db_identity', current_database())"
+    )
+
+
 def _locks_sql():
     return """-- ===========================================================================
 -- P0c. Writer exclusion: database-side execution locks
@@ -1756,12 +1785,15 @@ def _client_entities_drift_cond(table_alias="t"):
 
 
 def stage1_sql(s1t, s1g, s2c, dup_after_s1, stage1_manifest_sha, basis_sha,
-               mode, project_ref, artifact_identity):
+               mode, project_ref, artifact_identity, execution_package_sha):
     previous_state = _previous_state_sql()
     resulting_state = _resulting_state_sql(STAGE1_OPERATION_ID)
     evidence = _evidence_s1_sql(stage1_manifest_sha, basis_sha, mode,
-                                artifact_identity)
+                                artifact_identity, execution_package_sha)
     ev_match = _evidence_match_s1(previous_state, resulting_state, evidence)
+    receipt_canonical = _receipt_canonical_obj_sql(
+        execution_package_sha, mode, project_ref, stage1_manifest_sha)
+    project_ref_sql = sql_lit(project_ref)
     project_line = (
         f"-- Project:    {project_ref} (bound by the P0.0 identity gate)"
         if project_ref
@@ -1781,10 +1813,17 @@ def stage1_sql(s1t, s1g, s2c, dup_after_s1, stage1_manifest_sha, basis_sha,
 --                  (stage 1 identity-checks all 102 approved candidate rows
 --                   of the committed basis that protect the affected
 --                   endpoints, in addition to the 101 survivor guards)
+-- Execution package: SHA-256 {execution_package_sha}
+--                  (EXECUTION_PACKAGE_SHA256 — the stable content-based
+--                   identity of the production-relevant package files, per
+--                   EXECUTION_PACKAGE.md; embedded as a literal AND
+--                   required from the execution driver via the
+--                   {REPAIR_PACKAGE_SHA_GUC} GUC, so the binding is
+--                   independent of any later evidence-only git commit)
 -- Artifact identity: {artifact_identity}
 --                  (sha256 of operation id | mode | stage-1 manifest |
---                   stage-2 basis | project ref; recomputed by
---                   bin/build_repair_package.py verify)
+--                   stage-2 basis | execution package | project ref;
+--                   recomputed by bin/build_repair_package.py verify)
 -- Snapshot:        production fqvekbzwghjurkcawpgg, captured 2026-08-16
 --                  (docs/RECONCILIATION_HISTORICAL_REPAIR_DESIGN_REPORT.md §2)
 -- Operation:       {STAGE1_OPERATION_ID}  (fixed per package release —
@@ -1813,6 +1852,17 @@ def stage1_sql(s1t, s1g, s2c, dup_after_s1, stage1_manifest_sha, basis_sha,
 --        the execution driver (PGOPTIONS GUC) and recorded verbatim into
 --        the immutable audit evidence.
 --
+-- Execution-package gate (P0b2): the EXECUTION_PACKAGE_SHA256 GUC must
+--        equal the literal embedded above (stable across evidence commits).
+--
+-- Execution receipt (P1b): the stage-1 apply writes an immutable
+--        database-side execution receipt (public.repair_stage1_receipt)
+--        INSIDE THE SAME TRANSACTION as the 154 supersessions and audit
+--        rows, with database-derived time/state digests. Stage 2 validates
+--        that receipt row and recomputes the exact stage-1 state before
+--        any stage-2 work — a caller-fabricated stage-1 "proof" JSON is
+--        operator evidence only and is NEVER the authorization root.
+--
 -- Semantic idempotency (P0e): re-running after success proves every target
 --        already carries THIS operation id with correct reason/survivor and
 --        a byte-exact audit row (action, actor, action_at, previous_state,
@@ -1833,6 +1883,8 @@ SET LOCAL TIME ZONE 'UTC';  -- deterministic timestamptz rendering in the
 {_timeouts_sql()}
 
 {_artifact_sha_gate_sql()}
+
+{_package_sha_gate_sql(execution_package_sha)}
 
 -- Serialize repair attempts. Both stages share this key, so stage 1 and
 -- stage 2 also serialize against each other.
@@ -2227,13 +2279,110 @@ END;
 $apply$;
 
 -- ===========================================================================
+-- P1b. Stage-1 execution receipt (database-side checkpoint — the
+--      authorization root for stage 2). Written INSIDE THE SAME
+--      TRANSACTION as the supersessions and audit rows above: a committed
+--      stage-1 result always carries its receipt, and no receipt can exist
+--      without the exact stage-1 state. Digests are computed here from
+--      LIVE database state with database time (executed_at = now(), the
+--      same value as the audit rows' action_at). The receipt row is
+--      UPDATE/DELETE-immutable (prep trigger) and unique per operation id.
+-- ===========================================================================
+DO $receipt$
+DECLARE
+  v_target_digest   text;
+  v_survivor_digest text;
+  v_audit_digest    text;
+  v_post_digest     text;
+  v_sha             text;
+BEGIN
+  IF current_setting('zaki.repair_mode') <> 'apply' THEN
+    RAISE NOTICE 'STAGE 1: dispatch mode is noop — the existing receipt is validated in the postconditions';
+    RETURN;
+  END IF;
+
+  SELECT {_receipt_target_digest_expr('zaki_manifest')} INTO v_target_digest;
+  SELECT {_receipt_survivor_digest_expr('zaki_manifest')} INTO v_survivor_digest;
+  SELECT {_receipt_audit_digest_expr()} INTO v_audit_digest;
+  SELECT {_receipt_postcondition_digest_expr('zaki_manifest')} INTO v_post_digest;
+
+  SELECT encode(extensions.digest(convert_to(
+    {receipt_canonical}::text, 'UTF8'), 'sha256'), 'hex') INTO v_sha;
+
+  INSERT INTO public.repair_stage1_receipt
+    (receipt_sha256, execution_package_sha256, artifact_sha256, operation_id,
+     environment_mode, project_ref, target_manifest_sha256,
+     target_digest_sha256, survivor_mapping_digest_sha256,
+     audit_digest_sha256, postcondition_digest_sha256, executed_at,
+     db_identity)
+  VALUES
+    (v_sha, '{execution_package_sha}',
+     current_setting('{REPAIR_ARTIFACT_SHA_GUC}', true),
+     '{STAGE1_OPERATION_ID}', '{mode}', {project_ref_sql},
+     '{stage1_manifest_sha}',
+     v_target_digest, v_survivor_digest, v_audit_digest, v_post_digest,
+     now(), current_database());
+  RAISE NOTICE 'STAGE 1: wrote execution receipt %', v_sha;
+END;
+$receipt$;
+
+-- ===========================================================================
 -- P2. Exact postconditions (set identity, not just counts)
 -- ===========================================================================
 DO $post$
 DECLARE
   v int;
   v_mode text := current_setting('zaki.repair_mode');
+  v_rec public.repair_stage1_receipt%ROWTYPE;
 BEGIN
+  -- 0. STAGE-1 EXECUTION RECEIPT (both modes): exactly one immutable
+  --    database-side receipt row must exist for this operation and carry
+  --    the exact package/artifact/mode/manifest bindings and the
+  --    database-derived digests of the state this artifact produced
+  --    (apply mode: just written by P1b; noop mode: written by the
+  --    original apply). The canonical hash must recompute from the stored
+  --    row — the receipt row itself is the authorization root, never a
+  --    caller-supplied JSON.
+  IF (SELECT count(*) FROM public.repair_stage1_receipt) <> 1 THEN
+    RAISE EXCEPTION 'FAIL: expected exactly one stage-1 execution receipt, found % — stage-1 state without its receipt was not produced by this package',
+      (SELECT count(*) FROM public.repair_stage1_receipt);
+  END IF;
+  SELECT * INTO v_rec FROM public.repair_stage1_receipt;
+  IF v_rec.operation_id IS DISTINCT FROM '{STAGE1_OPERATION_ID}'::uuid THEN
+    RAISE EXCEPTION 'FAIL: stage-1 receipt records a different operation id';
+  END IF;
+  IF v_rec.environment_mode IS DISTINCT FROM '{mode}' THEN
+    RAISE EXCEPTION 'FAIL: stage-1 receipt records a different environment mode';
+  END IF;
+  IF v_rec.project_ref IS DISTINCT FROM {project_ref_sql} THEN
+    RAISE EXCEPTION 'FAIL: stage-1 receipt records a different project identity';
+  END IF;
+  IF v_rec.execution_package_sha256 IS DISTINCT FROM '{execution_package_sha}' THEN
+    RAISE EXCEPTION 'FAIL: stage-1 receipt binds a different execution package';
+  END IF;
+  IF v_rec.artifact_sha256 IS DISTINCT FROM current_setting('{REPAIR_ARTIFACT_SHA_GUC}', true) THEN
+    RAISE EXCEPTION 'FAIL: stage-1 receipt records a different stage-1 artifact sha than this artifact';
+  END IF;
+  IF v_rec.target_manifest_sha256 IS DISTINCT FROM '{stage1_manifest_sha}' THEN
+    RAISE EXCEPTION 'FAIL: stage-1 receipt binds a different stage-1 manifest';
+  END IF;
+  IF v_rec.target_digest_sha256 IS DISTINCT FROM ({_receipt_target_digest_expr('zaki_manifest')}) THEN
+    RAISE EXCEPTION 'FAIL: stage-1 receipt target digest does not match the committed stage-1 manifest';
+  END IF;
+  IF v_rec.survivor_mapping_digest_sha256 IS DISTINCT FROM ({_receipt_survivor_digest_expr('zaki_manifest')}) THEN
+    RAISE EXCEPTION 'FAIL: stage-1 receipt survivor-mapping digest does not match the committed stage-1 manifest';
+  END IF;
+  IF v_rec.audit_digest_sha256 IS DISTINCT FROM ({_receipt_audit_digest_expr()}) THEN
+    RAISE EXCEPTION 'FAIL: stage-1 receipt audit digest does not match the live stage-1 audit rows';
+  END IF;
+  IF v_rec.postcondition_digest_sha256 IS DISTINCT FROM ({_receipt_postcondition_digest_expr('zaki_manifest')}) THEN
+    RAISE EXCEPTION 'FAIL: stage-1 receipt postcondition digest does not match the live stage-1 state';
+  END IF;
+  IF encode(extensions.digest(convert_to((to_jsonb(v_rec) - 'receipt_sha256')::text, 'UTF8'), 'sha256'), 'hex')
+     IS DISTINCT FROM v_rec.receipt_sha256 THEN
+    RAISE EXCEPTION 'FAIL: stage-1 receipt canonical hash does not recompute from the stored row (tampered receipt)';
+  END IF;
+
   -- 1. Every stage-1 target is superseded (both modes). The superseded set
   --    being EXACTLY the 154 targets holds only in apply mode: after stage 2
   --    has legitimately superseded its own rows, a stage-1 rerun verifies
@@ -2403,8 +2552,9 @@ COMMIT;
 
 
 def stage2_sql(s2c_rows, s2g_rows, s1t, s1g, dup_after_s1, auth_manifest_sha,
-               basis_sha, stage1_artifact_sha, proof_sha, mode, project_ref,
-               artifact_identity, n_exec, stage1_manifest_sha=""):
+               basis_sha, stage1_artifact_sha, receipt_sha,
+               execution_package_sha, mode, project_ref, artifact_identity,
+               n_exec, stage1_manifest_sha=""):
     """Emit stage-2 SQL from the COMMITTED basis joined with the validated
     authorization manifest decisions.
 
@@ -2450,7 +2600,8 @@ def stage2_sql(s2c_rows, s2g_rows, s1t, s1g, dup_after_s1, auth_manifest_sha,
     previous_state = _previous_state_sql()
     resulting_state = _resulting_state_sql(STAGE2_OPERATION_ID)
     evidence = _evidence_s2_sql(auth_manifest_sha, basis_sha,
-                                stage1_artifact_sha, proof_sha, mode,
+                                stage1_artifact_sha, receipt_sha,
+                                execution_package_sha, mode,
                                 artifact_identity)
     ev_match = _evidence_match_s2(previous_state, resulting_state, evidence)
 
@@ -2460,17 +2611,19 @@ def stage2_sql(s2c_rows, s2g_rows, s1t, s1g, dup_after_s1, auth_manifest_sha,
     # exact stage-1 artifact it sequences on, so a stage-1 audit row whose
     # evidence does not record that exact artifact sha aborts stage 2.
     stage1_identity = artifact_identity_stage1(
-        mode, stage1_manifest_sha, basis_sha, project_ref
+        mode, stage1_manifest_sha, basis_sha, execution_package_sha,
+        project_ref,
     )
     s1_previous_state = _previous_state_sql()
     s1_resulting_state = _resulting_state_sql(STAGE1_OPERATION_ID)
     s1_evidence_reval = _evidence_s1_sql(
         stage1_manifest_sha, basis_sha, mode, stage1_identity,
-        artifact_sha_literal=stage1_artifact_sha,
+        execution_package_sha, artifact_sha_literal=stage1_artifact_sha,
     )
     s1_ev_match = _evidence_match_s1(
         s1_previous_state, s1_resulting_state, s1_evidence_reval
     )
+    project_ref_sql = sql_lit(project_ref)
     project_line = (
         f"-- Project:    {project_ref} (bound by the P0.0 identity gate)"
         if project_ref
@@ -2497,15 +2650,24 @@ def stage2_sql(s2c_rows, s2g_rows, s1t, s1g, dup_after_s1, auth_manifest_sha,
 -- Stage-1 manifest: manifests/stage1-unapproved-targets.csv
 --                   SHA-256 {stage1_manifest_sha}
 -- Stage-1 artifact: SHA-256 {stage1_artifact_sha}  (the exact stage-1 file
---                   the operator executed; its execution proof is
---                   SHA-256 {proof_sha})
+--                   the operator executed)
+-- Stage-1 execution receipt (database-side authorization root): canonical
+--                   SHA-256 {receipt_sha}  — written by stage 1 INSIDE ITS
+--                   OWN TRANSACTION; this artifact validates the ACTUAL
+--                   receipt row and independently recomputes the exact
+--                   stage-1 state before any stage-2 work (P0e/checkpoint).
+-- Execution package: SHA-256 {execution_package_sha}
+--                   (EXECUTION_PACKAGE_SHA256 — embedded literal AND
+--                   required from the driver via {REPAIR_PACKAGE_SHA_GUC};
+--                   stable across evidence-only commits)
 -- Artifact identity: {artifact_identity}
 --                  (sha256 of operation ids | mode | stage-1 manifest |
 --                   stage-2 basis | authorization manifest | stage-1
---                   artifact | stage-1 proof | project ref)
+--                   artifact | stage-1 receipt | execution package |
+--                   project ref)
 -- Stage-1 prerequisite: the stage-1 artifact above must have run with
---             operation {STAGE1_OPERATION_ID} and produced the recorded
---             execution proof.
+--             operation {STAGE1_OPERATION_ID} and its immutable receipt
+--             row must exist in the database.
 -- Operation:  {STAGE2_OPERATION_ID}  (fixed per package release — the
 --             semantic idempotency key; identical in rehearsal and
 --             production)
@@ -2536,6 +2698,17 @@ def stage2_sql(s2c_rows, s2g_rows, s1t, s1g, dup_after_s1, auth_manifest_sha,
 --        the immutable audit evidence; the no-op/idempotency revalidation
 --        compares it byte-exactly, so a rerun only verifies as a no-op when
 --        the exact frozen artifact sha is supplied.
+--
+-- Execution-package gate (P0b2): the EXECUTION_PACKAGE_SHA256 GUC must
+--        equal the literal embedded above (stable across evidence commits).
+--
+-- Stage-1 execution receipt (P0e checkpoint): the ACTUAL database-side
+--        receipt row written by stage 1 is validated here — exactly one
+--        row, canonical-hash recomputation, package/artifact/mode/project/
+--        manifest bindings, and the database-derived target/survivor/
+--        audit/postcondition digests recomputed from LIVE state. A
+--        caller-fabricated stage-1 "proof" JSON can never satisfy this
+--        check; it is operator evidence only.
 
 SET search_path = pg_temp, public;
 
@@ -2551,6 +2724,8 @@ SET LOCAL TIME ZONE 'UTC';  -- deterministic timestamptz rendering in the
 {_timeouts_sql()}
 
 {_artifact_sha_gate_sql()}
+
+{_package_sha_gate_sql(execution_package_sha)}
 
 -- Serialize repair attempts. Both stages share this key, so stage 1 and
 -- stage 2 also serialize against each other.
@@ -2701,6 +2876,64 @@ BEGIN
   ) THEN
     RAISE EXCEPTION 'STOP: an authorized row lacks accountant identity or confirmation timestamp';
   END IF;
+END $$;
+
+-- ===========================================================================
+-- P0d2. Stage-1 execution receipt (database-side authorization root). The
+--       ACTUAL immutable receipt row written by stage 1 inside its own
+--       transaction is validated here: exactly one row, canonical-hash
+--       recomputation from the stored row, the exact package/artifact/mode/
+--       project/manifest bindings, and the database-derived target /
+--       survivor-mapping / audit / postcondition digests INDEPENDENTLY
+--       RECOMPUTED FROM LIVE STATE. A caller-fabricated stage-1 "proof"
+--       JSON can never satisfy this check (Codex finding 1) — the freeze
+--       command's consistency validation of a receipt EXPORT is operator
+--       evidence only, never authorization.
+-- ===========================================================================
+DO $$
+DECLARE
+  v_rec public.repair_stage1_receipt%ROWTYPE;
+BEGIN
+  IF (SELECT count(*) FROM public.repair_stage1_receipt) <> 1 THEN
+    RAISE EXCEPTION 'STOP: expected exactly one stage-1 execution receipt, found % — stage 1 must have run: its receipt is written in the SAME TRANSACTION as the 154 supersessions; a caller-fabricated stage-1 proof JSON is not an authorization root',
+      (SELECT count(*) FROM public.repair_stage1_receipt);
+  END IF;
+  SELECT * INTO v_rec FROM public.repair_stage1_receipt;
+  IF v_rec.operation_id IS DISTINCT FROM '{STAGE1_OPERATION_ID}'::uuid THEN
+    RAISE EXCEPTION 'STOP: stage-1 receipt records a different operation id';
+  END IF;
+  IF v_rec.environment_mode IS DISTINCT FROM '{mode}' THEN
+    RAISE EXCEPTION 'STOP: stage-1 receipt records a different environment mode';
+  END IF;
+  IF v_rec.project_ref IS DISTINCT FROM {project_ref_sql} THEN
+    RAISE EXCEPTION 'STOP: stage-1 receipt records a different project identity';
+  END IF;
+  IF v_rec.execution_package_sha256 IS DISTINCT FROM '{execution_package_sha}' THEN
+    RAISE EXCEPTION 'STOP: stage-1 receipt binds a different execution package';
+  END IF;
+  IF v_rec.artifact_sha256 IS DISTINCT FROM '{stage1_artifact_sha}' THEN
+    RAISE EXCEPTION 'STOP: stage-1 receipt records a stage-1 artifact different from the one this artifact sequences on';
+  END IF;
+  IF v_rec.target_manifest_sha256 IS DISTINCT FROM '{stage1_manifest_sha}' THEN
+    RAISE EXCEPTION 'STOP: stage-1 receipt binds a different stage-1 manifest';
+  END IF;
+  IF v_rec.target_digest_sha256 IS DISTINCT FROM ({_receipt_target_digest_expr('zaki_s1_manifest')}) THEN
+    RAISE EXCEPTION 'STOP: stage-1 receipt target digest does not match the committed stage-1 manifest';
+  END IF;
+  IF v_rec.survivor_mapping_digest_sha256 IS DISTINCT FROM ({_receipt_survivor_digest_expr('zaki_s1_manifest')}) THEN
+    RAISE EXCEPTION 'STOP: stage-1 receipt survivor-mapping digest does not match the committed stage-1 manifest';
+  END IF;
+  IF v_rec.audit_digest_sha256 IS DISTINCT FROM ({_receipt_audit_digest_expr()}) THEN
+    RAISE EXCEPTION 'STOP: stage-1 receipt audit digest does not match the live stage-1 audit rows';
+  END IF;
+  IF v_rec.postcondition_digest_sha256 IS DISTINCT FROM ({_receipt_postcondition_digest_expr('zaki_s1_manifest')}) THEN
+    RAISE EXCEPTION 'STOP: stage-1 receipt postcondition digest does not match the live stage-1 state';
+  END IF;
+  IF encode(extensions.digest(convert_to((to_jsonb(v_rec) - 'receipt_sha256')::text, 'UTF8'), 'sha256'), 'hex')
+     IS DISTINCT FROM v_rec.receipt_sha256 THEN
+    RAISE EXCEPTION 'STOP: stage-1 receipt canonical hash does not recompute from the stored row (tampered receipt)';
+  END IF;
+  RAISE NOTICE 'STAGE 2: stage-1 execution receipt % validated (digests recomputed from live state)', v_rec.receipt_sha256;
 END $$;
 
 -- ===========================================================================
@@ -3549,6 +3782,7 @@ def cmd_sql(auth_manifest, snapshot_dir):
             "input fails closed (there is no default manifest)"
         )
     pkg = load_committed_package()
+    package_sha = execution_package_sha256()
     decisions, auth_manifest_sha = validate_auth_manifest(
         auth_manifest, "REHEARSAL"
     )
@@ -3559,28 +3793,35 @@ def cmd_sql(auth_manifest, snapshot_dir):
 
     mode = "REHEARSAL"
     project_ref = None
-    proof_sha = ""
     identity = artifact_identity_stage1(
-        mode, pkg["stage1_manifest_sha"], pkg["basis_sha"], project_ref
+        mode, pkg["stage1_manifest_sha"], pkg["basis_sha"], package_sha,
+        project_ref,
     )
     s1_sql = stage1_sql(
         pkg["s1t"], pkg["s1g"], pkg["s2c"], pkg["dup_after_s1"],
         pkg["stage1_manifest_sha"], pkg["basis_sha"], mode, project_ref,
-        identity,
+        identity, package_sha,
     )
     SQL_STAGE1.write_text(s1_sql, encoding="utf-8")
-    # The stage-2 artifact binds the stage-1 artifact it sequences on: the
-    # sha of the exact 14a file just written (an operator runs a FROZEN
-    # stage-1 artifact; see `freeze`).
+    # The stage-2 working copy binds the stage-1 artifact it sequences on
+    # (the sha of the exact 14a file just written; an operator runs a FROZEN
+    # stage-1 artifact — see `freeze`) and carries an EMPTY stage-1 receipt
+    # sha placeholder: the receipt can only exist in a database after a real
+    # stage-1 execution, so the committed working copy is a deterministic
+    # pre-execution staging artifact. Per-run frozen stage-2 artifacts bind
+    # the executed manifest and the real database receipt (freeze +
+    # --stage1-receipt) and are verified via `verify --artifact`.
     stage1_artifact_sha = sha256_file(SQL_STAGE1)
+    receipt_sha = ""
     identity2 = artifact_identity_stage2(
         mode, pkg["stage1_manifest_sha"], pkg["basis_sha"],
-        auth_manifest_sha, stage1_artifact_sha, proof_sha, project_ref,
+        auth_manifest_sha, stage1_artifact_sha, receipt_sha, package_sha,
+        project_ref,
     )
     s2_sql = stage2_sql(
         s2c_rows, s2g_rows, pkg["s1t"], pkg["s1g"], pkg["dup_after_s1"],
-        auth_manifest_sha, pkg["basis_sha"], stage1_artifact_sha, proof_sha,
-        mode, project_ref, identity2, n_exec,
+        auth_manifest_sha, pkg["basis_sha"], stage1_artifact_sha,
+        receipt_sha, package_sha, mode, project_ref, identity2, n_exec,
         stage1_manifest_sha=pkg["stage1_manifest_sha"],
     )
 
@@ -3598,8 +3839,9 @@ def cmd_sql(auth_manifest, snapshot_dir):
 
 def _freeze_record_doc(stage, mode, artifact_file, artifact_sha,
                        artifact_identity, stage1_manifest_sha, basis_sha,
-                       auth_manifest_sha, stage1_artifact_sha, proof_sha,
-                       project_ref, frozen_at, proof=None):
+                       auth_manifest_sha, stage1_artifact_sha, receipt_sha,
+                       receipt_canonical_sha, execution_package_sha,
+                       project_ref, frozen_at, receipt=None):
     doc = {
         "package": "repair-013-pre",
         "freeze_schema_version": 1,
@@ -3612,24 +3854,29 @@ def _freeze_record_doc(stage, mode, artifact_file, artifact_sha,
         "stage2_operation_id": STAGE2_OPERATION_ID,
         "stage1_manifest_sha256": stage1_manifest_sha,
         "stage2_basis_sha256": basis_sha,
+        "execution_package_sha256": execution_package_sha,
         "project_ref": project_ref or "-",
         "frozen_at": frozen_at,
     }
     if stage == 2:
         doc["authorization_manifest_sha256"] = auth_manifest_sha
         doc["stage1_artifact_sha256"] = stage1_artifact_sha
-        doc["stage1_execution_proof_sha256"] = proof_sha
-        if proof is not None:
-            doc["stage1_postcondition_digest_sha256"] = (
-                proof["record"]["postcondition_digest_sha256"])
-            doc["stage1_audit_digest_sha256"] = (
-                proof["record"]["audit_digest_sha256"])
+        doc["stage1_receipt_sha256"] = receipt_sha
+        doc["stage1_receipt_canonical_sha256"] = receipt_canonical_sha
+        if receipt is not None:
+            doc["stage1_receipt_target_digest_sha256"] = (
+                receipt["target_digest_sha256"])
+            doc["stage1_receipt_survivor_mapping_digest_sha256"] = (
+                receipt["survivor_mapping_digest_sha256"])
+            doc["stage1_receipt_audit_digest_sha256"] = (
+                receipt["audit_digest_sha256"])
+            doc["stage1_receipt_postcondition_digest_sha256"] = (
+                receipt["postcondition_digest_sha256"])
     return doc
 
 
 def cmd_freeze(stage, mode, auth_manifest, stage1_artifact,
-               stage1_execution_proof, project_ref, out_dir, frozen_at,
-               stage1_execution_log=None):
+               stage1_receipt, project_ref, out_dir, frozen_at):
     if stage not in (1, 2):
         raise SystemExit("freeze --stage must be 1 or 2")
     if mode not in MODES:
@@ -3652,8 +3899,10 @@ def cmd_freeze(stage, mode, auth_manifest, stage1_artifact,
                 datetime.timezone.utc).isoformat(timespec="seconds")
 
     pkg = load_committed_package()
+    package_sha = execution_package_sha256()
 
-    proof_sha = ""
+    receipt_sha = ""
+    receipt_canonical_sha = ""
     auth_manifest_sha = ""
     decisions = []
     if stage == 2:
@@ -3662,23 +3911,26 @@ def cmd_freeze(stage, mode, auth_manifest, stage1_artifact,
                 "freeze --stage 2 requires --auth-manifest <path>: missing "
                 "authorization input fails closed"
             )
-        if not stage1_artifact or not stage1_execution_proof:
+        if not stage1_artifact or not stage1_receipt:
             raise SystemExit(
                 "freeze --stage 2 requires --stage1-artifact <frozen 14a> "
-                "and --stage1-execution-proof <proof.json>: stage-2 "
+                "and --stage1-receipt <receipt-export.json>: stage-2 "
                 "authorization is only buildable after the stage-1 "
-                "checkpoint"
+                "database-side checkpoint (a caller-created stage-1 proof "
+                "JSON is operator evidence only, never the authorization "
+                "root)"
             )
-        # Independently revalidate the proof against the committed manifests
-        # AND the byte-identical frozen stage-1 artifact (schema v2 — no
-        # caller-created JSON accepted).
-        proof = load_stage1_proof(
-            stage1_execution_proof, mode, stage1_artifact,
-            execution_log_path=stage1_execution_log,
-        )
-        proof_sha = sha256_file(stage1_execution_proof)
+        # Independently revalidate every derivable field of the receipt
+        # export against the committed manifests AND the byte-identical
+        # frozen stage-1 artifact. NOTE: this is CONSISTENCY validation of
+        # the operator evidence — the actual authorization is the immutable
+        # DATABASE-SIDE receipt row, revalidated by the stage-2 artifact
+        # itself before any stage-2 work (Codex finding 1).
+        receipt = load_stage1_receipt(stage1_receipt, mode, stage1_artifact)
+        receipt_sha = sha256_file(stage1_receipt)
+        receipt_canonical_sha = receipt["receipt_sha256"]
         decisions, auth_manifest_sha = validate_auth_manifest(
-            auth_manifest, mode, proof=proof
+            auth_manifest, mode, receipt=receipt
         )
         if not decisions:
             raise SystemExit(
@@ -3691,30 +3943,30 @@ def cmd_freeze(stage, mode, auth_manifest, stage1_artifact,
         n_exec = sum(1 for d in decisions if d.get("decision") == "RETIRE")
         identity = artifact_identity_stage2(
             mode, pkg["stage1_manifest_sha"], pkg["basis_sha"],
-            auth_manifest_sha, stage1_artifact_sha, proof_sha, project_ref,
+            auth_manifest_sha, stage1_artifact_sha, receipt_canonical_sha,
+            package_sha, project_ref,
         )
         sql = stage2_sql(
             s2c_rows, s2g_rows, pkg["s1t"], pkg["s1g"], pkg["dup_after_s1"],
             auth_manifest_sha, pkg["basis_sha"], stage1_artifact_sha,
-            proof_sha, mode, project_ref, identity, n_exec,
-            stage1_manifest_sha=pkg["stage1_manifest_sha"],
+            receipt_canonical_sha, package_sha, mode, project_ref, identity,
+            n_exec, stage1_manifest_sha=pkg["stage1_manifest_sha"],
         )
         stem = f"14b-stage2-approved-repair-{mode}-{auth_manifest_sha[:12]}"
     else:
-        if auth_manifest or stage1_artifact or stage1_execution_proof \
-                or stage1_execution_log:
+        if auth_manifest or stage1_artifact or stage1_receipt:
             raise SystemExit(
                 "freeze --stage 1 does not accept --auth-manifest/"
-                "--stage1-artifact/--stage1-execution-proof/"
-                "--stage1-execution-log"
+                "--stage1-artifact/--stage1-receipt"
             )
         identity = artifact_identity_stage1(
-            mode, pkg["stage1_manifest_sha"], pkg["basis_sha"], project_ref
+            mode, pkg["stage1_manifest_sha"], pkg["basis_sha"], package_sha,
+            project_ref,
         )
         sql = stage1_sql(
             pkg["s1t"], pkg["s1g"], pkg["s2c"], pkg["dup_after_s1"],
             pkg["stage1_manifest_sha"], pkg["basis_sha"], mode, project_ref,
-            identity,
+            identity, package_sha,
         )
         stem = f"14a-stage1-unapproved-repair-{mode}-{pkg['stage1_manifest_sha'][:12]}"
 
@@ -3738,8 +3990,8 @@ def cmd_freeze(stage, mode, auth_manifest, stage1_artifact,
         stage, mode, artifact_path.name, sha256_file(artifact_path),
         identity, pkg["stage1_manifest_sha"], pkg["basis_sha"],
         auth_manifest_sha, stage1_artifact_sha if stage == 2 else "",
-        proof_sha, project_ref, frozen_at,
-        proof=proof if stage == 2 else None,
+        receipt_sha, receipt_canonical_sha, package_sha, project_ref,
+        frozen_at, receipt=receipt if stage == 2 else None,
     )
     write_json(record_path, record)
     print(f"frozen artifact: {artifact_path}")
@@ -3751,7 +4003,8 @@ def cmd_freeze(stage, mode, auth_manifest, stage1_artifact,
         print(f"  authorized:    {n_exec} rows")
         print(f"  basis:         {pkg['basis_sha']}")
         print(f"  manifest:      {auth_manifest_sha}")
-        print(f"  stage-1 proof: {proof_sha}")
+        print(f"  stage-1 receipt (file sha): {receipt_sha}")
+        print(f"  stage-1 receipt (db canonical): {receipt_canonical_sha}")
     print(f"freeze record:  {record_path}")
 
 
@@ -3760,14 +4013,14 @@ def cmd_freeze(stage, mode, auth_manifest, stage1_artifact,
 # ---------------------------------------------------------------------------
 
 def verify_frozen_artifact(record_path, stage1_artifact=None,
-                           auth_manifest=None, stage1_proof=None):
+                           auth_manifest=None, stage1_receipt=None):
     """INDEPENDENT frozen-artifact verification (blocker 3).
 
     Never trusts "SQL + freeze record together": the verifier re-reads the
     immutable candidate basis, the authorization manifest, and the stage-1
-    proof, REGENERATES the expected artifact bytes into a temporary
-    location, and requires byte-identity with the frozen artifact before
-    recomputing its SHA-256 against the freeze record. A coordinated
+    receipt export, REGENERATES the expected artifact bytes into a
+    temporary location, and requires byte-identity with the frozen artifact
+    before recomputing its SHA-256 against the freeze record. A coordinated
     modification of both the SQL and the freeze record therefore still
     fails, because the regenerated bytes derive from the committed
     manifests alone.
@@ -3784,6 +4037,7 @@ def verify_frozen_artifact(record_path, stage1_artifact=None,
     stage = record.get("stage")
     mode = record.get("environment_mode")
     pkg = load_committed_package()
+    package_sha = execution_package_sha256()
 
     if stage not in (1, 2):
         errors.append(f"freeze record has invalid stage {stage!r}")
@@ -3799,34 +4053,34 @@ def verify_frozen_artifact(record_path, stage1_artifact=None,
         # 1. Read the exact committed authorization inputs (stage 2).
         decisions = []
         auth_manifest_sha = ""
-        proof_sha = ""
+        receipt_sha = ""
         stage1_artifact_sha = ""
-        proof = None
+        receipt = None
         if stage == 2:
             for flag, val in (("--stage1-artifact", stage1_artifact),
                               ("--auth-manifest", auth_manifest),
-                              ("--stage1-execution-proof", stage1_proof)):
+                              ("--stage1-receipt", stage1_receipt)):
                 if not val:
                     errors.append(
                         f"stage-2 artifact verification requires {flag}")
                     break
-            if stage1_artifact and auth_manifest and stage1_proof:
+            if stage1_artifact and auth_manifest and stage1_receipt:
                 if sha256_file(stage1_artifact) != record.get("stage1_artifact_sha256"):
                     errors.append(
                         "stage-1 artifact sha does not match the freeze record")
-                if sha256_file(stage1_proof) != record.get("stage1_execution_proof_sha256"):
+                if sha256_file(stage1_receipt) != record.get("stage1_receipt_sha256"):
                     errors.append(
-                        "stage-1 execution proof sha does not match the freeze record")
+                        "stage-1 receipt export sha does not match the freeze record")
                 else:
                     try:
-                        proof = load_stage1_proof(
-                            stage1_proof, mode, stage1_artifact)
+                        receipt = load_stage1_receipt(
+                            stage1_receipt, mode, stage1_artifact)
                     except SystemExit as e:
                         errors.append(str(e))
-                    proof_sha = sha256_file(stage1_proof)
+                    receipt_sha = sha256_file(stage1_receipt)
                 try:
                     decisions, auth_manifest_sha = validate_auth_manifest(
-                        auth_manifest, mode, proof=proof)
+                        auth_manifest, mode, receipt=receipt)
                 except SystemExit as e:
                     errors.append(str(e))
                 if auth_manifest_sha != record.get("authorization_manifest_sha256"):
@@ -3840,6 +4094,14 @@ def verify_frozen_artifact(record_path, stage1_artifact=None,
             if record.get("stage2_basis_sha256") != pkg["basis_sha"]:
                 errors.append("freeze record basis sha does not match the committed basis")
 
+        # 1b. The freeze record must bind the exact current execution
+        #     package (stable content-based identity).
+        if record.get("execution_package_sha256") != package_sha:
+            errors.append(
+                "freeze record execution_package_sha256 does not match the "
+                "current EXECUTION_PACKAGE_SHA256 of the checked-out "
+                "package files")
+
         # 2. Regenerate the expected artifact bytes into a temporary
         #    location (from committed files + validated authorization inputs
         #    only) and require BYTE-IDENTITY with the frozen artifact.
@@ -3849,16 +4111,16 @@ def verify_frozen_artifact(record_path, stage1_artifact=None,
                 if stage == 1:
                     identity = artifact_identity_stage1(
                         mode, pkg["stage1_manifest_sha"], pkg["basis_sha"],
-                        project_ref)
+                        package_sha, project_ref)
                     regen = stage1_sql(
                         pkg["s1t"], pkg["s1g"], pkg["s2c"], pkg["dup_after_s1"],
                         pkg["stage1_manifest_sha"], pkg["basis_sha"], mode,
-                        project_ref, identity)
+                        project_ref, identity, package_sha)
                 else:
                     identity = artifact_identity_stage2(
                         mode, pkg["stage1_manifest_sha"], pkg["basis_sha"],
-                        auth_manifest_sha, stage1_artifact_sha, proof_sha,
-                        project_ref)
+                        auth_manifest_sha, stage1_artifact_sha,
+                        receipt["receipt_sha256"], package_sha, project_ref)
                     s2c_rows, s2g_rows = join_decisions(
                         pkg["basis_rows"], decisions)
                     n_exec = sum(
@@ -3867,8 +4129,9 @@ def verify_frozen_artifact(record_path, stage1_artifact=None,
                     regen = stage2_sql(
                         s2c_rows, s2g_rows, pkg["s1t"], pkg["s1g"],
                         pkg["dup_after_s1"], auth_manifest_sha,
-                        pkg["basis_sha"], stage1_artifact_sha, proof_sha,
-                        mode, project_ref, identity, n_exec,
+                        pkg["basis_sha"], stage1_artifact_sha,
+                        receipt["receipt_sha256"], package_sha, mode,
+                        project_ref, identity, n_exec,
                         stage1_manifest_sha=pkg["stage1_manifest_sha"])
                 regen_path.write_text(regen, encoding="utf-8")
                 frozen_bytes = artifact_path.read_bytes()
@@ -3900,11 +4163,17 @@ def verify_frozen_artifact(record_path, stage1_artifact=None,
                 errors.append("freeze record stage-1 manifest sha does not match the committed manifest")
             if record.get("stage2_basis_sha256") != pkg["basis_sha"]:
                 errors.append("freeze record basis sha does not match the committed basis")
-            if proof is not None:
-                if record.get("stage1_postcondition_digest_sha256") != proof["record"]["postcondition_digest_sha256"]:
-                    errors.append("freeze record stage-1 postcondition digest differs from the validated proof")
-                if record.get("stage1_audit_digest_sha256") != proof["record"]["audit_digest_sha256"]:
-                    errors.append("freeze record stage-1 audit digest differs from the validated proof")
+            if receipt is not None:
+                if record.get("stage1_receipt_canonical_sha256") != receipt["receipt_sha256"]:
+                    errors.append("freeze record stage-1 receipt canonical sha differs from the validated receipt export")
+                if record.get("stage1_receipt_target_digest_sha256") != receipt["target_digest_sha256"]:
+                    errors.append("freeze record stage-1 receipt target digest differs from the validated receipt export")
+                if record.get("stage1_receipt_survivor_mapping_digest_sha256") != receipt["survivor_mapping_digest_sha256"]:
+                    errors.append("freeze record stage-1 receipt survivor-mapping digest differs from the validated receipt export")
+                if record.get("stage1_receipt_audit_digest_sha256") != receipt["audit_digest_sha256"]:
+                    errors.append("freeze record stage-1 receipt audit digest differs from the validated receipt export")
+                if record.get("stage1_receipt_postcondition_digest_sha256") != receipt["postcondition_digest_sha256"]:
+                    errors.append("freeze record stage-1 receipt postcondition digest differs from the validated receipt export")
 
     if errors:
         print("VERIFY FAILED:")
@@ -3918,11 +4187,11 @@ def verify_frozen_artifact(record_path, stage1_artifact=None,
 
 
 def cmd_verify(snapshot_dir, auth_manifest=None, artifact=None,
-               stage1_artifact=None, stage1_proof=None):
+               stage1_artifact=None, stage1_receipt=None):
     if artifact:
         verify_frozen_artifact(
             artifact, stage1_artifact=stage1_artifact,
-            auth_manifest=auth_manifest, stage1_proof=stage1_proof,
+            auth_manifest=auth_manifest, stage1_receipt=stage1_receipt,
         )
         return
     if not auth_manifest:
@@ -4014,33 +4283,51 @@ def cmd_verify(snapshot_dir, auth_manifest=None, artifact=None,
         errors.append("stage-2 SQL missing the stage-1 sequencing operation id")
 
     # 6. Determinism: regenerating both SQL files from the committed package
-    #    files must be byte-identical.
+    #    files must be byte-identical (Codex finding 3 / fix D). The
+    #    working copies bind the stable EXECUTION_PACKAGE_SHA256 (never git
+    #    HEAD, which evidence commits change) and the stage-2 working copy
+    #    is generated from the FIXED committed test authorization manifest
+    #    with an empty receipt-sha placeholder — it is a deterministic
+    #    pre-execution staging/documentation artifact; per-run frozen
+    #    artifacts (bound to the executed manifest + real DB receipt) are
+    #    verified with `verify --artifact` against their freeze records.
     pkg = load_committed_package()
+    package_sha = execution_package_sha256()
     decisions, _ = validate_auth_manifest(auth_manifest, "REHEARSAL")
     s2c_rows, s2g_rows = join_decisions(pkg["basis_rows"], decisions)
     n_exec = sum(1 for d in decisions if d.get("decision") == "RETIRE")
     mode = "REHEARSAL"
     stage1_artifact_sha = sha256_file(SQL_STAGE1)
     identity1 = artifact_identity_stage1(
-        mode, pkg["stage1_manifest_sha"], pkg["basis_sha"], None
+        mode, pkg["stage1_manifest_sha"], pkg["basis_sha"], package_sha,
+        None,
     )
     regen1 = stage1_sql(
         pkg["s1t"], pkg["s1g"], pkg["s2c"], pkg["dup_after_s1"],
         pkg["stage1_manifest_sha"], pkg["basis_sha"], mode, None, identity1,
+        package_sha,
     )
     identity2 = artifact_identity_stage2(
         mode, pkg["stage1_manifest_sha"], pkg["basis_sha"], auth_sha,
-        stage1_artifact_sha, "", None,
+        stage1_artifact_sha, "", package_sha, None,
     )
     regen2 = stage2_sql(
         s2c_rows, s2g_rows, pkg["s1t"], pkg["s1g"], pkg["dup_after_s1"],
-        auth_sha, pkg["basis_sha"], stage1_artifact_sha, "", mode, None,
-        identity2, n_exec, stage1_manifest_sha=pkg["stage1_manifest_sha"],
+        auth_sha, pkg["basis_sha"], stage1_artifact_sha, "", package_sha,
+        mode, None, identity2, n_exec,
+        stage1_manifest_sha=pkg["stage1_manifest_sha"],
     )
     if regen1 != s1:
         errors.append("stage-1 SQL is not byte-identical to a regeneration")
     if regen2 != s2:
         errors.append("stage-2 SQL is not byte-identical to a regeneration")
+
+    # 7. Both working copies must embed the current stable execution
+    #    package sha (the binding that survives evidence-only commits).
+    if package_sha not in s1:
+        errors.append("stage-1 SQL does not embed the current EXECUTION_PACKAGE_SHA256")
+    if package_sha not in s2:
+        errors.append("stage-2 SQL does not embed the current EXECUTION_PACKAGE_SHA256")
 
     if errors:
         print("VERIFY FAILED:")
@@ -4055,11 +4342,31 @@ def cmd_verify(snapshot_dir, auth_manifest=None, artifact=None,
 # rehearsal-manifest subcommand
 # ---------------------------------------------------------------------------
 
+def cmd_package_sha():
+    """Print the stable EXECUTION_PACKAGE_SHA256 and the per-file digest
+    lines it is computed from (sha256sum format, sorted file list — see
+    EXECUTION_PACKAGE.md)."""
+    lines = []
+    for rel in EXECUTION_PACKAGE_FILES:
+        p = ROOT / rel
+        if not p.is_file():
+            raise SystemExit(
+                f"execution-package file missing: {rel} — the package "
+                f"identity is incomplete"
+            )
+        lines.append(f"{sha256_file(p)}  {rel}")
+    total = execution_package_sha256()
+    for line in lines:
+        print(line)
+    print(f"EXECUTION_PACKAGE_SHA256: {total}")
+
+
 def cmd_rehearsal_manifest(confirmation_timestamp, identity, out_path):
     """Generate the per-run REHEARSAL authorization manifest from the
     committed test-decisions list, stamped with a fresh confirmation
-    timestamp. The rehearsal chain calls this AFTER the stage-1 proof
-    exists, so the post-stage-1 ordering check is genuinely exercised."""
+    timestamp. The rehearsal chain calls this AFTER the stage-1 database
+    receipt exists, so the post-stage-1 ordering check is genuinely
+    exercised."""
     pkg = load_committed_package()
     try:
         test = json.load(open(TEST_DECISIONS_PATH, encoding="utf-8"))
@@ -4092,6 +4399,7 @@ def main():
     p.add_argument("--snapshot-dir", default="/tmp/zaki-repair-design")
     sub = p.add_subparsers(dest="command", required=True)
     sub.add_parser("manifests")
+    sub.add_parser("package-sha")
 
     sp = sub.add_parser("sql")
     sp.add_argument(
@@ -4107,10 +4415,10 @@ def main():
     fp.add_argument("--environment-mode", required=True, choices=MODES)
     fp.add_argument("--auth-manifest", default=None)
     fp.add_argument("--stage1-artifact", default=None)
-    fp.add_argument("--stage1-execution-proof", default=None)
-    fp.add_argument("--stage1-execution-log", default=None,
-                    help="stage-1 execution log (re-verifies the proof's "
-                         "log sha where the log is retained)")
+    fp.add_argument("--stage1-receipt", default=None,
+                    help="(stage 2) the stage-1 execution receipt export "
+                         "(database-side; operator evidence only — the "
+                         "stage-2 artifact validates the actual DB row)")
     fp.add_argument("--project-ref", default=None)
     fp.add_argument("--out-dir", default=str(ROOT / "artifacts"))
     fp.add_argument("--frozen-at", default=None,
@@ -4123,26 +4431,9 @@ def main():
     vp.add_argument("--stage1-artifact", default=None,
                     help="(with --artifact of a stage-2 record) the frozen "
                          "stage-1 artifact the stage-2 build sequenced on")
-    vp.add_argument("--stage1-execution-proof", default=None,
+    vp.add_argument("--stage1-receipt", default=None,
                     help="(with --artifact of a stage-2 record) the stage-1 "
-                         "execution proof")
-
-    pp = sub.add_parser("stage1-proof")
-    pp.add_argument("--artifact", required=True,
-                    help="the frozen stage-1 artifact that executed")
-    pp.add_argument("--environment-mode", required=True, choices=MODES)
-    pp.add_argument("--database", required=True,
-                    help="database identity the artifact executed against")
-    pp.add_argument("--executed-at", required=True,
-                    help="execution timestamp (ISO-8601, UTC)")
-    pp.add_argument("--result", required=True, choices=("APPLIED", "NOOP"))
-    pp.add_argument("--execution-log", default=None,
-                    help="execution log file (hash retained in the proof)")
-    pp.add_argument("--git-sha", default=None,
-                    help="package commit sha (default: git rev-parse HEAD "
-                         "of the package repo)")
-    pp.add_argument("--out", required=True, dest="proof_out",
-                    help="proof output path (overwrite refused)")
+                         "execution receipt export")
 
     rp = sub.add_parser("rehearsal-manifest")
     rp.add_argument("--confirmation-timestamp", required=True,
@@ -4154,25 +4445,20 @@ def main():
 
     if args.command == "manifests":
         cmd_manifests(args.snapshot_dir, MANIFEST_DIR)
+    elif args.command == "package-sha":
+        cmd_package_sha()
     elif args.command == "sql":
         cmd_sql(args.auth_manifest, args.snapshot_dir)
     elif args.command == "freeze":
         cmd_freeze(
             args.stage, args.environment_mode, args.auth_manifest,
-            args.stage1_artifact, args.stage1_execution_proof,
+            args.stage1_artifact, args.stage1_receipt,
             args.project_ref, args.out_dir, args.frozen_at,
-            stage1_execution_log=args.stage1_execution_log,
         )
     elif args.command == "verify":
         cmd_verify(args.snapshot_dir, args.auth_manifest, args.artifact,
                    stage1_artifact=args.stage1_artifact,
-                   stage1_proof=args.stage1_execution_proof)
-    elif args.command == "stage1-proof":
-        build_stage1_proof(
-            args.artifact, args.environment_mode, args.database,
-            args.executed_at, args.result, args.execution_log, args.git_sha,
-            args.proof_out,
-        )
+                   stage1_receipt=args.stage1_receipt)
     elif args.command == "rehearsal-manifest":
         cmd_rehearsal_manifest(
             args.confirmation_timestamp, args.identity, args.out,
