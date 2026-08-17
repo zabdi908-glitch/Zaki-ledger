@@ -1,0 +1,16 @@
+{
+  "package": "repair-013-pre",
+  "freeze_schema_version": 1,
+  "stage": 1,
+  "environment_mode": "REHEARSAL",
+  "artifact_file": "14a-stage1-unapproved-repair-REHEARSAL-c182b4a64148.sql",
+  "artifact_sha256": "e6e5663f2ee5c20241e6b6b2e6d9bb9b88356b5742b10dbe2364c299f9c6a859",
+  "artifact_identity": "f52f965491ea482cccdda2a72f340f3cfa21c0bd2500ecc37ad3a237f0af3753",
+  "stage1_operation_id": "0a1a1a01-4a5e-4b1a-8c01-013000000001",
+  "stage2_operation_id": "0a1a1a01-4a5e-4b1a-8c01-013000000002",
+  "stage1_manifest_sha256": "c182b4a64148ad697a9a4e7561f3ea38aa14f9193ca790beee9dfafa1c6b61fb",
+  "stage2_basis_sha256": "751d9b04ac3695da82821af311a20de7b45fd8bcfd7633f4cd4eb813793bf271",
+  "execution_package_sha256": "d9b2eaa66233240d79e008267ede0f4a883e124627b7994ba9c415a1f581ace1",
+  "project_ref": "-",
+  "frozen_at": "2026-08-17T17:01:14+00:00"
+}

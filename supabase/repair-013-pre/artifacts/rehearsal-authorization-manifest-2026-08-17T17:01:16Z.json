@@ -1,0 +1,694 @@
+{
+  "package": "repair-013-pre",
+  "manifest_schema_version": 1,
+  "environment_mode": "REHEARSAL",
+  "basis_sha256": "751d9b04ac3695da82821af311a20de7b45fd8bcfd7633f4cd4eb813793bf271",
+  "decisions": [
+    {
+      "match_id": "00b58efe-507b-466d-b200-43eb01cb00f7",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "03fdd78a-e4bd-410b-bbbf-f75d3cc6f1cd",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "0a08e71c-2c15-4712-aced-774c409265c1",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "10652436-c431-447a-9354-03509c4ac5e4",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "13ac6c75-1b11-4496-b938-d30d71c11f70",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "157c0b15-8663-4f64-9d6a-bba2fb2f71d5",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "16170555-183c-466a-be0f-9bf5086b1970",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "18128fd6-8f02-44b9-b8ca-c0e059442c3d",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "1d2050ad-9300-4383-8cac-93b7a119301d",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "217f4198-7d4e-42a8-a101-30bd580f820f",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "222b0be3-2c9b-4fa8-9d1d-1aad6735d408",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "231364de-9406-44b3-9b06-b1b7b4ae8191",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "246f4c37-18f6-4eaa-946f-00df966a3787",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "2524f1b3-80b6-4862-905e-af9758544d37",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "26f251b3-b505-427c-a3d8-d7cb0df24235",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "2730ee68-2e51-49cd-bcd4-3de2085e2b84",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "27a36904-9aaa-4deb-827e-f426d58014d6",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "2b53dd76-c14d-4e41-9404-790966de64c8",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "2d527274-d957-48d7-a89c-2cc0c5e5c2dc",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "30748b96-847f-4942-877a-25cc9f707da0",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "30ce0b30-f86c-40b1-8483-681f2ce1d7d8",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "37845cf2-c96f-4ba1-a914-062363500ac6",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "37ede226-4ded-4a89-8d6f-38a77eb622ca",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "3f1310cf-45de-40ec-8cf7-32eeb906ae02",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "44453a69-a489-41fa-bf1a-476d6a7908e2",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "4568675b-aeb5-4272-9168-43700d3416d7",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "47f10443-f490-4db8-bdf5-dfdbc46fb959",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "495c8d80-8ecf-4979-993b-dfc2800bd8ac",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "49f62488-4021-42a5-99fc-60903f6c1228",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "4e15d74e-eacd-4b38-979c-548d7fcd8882",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "4fa4af76-4fb7-478e-95e7-4d478c3d3bb0",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "5128632c-2104-4923-ad75-b2c58cdcb529",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "532c6727-f92e-4fce-9710-5ac37d055a09",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "5438ec10-e4f9-4a67-b3ad-2265c7f032fc",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "5947b9eb-1f37-4c2e-839e-bed931dca73f",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "61ba1d56-79b3-49a1-87ba-82b6af950e89",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "659f26c9-4eea-4aaf-80e1-b94a102509c0",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "66b20c58-5186-48d0-8ced-58ee3b453a47",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "6904e990-7c4b-4da5-b8a0-5795a9c3ff7e",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "6bfd8ff2-ff44-4230-b8b3-601a882069cd",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "7052959f-722b-4e15-b18c-e4aa29a2062a",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "731ea4f0-7dd2-4927-85da-46ba58d6e7bf",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "753496cd-0d24-4f7a-aed3-490db4dd60eb",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "79836dd0-ba4f-4d85-ae9a-5bebaff63289",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "79c3b78b-a91e-4a9b-87e1-16541f00e2c8",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "7d0e9f99-f01f-45c2-8214-cdfcaab2a3b3",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "82c63a3d-3d08-4f6e-b1c4-62f4304a78f8",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "8458dfba-ba39-405e-bfc1-f874a6e9546e",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "85ca48fe-96b1-49d0-be8d-ae35119958ac",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "88458d92-f456-4dc9-9042-ae7833a1a752",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "8bb0fe90-e389-40ba-8cda-f37f441fd08e",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "8e50404c-5de4-472a-a61b-0103d22269c5",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "9137e05d-0dfe-4fd1-b4ac-8d50c9fa5c5c",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "9451aa88-8999-425c-abf6-fad8f274a864",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "9563b8b2-469e-4128-9d6f-63cb898cadc2",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "95bdfb86-1b6c-4a7d-b266-b280766f6cd1",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "9964ff1c-6e6b-4c2c-bb79-0fc25e205033",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "9aa9543b-1ef9-438e-801e-b98d9ac2648e",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "9c9f9bde-632d-419f-a6e3-5c8066b93a84",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "9dcdd4c4-bfa2-4a00-8346-97349f6f3a0f",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "9ea9b5ef-7390-4384-8d12-67b11b31187b",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "9f1b000a-f963-4495-a8af-29aba57bb7dd",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "a0ea6c5a-6627-4dd9-9431-a79566f21921",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "a196f95a-37d6-4c66-bfa3-cc5b76eed39e",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "a2ce087d-e61f-47aa-be60-33f217a0dd94",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "a5c31d20-6e4a-4d50-83ef-547c57dd5324",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "a6033380-a1de-4d6b-b919-03d56872e8d1",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "aa2d0411-6970-4232-a312-5941e049f809",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "ab108bc3-d916-4a21-9bec-7de2bb58cb6f",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "acac8a89-7d97-4a0e-ac2e-c686b9947f5d",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "b3647090-9616-4e93-9cda-a87580174739",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "b3d13a7e-0cf3-4dce-ab7e-8bb961da11a7",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "b4c34c29-02ca-406c-b163-74d4e5de903f",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "bcad5765-068c-4ab7-8969-f49d11308d9c",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "bcf2b21c-6fda-403d-a9a3-14f35ca91628",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "bcf33b82-766b-4043-90e1-511ae727d5a9",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "c0371d04-7962-40ea-abbc-b5bf9c3bc036",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "c179d215-ec29-4755-bd94-f5e75aa9694f",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "c1c3240e-60de-49f7-ba7e-966564e01e0a",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "c27a442b-5246-469d-819f-fd5470a418b0",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "c2ee673f-3d21-40fe-bbfc-01bd391b905e",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "c9a729f3-84ce-4521-adbd-addba53b6449",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "cd40de16-2e44-4b09-9023-bfc23a467a93",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "d38079e4-899e-478d-8c18-d0c8c6b1fd54",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "d640e6bb-dfde-498a-9c8a-858e601a870a",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "d85a8a4d-0886-4b96-80a5-f7b11a1329e3",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "dbb87e13-4c93-4fca-a01d-6720732e986f",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "e02668e1-6bf2-433c-869f-e049ed0e4282",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "e4ad3f7a-d5a5-406d-8118-6ae0f4b90f2b",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "e6ea248c-9d9b-4f5a-904d-accfea6ce2c4",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "e82e8c23-9a5b-4225-84d7-43d2afee1312",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "f278d750-50d5-4c55-af4f-85be3cc936f3",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "f329016d-938d-4ac6-9b95-ddfad74191f4",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "f36fcbcc-033e-407c-973f-e1610b0c71f9",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "f3bafacb-5879-464d-b4e2-7daf244dbd83",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "f54fb288-ca9d-4f1e-94fa-3bb11e81b0c8",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "fa56dfb9-f051-4f5e-86fe-3e0d47525eae",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    },
+    {
+      "match_id": "ff4c8ca8-fe47-435d-92d9-7dc669356dc8",
+      "decision": "RETIRE",
+      "accountant_identity": "rehearsal-test-accountant",
+      "confirmation_timestamp": "2026-08-17T17:01:16Z",
+      "note": "REHEARSAL test choice (committed test-decisions list)"
+    }
+  ]
+}
