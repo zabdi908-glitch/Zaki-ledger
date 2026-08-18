@@ -1,5 +1,12 @@
 import { formatMoney } from "./currency";
 import {
+  AMOUNT_SCORE,
+  DATE_CLOSE_SCORE,
+  DATE_PENDING_SCORE,
+  MERCHANT_HIGH_SCORE,
+  MERCHANT_MEDIUM_SCORE,
+} from "./reconciliation-matching";
+import {
   detectDuplicates,
   detectMerchantLinks,
   detectRefunds,
@@ -54,17 +61,18 @@ const FACTOR_PHRASES: Record<string, string> = {
   "merchant (partial)": "merchant partially matches",
 };
 
-/** e.g. "amount + date + merchant" -> "Amount, date, and merchant all match." */
+/** e.g. "amount + date + merchant (partial)" -> "Amount matches, date matches,
+ * and merchant partially matches." Every factor is stated at the strength the
+ * engine actually credited it — a partial merchant match must never read as a
+ * full match (hardening invariant H). */
 export function plainEnglishReason(match: ReconciliationMatch): string {
   if (!match.qbTransactionId || !match.matchReason) {
     return "No accounting entry matches this transaction closely enough to suggest one.";
   }
   const parts = match.matchReason.split(" + ").map((p) => FACTOR_PHRASES[p] ?? p);
-  const nouns = parts.map((p) => p.replace(/ matches?( \(.*\))?$/, (m) => m).split(" ")[0]);
   if (parts.length === 1) return `${capitalize(parts[0])}.`;
-  if (parts.length === 2) return `${capitalize(nouns[0])} and ${nouns[1]} both match.`;
-  const last = nouns[nouns.length - 1];
-  return `${capitalize(nouns.slice(0, -1).join(", "))}, and ${last} all match.`;
+  if (parts.length === 2) return `${capitalize(parts[0])}, and ${parts[1]}.`;
+  return `${capitalize(parts.slice(0, -1).join(", "))}, and ${parts[parts.length - 1]}.`;
 }
 
 function capitalize(s: string): string {
@@ -163,21 +171,22 @@ export function suggestCategory(
   return { label: "Uncategorised" };
 }
 
-const FACTOR_WEIGHTS: { key: string[]; label: string; max: number }[] = [
-  { key: ["amount"], label: "Amount", max: 40 },
-  { key: ["date", "date (pending)"], label: "Date", max: 35 },
-  { key: ["merchant", "merchant (partial)"], label: "Merchant", max: 25 },
+const FACTOR_WEIGHTS: { key: string; partialKey: string | null; label: string; max: number; partial: number }[] = [
+  { key: "amount", partialKey: null, label: "Amount", max: AMOUNT_SCORE, partial: AMOUNT_SCORE },
+  { key: "date", partialKey: "date (pending)", label: "Date", max: DATE_CLOSE_SCORE, partial: DATE_PENDING_SCORE },
+  { key: "merchant", partialKey: "merchant (partial)", label: "Merchant", max: MERCHANT_HIGH_SCORE, partial: MERCHANT_MEDIUM_SCORE },
 ];
 
-/** Mirrors lib/reconciliation-matching.ts's real AMOUNT_SCORE/DATE_CLOSE_SCORE/
- * MERCHANT_HIGH_SCORE weights (40/35/25) so the panel's breakdown is the
- * engine's actual math, not invented numbers. */
+/** Mirrors lib/reconciliation-matching.ts's real weights (40/35/25) AND the
+ * engine's partial credits (15 for a pending date, 10 for a partial merchant)
+ * so the panel's breakdown sums to the actual confidence — the engine's math,
+ * not invented numbers (hardening invariant H). */
 export function factorBreakdown(match: ReconciliationMatch): { label: string; score: number; max: number }[] {
   const reasons = (match.matchReason ?? "").split(" + ");
-  return FACTOR_WEIGHTS.map(({ key, label, max }) => ({
+  return FACTOR_WEIGHTS.map(({ key, partialKey, label, max, partial }) => ({
     label,
     max,
-    score: key.some((k) => reasons.includes(k)) ? max : 0,
+    score: reasons.includes(key) ? max : partialKey && reasons.includes(partialKey) ? partial : 0,
   }));
 }
 

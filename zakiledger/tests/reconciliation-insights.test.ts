@@ -55,6 +55,10 @@ function match(overrides: Partial<ReconciliationMatch> = {}): ReconciliationMatc
     approvedBy: null,
     approvedAt: null,
     auditMemo: null,
+    supersededAt: null,
+    supersededByMatchId: null,
+    supersedeReason: null,
+    supersedeOperationId: null,
     ...overrides,
   };
 }
@@ -362,6 +366,11 @@ describe("buildReviewRows cost on a full statement", () => {
     const matches = bankTransactions.map((b, i) =>
       match({ id: `m${i}`, bankTransactionId: b.id, qbTransactionId: `q${i}` }),
     );
+    // Measure steady-state application work, not one-time V8 parse/JIT cost.
+    // An explicit full-size warm-up makes this test deterministic when run
+    // alone as well as after the preceding functional cases. The 600 ms
+    // production budget itself remains unchanged.
+    buildReviewRows({ bankTransactions, qbTransactions, matches });
     const started = performance.now();
     buildReviewRows({ bankTransactions, qbTransactions, matches });
     // The per-row scans this replaced made the same input take seconds, which

@@ -8,6 +8,7 @@ function match(id: string, bankId: string): ReconciliationMatch {
     confidence: 0.98, matchReason: "amount + date + merchant", flaggedLevel: "green",
     matchedBy: "auto", matchedAt: "2026-08-01T00:00:00Z", approvedBy: null, approvedAt: null,
     auditMemo: null,
+    supersededAt: null, supersededByMatchId: null, supersedeReason: null, supersedeOperationId: null,
   };
 }
 

@@ -19,8 +19,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const detectMock = vi.fn();
 const resolveTenantMock = vi.fn();
 
+// The 013 claim-guard capability is out of scope for this compatibility
+// matrix (its own suite covers the probe contract); pin it to pre-013 so the
+// store takes the legacy write branches this file records.
 vi.mock("../lib/reconciliation-schema-capability", () => ({
   detectReconciliationSchemaCapability: (...args: unknown[]) => detectMock(...args),
+  detectReconciliationClaimGuardCapability: async () => ({ version: "pre-013" }),
 }));
 
 vi.mock("../lib/tenant-context", () => ({

@@ -125,7 +125,7 @@ export function sampleForeignCurrencyReceiptExtraction(): InvoiceExtraction {
     supplierName: s("Shinjuku Station Kiosk", 0.93),
     invoiceNumber: s("T-5521", 0.87),
     invoiceDate: s("2026-07-19", 0.94),
-    currency: s("JPY", 0.96, "read correctly — we just can't post it"), // read correctly — we just can't post it
+    currency: s("ZZZ", 0.96, "read correctly — not a supported currency code"),
     subtotal: n(3400, 0.93),
     tax: n(340, 0.9),
     total: n(3740, 0.95),

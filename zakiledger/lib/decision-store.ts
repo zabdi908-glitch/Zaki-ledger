@@ -1,3 +1,4 @@
+import { assertReconciliationWritesNotFrozen } from "./reconciliation-freeze";
 import { getSupabase } from "./supabase";
 
 /**
@@ -94,6 +95,10 @@ export async function recordDecision(
   clientEntityId: string | null,
   d: DecisionInput,
 ): Promise<void> {
+  // Freeze guard FIRST — before any DB or in-memory mutation. Freeze ON means
+  // zero reconciliation-spine writes on any schema, from any caller.
+  assertReconciliationWritesNotFrozen();
+
   const db = getSupabase();
   if (!db) {
     mem.decisions.push({
@@ -144,6 +149,9 @@ export async function listDecisionsForStatement(userId: string, statementId: str
 // --- Merchant preferences -----------------------------------------------
 
 export async function bumpMerchantPreference(userId: string, merchantName: string, category: string): Promise<void> {
+  // Freeze guard FIRST — before any DB or in-memory mutation.
+  assertReconciliationWritesNotFrozen();
+
   const key = normalizeMerchant(merchantName);
   const nowIso = new Date().toISOString();
   const db = getSupabase();
@@ -191,6 +199,9 @@ export async function bumpMerchantPreference(userId: string, merchantName: strin
 }
 
 export async function setMerchantDefault(userId: string, merchantName: string, category: string): Promise<void> {
+  // Freeze guard FIRST — before any DB or in-memory mutation.
+  assertReconciliationWritesNotFrozen();
+
   const key = normalizeMerchant(merchantName);
   const nowIso = new Date().toISOString();
   const db = getSupabase();

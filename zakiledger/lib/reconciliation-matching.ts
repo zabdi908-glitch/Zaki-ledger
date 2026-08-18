@@ -1,6 +1,7 @@
 import type {
   BankTransaction,
   FlaggedLevel,
+  MatchedBy,
   MatchResult,
   ProposedMatch,
   QbTransaction,
@@ -43,6 +44,66 @@ export const MERCHANT_MEDIUM_SCORE = 10;
  * 95%+ auto-match, 70-95% review, below 70% manual review. */
 export const GREEN_MIN_SCORE = 95;
 export const YELLOW_MIN_SCORE = 70;
+
+/**
+ * Deterministic supersession rule (defect D2). An unapproved auto suggestion
+ * is superseded only when a later auto candidate for the same QB row scores
+ * at least SUPERSEDE_MIN_NEW_SCORE and beats the holder by at least
+ * SUPERSEDE_MIN_DELTA points. Pure constants — no model judgment anywhere in
+ * the transition. The SQL in migration 013 (persist_auto_matches_v1) mirrors
+ * these numbers exactly; keep them in lock-step (see
+ * tests/reconciliation-supersession-rule.test.ts).
+ */
+export const SUPERSEDE_MIN_NEW_SCORE = GREEN_MIN_SCORE;
+export const SUPERSEDE_MIN_DELTA = 20;
+
+/** Confidence (0-1, possibly null) to integer score points, rounded — the
+ * same expression the SQL side uses (round(confidence * 100)). */
+export function supersedeScoreFor(confidence: number | null): number {
+  return confidence === null || confidence === undefined
+    ? 0
+    : Math.round(confidence * 100);
+}
+
+/** One live match row as far as the claim rules are concerned. */
+export interface ClaimRowView {
+  matchedBy: MatchedBy;
+  approvedAt: string | null;
+  confidence: number | null;
+}
+
+/**
+ * Does a live match row reserve its QB row against new automatic claims?
+ *   - approved rows: always (invariant B — accountant decision);
+ *   - manual rows: always (a human decision outranks the engine);
+ *   - auto rows: only when green (score >= 95). Sub-green unapproved auto
+ *     suggestions stay re-scorable so weak evidence can never permanently
+ *     block materially stronger evidence (D2).
+ */
+export function reservesQbClaim(row: ClaimRowView): boolean {
+  if (row.approvedAt !== null) return true;
+  if (row.matchedBy === "manual") return true;
+  return supersedeScoreFor(row.confidence) >= GREEN_MIN_SCORE;
+}
+
+/**
+ * May a new auto candidate (score `newScore`) supersede an existing live
+ * unapproved auto suggestion? Deterministic: old must be an unapproved auto
+ * row, the new score must be auto-approve-grade, and the improvement must be
+ * at least SUPERSEDE_MIN_DELTA points. Equal candidates never supersede —
+ * the first claim wins.
+ */
+export function shouldSupersedeAutoMatch(
+  old: ClaimRowView,
+  newScore: number,
+): boolean {
+  if (old.matchedBy !== "auto" || old.approvedAt !== null) return false;
+  const oldScore = supersedeScoreFor(old.confidence);
+  return (
+    newScore >= SUPERSEDE_MIN_NEW_SCORE &&
+    newScore - oldScore >= SUPERSEDE_MIN_DELTA
+  );
+}
 
 function normalizeMerchantTokens(s: string): string[] {
   return s
@@ -125,6 +186,16 @@ export function scorePair(bank: BankTransaction, qb: QbTransaction): { score: nu
 }
 
 /**
+ * A candidate needs at least one amount or merchant signal. Date proximity
+ * alone is not evidence of an accounting match — without this floor, any QB
+ * row posted in the same week as a bank row becomes a junk red "match"
+ * (hardening invariant E; the live 4FB smoke rows exposed exactly this).
+ */
+function hasEvidenceSignal(reasons: string[]): boolean {
+  return reasons.includes("amount") || reasons.includes("merchant") || reasons.includes("merchant (partial)");
+}
+
+/**
  * Match every bank transaction against every QB transaction and return the
  * best assignment. Candidates are scored independently, then claimed
  * greedily highest-score-first — this is what makes duplicate QB entries
@@ -133,6 +204,11 @@ export function scorePair(bank: BankTransaction, qb: QbTransaction): { score: nu
  * second bank transaction competing for the same row falls through to its
  * next-best (unclaimed) candidate, or to unmatched if none remain, rather
  * than both silently claiming the same QB transaction.
+ *
+ * Strongest-evidence-first is deliberate, NOT maximum-weight bipartite
+ * matching (hardening invariant C): max-weight would sacrifice a 100-point
+ * pair to unlock two weaker pairs, which is the opposite of accounting
+ * safety. Fewer, stronger matches beat more, weaker matches.
  */
 export function matchTransactions(bankTxns: BankTransaction[], qbTxns: QbTransaction[]): MatchResult {
   interface Candidate {
@@ -146,11 +222,15 @@ export function matchTransactions(bankTxns: BankTransaction[], qbTxns: QbTransac
   for (const bank of bankTxns) {
     for (const qb of qbTxns) {
       const { score, reasons } = scorePair(bank, qb);
-      if (score > 0) candidates.push({ bankId: bank.id, qbId: qb.id, score, reason: reasons.join(" + ") });
+      if (score > 0 && hasEvidenceSignal(reasons)) {
+        candidates.push({ bankId: bank.id, qbId: qb.id, score, reason: reasons.join(" + ") });
+      }
     }
   }
 
-  candidates.sort((a, b) => b.score - a.score);
+  // Full deterministic order: score desc, then bank id, then qb id — the
+  // assignment must not depend on bank input order (hardening invariant D).
+  candidates.sort((a, b) => b.score - a.score || a.bankId.localeCompare(b.bankId) || a.qbId.localeCompare(b.qbId));
 
   const matchedBankIds = new Set<string>();
   const claimedQbIds = new Set<string>();
