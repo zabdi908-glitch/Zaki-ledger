@@ -15,7 +15,11 @@ import {
   type PendingDocument,
   type PendingOutcome,
 } from "./store";
-import { postApprovedBill } from "./accounting";
+import {
+  postApprovedBill,
+  type ApprovedBillPostingRequest,
+} from "./accounting";
+import type { PostingState } from "./posting-contract";
 import { formatMoney, isSupportedCurrency, unsupportedCurrencyReason } from "./currency";
 
 /**
@@ -61,6 +65,8 @@ export interface BulkItemResult {
   /** The draft bill it posted as, when a platform is connected. */
   billId?: string | null;
   billPlatform?: string | null;
+  postingOperationId?: string | null;
+  postingState?: PostingState | "DENIED";
 }
 
 export interface BulkApproveSummary {
@@ -106,7 +112,11 @@ function identityOf(doc: PendingDocument) {
  * throwing is reserved for genuinely unexpected failures, which `bulkApprove`
  * catches and turns into an error result.
  */
-async function approveOne(userId: string, doc: PendingDocument): Promise<BulkItemResult> {
+async function approveOne(
+  userId: string,
+  doc: PendingDocument,
+  posting?: ApprovedBillPostingRequest,
+): Promise<BulkItemResult> {
   const id = identityOf(doc);
   const x = doc.extraction;
   const documentType = id.documentType;
@@ -199,29 +209,35 @@ async function approveOne(userId: string, doc: PendingDocument): Promise<BulkIte
     });
   }
 
-  // Post to whichever platform is connected. A failure here does NOT undo the
-  // approval (the ledger entry and its confirmations stand, same as the single
-  // approve route) — but bulk reports it as an error rather than burying it,
-  // because nobody is reading a success message per document.
+  // Posting is optional and always destination-explicit. Absence means local
+  // approval only; it must never trigger OAuth lookup or provider selection.
   try {
-    const posted = await postApprovedBill(userId, {
-      documentType,
-      supplierName: id.merchantName,
-      invoiceNumber: invoiceNumber || null,
-      invoiceDate,
-      currency: id.currency,
-      subtotal: Number.isFinite(x.subtotal.value) ? x.subtotal.value : null,
-      tax: Number.isFinite(x.tax.value) ? x.tax.value : null,
-      total: id.total,
-      lineItems: x.lineItems,
-    });
+    const postingResult = posting
+      ? await postApprovedBill(
+          userId,
+          {
+            documentType,
+            supplierName: id.merchantName,
+            invoiceNumber: invoiceNumber || null,
+            invoiceDate,
+            currency: id.currency,
+            subtotal: Number.isFinite(x.subtotal.value) ? x.subtotal.value : null,
+            tax: Number.isFinite(x.tax.value) ? x.tax.value : null,
+            total: id.total,
+            lineItems: x.lineItems,
+          },
+          posting,
+        )
+      : null;
     await resolvePendingDocument(userId, doc.id, { outcome: "approved", invoiceId });
     return {
       ...id,
       status: "approved",
       invoiceId: invoiceId ?? undefined,
-      billId: posted?.billId ?? null,
-      billPlatform: posted?.platform ?? null,
+      billId: null,
+      billPlatform: posting?.destination?.provider ?? null,
+      postingOperationId: postingResult?.operationId ?? null,
+      postingState: postingResult?.state ?? "REVIEW",
     };
   } catch (err) {
     const reason =
@@ -244,7 +260,11 @@ function formatPostedTotals(totals: Record<string, number>): string {
  * Approve a batch of queued documents. Never throws for a per-document problem —
  * every id in, exactly one result out, in the order given.
  */
-export async function bulkApprove(userId: string, documentIds: string[]): Promise<BulkApproveResult> {
+export async function bulkApprove(
+  userId: string,
+  documentIds: string[],
+  postingByDocumentId: Record<string, ApprovedBillPostingRequest> = {},
+): Promise<BulkApproveResult> {
   // A repeated id in one batch would otherwise be approved, then flagged as its
   // own duplicate on the second pass. It's one document; approve it once.
   const ids = [...new Set(documentIds)];
@@ -265,7 +285,19 @@ export async function bulkApprove(userId: string, documentIds: string[]): Promis
         });
         continue;
       }
-      results.push(await approveOne(userId, doc));
+      const posting = postingByDocumentId[documentId];
+      if (posting && posting.sourceDocumentId !== documentId) {
+        results.push({
+          ...identityOf(doc),
+          status: "error",
+          reason: "Posting source does not match the selected document.",
+        });
+        continue;
+      }
+      const effectivePosting = posting
+        ? { ...posting, synthetic: posting.synthetic === true || doc.synthetic }
+        : undefined;
+      results.push(await approveOne(userId, doc, effectivePosting));
     } catch (err) {
       // The isolation guarantee: whatever went wrong with this one document, the
       // rest of the batch still gets processed.
@@ -282,8 +314,9 @@ export async function bulkApprove(userId: string, documentIds: string[]): Promis
   }
 
   const approvedItems = results.filter((r) => r.status === "approved");
+  const postedItems = approvedItems.filter((r) => r.postingState === "SUCCEEDED");
   const postedTotals: Record<string, number> = {};
-  for (const r of approvedItems) {
+  for (const r of postedItems) {
     if (r.total === null) continue;
     postedTotals[r.currency] = (postedTotals[r.currency] ?? 0) + r.total;
   }
@@ -296,7 +329,7 @@ export async function bulkApprove(userId: string, documentIds: string[]): Promis
       errors: results.filter((r) => r.status === "error").length,
       postedTotals,
       postedLabel: formatPostedTotals(postedTotals),
-      approvedWithoutPosting: approvedItems.length > 0 && approvedItems.every((r) => !r.billId),
+      approvedWithoutPosting: approvedItems.length > postedItems.length,
     },
   };
 }

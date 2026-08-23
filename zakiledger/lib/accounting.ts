@@ -1,22 +1,22 @@
+import {
+  createAuthoritativePostingService,
+  type AuthoritativePostingService,
+} from "./authoritative-posting-service";
+import type {
+  AccountTreatment,
+  EvidenceReference,
+  PostingProvider,
+  PostingSubmitResult,
+  TaxTreatment,
+} from "./posting-contract";
 import type { DocumentType, LineItem } from "./schema";
-import { createXeroDraftBill, isXeroConnected } from "./xero";
-import { createQuickBooksBill, isQuickBooksConnected } from "./quickbooks";
 
-/**
- * The bookkeeping side of the app: once an invoice is human-approved, push it as
- * a draft bill to whichever accounting platform the user has connected.
- *
- * A single normalized shape (`ApprovedBill`) is produced by the approve route
- * from the human-approved values, then handed to the connected provider. When no
- * platform is connected (the default demo state), nothing is posted — the
- * approval still succeeds, consistent with the rest of the app running keyless.
- */
+/** Human-approved values used to construct the canonical provider-neutral bill intent. */
 export interface ApprovedBill {
-  /** invoice | receipt — only affects wording on the posted line, not the shape. */
   documentType?: DocumentType;
   supplierName: string;
   invoiceNumber: string | null;
-  invoiceDate: string | null; // ISO date
+  invoiceDate: string | null;
   currency: string | null;
   subtotal: number | null;
   tax: number | null;
@@ -24,10 +24,43 @@ export interface ApprovedBill {
   lineItems: LineItem[];
 }
 
+export interface PostingDestination {
+  practiceId: string;
+  clientEntityId: string;
+  ledgerBookId: string;
+  providerConnectionId: string;
+  provider: PostingProvider;
+  externalOrganisationId: string;
+}
+
 /**
- * Description for a single summary line, e.g. "Receipt R-88213" or, when the
- * document carries no number (common on receipts), just "Imported receipt".
+ * Exact, caller-selected posting context. These identifiers are proposals only:
+ * AuthoritativePostingService revalidates their ownership and eligibility from
+ * canonical tables before it can authorize an operation.
  */
+export interface ApprovedBillPostingRequest {
+  operationId?: string | null;
+  destination: PostingDestination;
+  idempotencyKey: string;
+  sourceDocumentId: string;
+  sourceRevision: string;
+  evidence: EvidenceReference[];
+  accountTreatment: AccountTreatment[];
+  taxTreatment: TaxTreatment[];
+  /** Exact ENSURE_VENDOR child identity disclosed by the parent approval. */
+  vendorChild?: {
+    operationId: string;
+    idempotencyKey: string;
+    authorizedRequestFingerprint: string;
+  } | null;
+  humanApprovalId?: string | null;
+  /** Set for fixtures, generated examples, and any other non-source evidence. */
+  synthetic?: boolean;
+}
+
+type PostingSubmitter = Pick<AuthoritativePostingService, "submit">;
+
+/** Provider-neutral description used only as part of the requested object. */
 export function billLineDescription(bill: ApprovedBill): string {
   const noun = bill.documentType === "receipt" ? "Receipt" : "Invoice";
   return bill.invoiceNumber?.trim()
@@ -35,14 +68,6 @@ export function billLineDescription(bill: ApprovedBill): string {
     : `Imported ${noun.toLowerCase()}`;
 }
 
-/** The platform a bill was posted to, plus its id in that platform. */
-export interface PostedBill {
-  platform: "xero" | "quickbooks";
-  billId: string;
-}
-
-// Currency rules live in lib/currency.ts (dependency-free, so the browser can use
-// them too) and are re-exported here, where callers already look for bill rules.
 export {
   SUPPORTED_CURRENCIES,
   isSupportedCurrency,
@@ -51,17 +76,89 @@ export {
   type SupportedCurrency,
 } from "./currency";
 
+function decimalAmount(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) return "0.00";
+  return value.toFixed(2);
+}
+
+function requirePostingRequest(request: ApprovedBillPostingRequest): void {
+  const destination = request.destination;
+  if (
+    !destination?.practiceId ||
+    !destination.clientEntityId ||
+    !destination.ledgerBookId ||
+    !destination.providerConnectionId ||
+    !destination.externalOrganisationId ||
+    !new Set(["quickbooks", "xero"]).has(destination.provider)
+  ) {
+    throw new Error("An explicit canonical provider destination is required.");
+  }
+  if (!request.sourceDocumentId?.trim() || !request.sourceRevision?.trim()) {
+    throw new Error("A durable source document and revision are required for posting.");
+  }
+  if (!request.idempotencyKey?.trim()) {
+    throw new Error("A scoped posting idempotency key is required.");
+  }
+}
+
 /**
- * Post the approved bill to the connected platform, if any. Xero is preferred
- * when both happen to be connected. Returns null when neither is connected, so
- * the caller can treat "not connected" and "posted" uniformly.
+ * Compatibility façade for legacy approval callers. It only constructs a
+ * provider-neutral intent and submits it to the authoritative service. It does
+ * not inspect oauth_connections, choose a provider, or invoke an adapter.
  */
-export async function postApprovedBill(userId: string, bill: ApprovedBill): Promise<PostedBill | null> {
-  if (await isXeroConnected(userId)) {
-    return { platform: "xero", billId: await createXeroDraftBill(userId, bill) };
-  }
-  if (await isQuickBooksConnected(userId)) {
-    return { platform: "quickbooks", billId: await createQuickBooksBill(userId, bill) };
-  }
-  return null;
+export async function postApprovedBill(
+  userId: string,
+  bill: ApprovedBill,
+  request: ApprovedBillPostingRequest,
+  service?: PostingSubmitter,
+): Promise<PostingSubmitResult> {
+  requirePostingRequest(request);
+  const destination = request.destination;
+  const postingService = service ?? createAuthoritativePostingService();
+
+  return postingService.submit(
+    {
+      ...destination,
+      operationId: request.operationId ?? null,
+      operationKind: "ACCOUNTS_PAYABLE_BILL",
+      externalObjectType: "BILL",
+      action: "CREATE",
+      idempotencyKey: request.idempotencyKey,
+      sourceActionClaim: {
+        sourceKind: "FINANCIAL_DOCUMENT",
+        sourceId: request.sourceDocumentId,
+        sourceRevision: request.sourceRevision,
+        postingSubjectKey: "ACCOUNTS_PAYABLE_BILL",
+      },
+      intentSchemaVersion: "step5.v1",
+      canonicalizationVersion: "step5.v1",
+      validationRuleSetVersion: "step5.v1",
+      requestedObject: {
+        documentType: bill.documentType ?? "invoice",
+        supplierName: bill.supplierName,
+        invoiceNumber: bill.invoiceNumber,
+        invoiceDate: bill.invoiceDate,
+        currency: bill.currency?.trim().toUpperCase() ?? "",
+        amount: decimalAmount(bill.total),
+        subtotal: decimalAmount(bill.subtotal),
+        tax: decimalAmount(bill.tax),
+        lineItems: bill.lineItems,
+        description: billLineDescription(bill),
+        vendorChild: request.vendorChild ?? null,
+        synthetic: request.synthetic === true,
+        liveTarget: true,
+      },
+      evidence: request.evidence,
+      accountTreatment: request.accountTreatment,
+      taxTreatment: request.taxTreatment,
+      expectedMaterialState: {
+        externalObjectType: "BILL",
+        status: destination.provider === "quickbooks" ? "OPEN" : "DRAFT",
+        currency: bill.currency?.trim().toUpperCase() ?? "",
+        amount: decimalAmount(bill.total),
+      },
+      humanApprovalId: request.humanApprovalId ?? null,
+    },
+    { kind: "USER", userId },
+  );
 }

@@ -21,20 +21,6 @@ import type { ResultRow } from "../lib/batch-results";
  * the screen calls, on the same data the screen has.
  */
 
-/** Xero, faked at the module boundary, so "posted" can be checked rather than assumed. */
-const xero = vi.hoisted(() => ({
-  calls: [] as Array<{ supplierName: string; total: number | null }>,
-}));
-
-vi.mock("../lib/xero", () => ({
-  isXeroConfigured: () => true,
-  isXeroConnected: async () => true,
-  createXeroDraftBill: async (_userId: string, bill: any) => {
-    xero.calls.push({ supplierName: bill.supplierName, total: bill.total });
-    return `XERO-BILL-${xero.calls.length}`;
-  },
-}));
-
 /**
  * Demo mode returns one sample per *kind* of document, so five uploaded files
  * would be five copies of the same receipt — and copies two and three would
@@ -242,8 +228,6 @@ describe("five files: 3 clean, 1 flagged, 1 failed", () => {
   it("fixes the flagged one, approves it, batch-approves the rest: 4 approved, 1 failed", async () => {
     const { filenames, flaggedMerchant } = batchFor("main");
     const corrected = `${flaggedMerchant} Ltd`;
-    xero.calls = [];
-
     let rows = await uploadAndBuildRows(filenames);
     const correctionsBefore = ((await (await correctionsRoute()).json()) as any).corrections.length;
 
@@ -274,11 +258,8 @@ describe("five files: 3 clean, 1 flagged, 1 failed", () => {
     expect(tallyLabel(tally(rows))).toBe("4 approved, 1 failed");
     expect(tally(rows)).toMatchObject({ total: 5, approved: 4, failed: 1, flagged: 0, ready: 0 });
 
-    // Four bills actually reached the platform — including the one that was
-    // flagged, carrying the human's corrected merchant, not the smudged read.
-    expect(xero.calls).toHaveLength(4);
-    expect(xero.calls.map((c) => c.supplierName)).toContain(corrected);
-    expect(xero.calls.map((c) => c.supplierName)).not.toContain(flaggedMerchant);
+    // This UI flow records approvals only. Provider posting needs separate,
+    // destination-bound evidence and authorization that demo rows do not carry.
   });
 
   it("leaves nothing behind in the queue — approving here clears the queue entry", async () => {

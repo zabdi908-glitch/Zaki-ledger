@@ -10,7 +10,11 @@ import {
 import { REVIEWABLE_FIELDS, type DocumentType, type InvoiceExtraction, type ReviewableField } from "@/lib/schema";
 import { isSupportedCurrency, unsupportedCurrencyReason } from "@/lib/currency";
 import { effectiveConfidence, gateApproval, gateReasonSummary } from "@/lib/validation";
-import { postApprovedBill, type PostedBill } from "@/lib/accounting";
+import {
+  postApprovedBill,
+  type ApprovedBillPostingRequest,
+} from "@/lib/accounting";
+import type { PostingSubmitResult } from "@/lib/posting-contract";
 import { requireUser } from "@/lib/auth";
 
 /** Parse a human-facing string into a number, or null when it isn't one. */
@@ -33,7 +37,14 @@ export async function POST(req: NextRequest) {
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   try {
-    const { extraction, edited, proceedDuplicate, documentType: overriddenType, documentId } =
+    const {
+      extraction,
+      edited,
+      proceedDuplicate,
+      documentType: overriddenType,
+      documentId,
+      posting,
+    } =
       (await req.json()) as {
         extraction: InvoiceExtraction;
         edited: Record<string, string>;
@@ -47,7 +58,16 @@ export async function POST(req: NextRequest) {
          * bulk queue to be approved a second time.
          */
         documentId?: string;
+        /** Exact canonical destination/evidence proposal; never inferred from OAuth. */
+        posting?: ApprovedBillPostingRequest;
       };
+
+    if (posting && (!documentId || posting.sourceDocumentId !== documentId)) {
+      return NextResponse.json(
+        { error: "Posting requires the exact durable source document being approved." },
+        { status: 400 },
+      );
+    }
 
     // The approved final value for a field: the human's edit if present,
     // otherwise the AI's proposed value.
@@ -61,15 +81,25 @@ export async function POST(req: NextRequest) {
     // the duplicate check below before either has written anything — it's a
     // TOCTOU race, not a UI-only glitch — and both save an invoice and post a
     // real bill to Xero/QuickBooks.
+    let pendingDocument = null;
     if (documentId) {
-      const existing = await getPendingDocument(user.id, documentId);
-      if (existing?.status === "resolved") {
+      pendingDocument = await getPendingDocument(user.id, documentId);
+      if (pendingDocument?.status === "resolved") {
         return NextResponse.json(
           { error: "Already approved — not posted again." },
           { status: 409 },
         );
       }
     }
+    if (posting && !pendingDocument) {
+      return NextResponse.json(
+        { error: "Posting requires a stored source document owned by the current user." },
+        { status: 400 },
+      );
+    }
+    const effectivePosting = posting
+      ? { ...posting, synthetic: posting.synthetic === true || pendingDocument?.synthetic === true }
+      : undefined;
 
     const supplierName = finalOf("supplierName");
     const invoiceNumber = finalOf("invoiceNumber");
@@ -220,29 +250,31 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Post the approved invoice as a draft bill to whichever accounting platform
-    // is connected (Xero ACCPAY / QuickBooks Bill). When neither is connected —
-    // the default demo state — `posted` is null and approval still succeeds.
-    // A failure here shouldn't lose the human's approval, so it's non-fatal: we
-    // report it back rather than throwing.
-    let posted: PostedBill | null = null;
+    // Posting is a separate, explicit proposal. The approval route never chooses
+    // a provider or reads OAuth state; it only calls the compatibility façade,
+    // which submits to AuthoritativePostingService and performs no provider I/O.
+    let postingResult: PostingSubmitResult | null = null;
     let billError: string | undefined;
-    try {
-      posted = await postApprovedBill(user.id, {
-        documentType,
-        supplierName,
-        // A receipt often has no number; the providers already omit the field
-        // rather than sending a blank one.
-        invoiceNumber: invoiceNumber || null,
-        invoiceDate,
-        currency: finalOf("currency"),
-        subtotal: toNumber(finalOf("subtotal")),
-        tax: toNumber(finalOf("tax")),
-        total,
-        lineItems: extraction.lineItems,
-      });
-    } catch (err) {
-      billError = err instanceof Error ? err.message : "Failed to post bill.";
+    if (effectivePosting) {
+      try {
+        postingResult = await postApprovedBill(
+          user.id,
+          {
+            documentType,
+            supplierName,
+            invoiceNumber: invoiceNumber || null,
+            invoiceDate,
+            currency: finalOf("currency"),
+            subtotal: toNumber(finalOf("subtotal")),
+            tax: toNumber(finalOf("tax")),
+            total,
+            lineItems: extraction.lineItems,
+          },
+          effectivePosting,
+        );
+      } catch (err) {
+        billError = err instanceof Error ? err.message : "Failed to submit posting intent.";
+      }
     }
 
     // Clear the queue entry, if this came from one — it's in the ledger now, so it
@@ -270,9 +302,14 @@ export async function POST(req: NextRequest) {
       correctionsRecorded: corrections.length,
       confirmationsRecorded,
       corrections,
-      billId: posted?.billId ?? null,
-      billPlatform: posted?.platform ?? null,
+      // Provider ids are produced only after adapter execution, which is not
+      // implemented in Day 3. Legacy response fields remain null for callers.
+      billId: null,
+      billPlatform: effectivePosting?.destination?.provider ?? null,
       billError: billError ?? null,
+      postingOperationId: postingResult?.operationId ?? null,
+      postingState: postingResult?.state ?? "REVIEW",
+      postingReasonCodes: postingResult?.reasonCodes ?? ["MISSING_EVIDENCE"],
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Approve failed.";

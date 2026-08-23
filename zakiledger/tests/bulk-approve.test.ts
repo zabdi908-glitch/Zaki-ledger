@@ -9,37 +9,7 @@ function n(value: number, confidence: number, reason = "test fixture"): { value:
   return { value, confidence, reason };
 }
 
-/**
- * Bulk approve, driven through the real route handler against the in-memory
- * store, with Xero faked at the module boundary.
- *
- * Faking Xero (rather than leaving it disconnected, as tests/flow.test.ts does)
- * is the point: the headline claim is "3 of these 5 post to Xero and the other
- * two don't", and that can only be proven by watching what actually reached the
- * platform. `xero.calls` is that evidence.
- */
-const xero = vi.hoisted(() => ({
-  connected: true,
-  calls: [] as Array<{ supplierName: string; total: number | null; currency: string | null }>,
-  /** When set, createXeroDraftBill throws for this supplier — the outage case. */
-  failFor: null as string | null,
-}));
-
-vi.mock("../lib/xero", () => ({
-  isXeroConfigured: () => true,
-  isXeroConnected: async () => xero.connected,
-  createXeroDraftBill: async (_userId: string, bill: any) => {
-    if (xero.failFor && bill.supplierName === xero.failFor) {
-      throw new Error("Xero bill creation failed (400): currency not enabled");
-    }
-    xero.calls.push({
-      supplierName: bill.supplierName,
-      total: bill.total,
-      currency: bill.currency,
-    });
-    return `XERO-BILL-${xero.calls.length}`;
-  },
-}));
+/** Bulk approval runs through the real route against the in-memory store. */
 
 const TEST_USER_ID = "test-user";
 
@@ -104,10 +74,9 @@ describe("the mixed batch: 3 clean receipts, 1 low-confidence merchant, 1 bad cu
     expect(body.summary.errors).toBe(1);
   });
 
-  it("totals only what was actually posted", () => {
-    // 63.00 + 153.60 + 99.00 — the blocked and errored documents contribute nothing.
-    expect(body.summary.postedTotals).toEqual({ GBP: 315.6 });
-    expect(body.summary.postedLabel).toBe("£315.60");
+  it("does not report local approvals as provider postings", () => {
+    expect(body.summary.postedTotals).toEqual({});
+    expect(body.summary.postedLabel).toBe("£0.00");
   });
 
   it("reports merchant, total and currency on every item, whatever its outcome", () => {
@@ -136,23 +105,11 @@ describe("the mixed batch: 3 clean receipts, 1 low-confidence merchant, 1 bad cu
     for (const c of SUPPORTED_CURRENCIES) expect(errored[0].reason).toContain(c);
   });
 
-  it("posts exactly the three approved documents to Xero — and nothing else", () => {
-    expect(xero.calls).toHaveLength(3);
-    expect(xero.calls.map((c) => c.supplierName)).toEqual([
-      "Greenway Fuel & Services",
-      "Northgate Hardware",
-      "Mereside Catering",
-    ]);
-    // The two that didn't clear the gate never touched the platform.
-    const posted = xero.calls.map((c) => c.supplierName);
-    expect(posted).not.toContain("The Corner Cafe");
-    expect(posted).not.toContain("Shinjuku Station Kiosk");
-  });
-
-  it("returns the bill id for each approved document", () => {
+  it("keeps provider identity and ids empty without an explicit posting proposal", () => {
     for (const r of body.results.filter((r) => r.status === "approved")) {
-      expect(r.billId).toMatch(/^XERO-BILL-/);
-      expect(r.billPlatform).toBe("xero");
+      expect(r.billId).toBeNull();
+      expect(r.billPlatform).toBeNull();
+      expect(r.postingState).toBe("REVIEW");
       expect(r.invoiceId).toBeTruthy();
     }
   });
@@ -167,11 +124,9 @@ describe("the mixed batch: 3 clean receipts, 1 low-confidence merchant, 1 bad cu
     for (const d of stillQueued) expect(d.lastReason).toBeTruthy();
   });
 
-  it("does not re-post an already-approved document when the batch is resubmitted", async () => {
-    const before = xero.calls.length;
+  it("does not re-approve an already-approved document when the batch is resubmitted", async () => {
     const again = await bulkApproveRequest(ids);
     expect(again.body.summary.approved).toBe(0);
-    expect(xero.calls).toHaveLength(before);
     // The three that already landed report as errors explaining why, not as
     // silent no-ops that would read like the approval had been lost.
     const reasons = again.body.results.map((r) => r.reason ?? "");
@@ -214,57 +169,21 @@ describe("one document's failure never costs the others their approval", () => {
     ]);
   });
 
-  it("keeps going — and keeps the approval — when the platform rejects one bill", async () => {
-    const ids = await queue([
-      {
-        filename: "receipt-brackley-tools.png",
-        extraction: {
-          ...sampleReceiptExtraction(),
-          supplierName: s("Brackley Tools", 0.95),
-          invoiceNumber: s("BT-500", 0.9),
-          invoiceDate: s("2026-07-24", 0.94),
-          subtotal: n(10, 0.95),
-          tax: n(2, 0.92),
-          total: n(12, 0.96),
-        },
+  it("counts approved documents without a posting proposal as not posted", async () => {
+    const sample = sampleReceiptExtraction();
+    const ids = await queue([{
+      filename: "local-only.png",
+      extraction: {
+        ...sample,
+        supplierName: s("Local Only Supplier", 0.97),
+        invoiceNumber: s("LOCAL-ONLY-1", 0.95),
+        invoiceDate: s("2026-08-01", 0.96),
       },
-      {
-        filename: "receipt-lowther-print.png",
-        extraction: {
-          ...sampleReceiptExtraction(),
-          supplierName: s("Lowther Print", 0.95),
-          invoiceNumber: s("LP-900", 0.9),
-          invoiceDate: s("2026-07-25", 0.94),
-          subtotal: n(30, 0.95),
-          tax: n(6, 0.92),
-          total: n(36, 0.96),
-        },
-      },
-    ]);
-
-    xero.failFor = "Brackley Tools";
+    }]);
     const { body } = await bulkApproveRequest(ids);
-    xero.failFor = null;
-
     expect(body.summary.approved).toBe(1);
-    expect(body.summary.errors).toBe(1);
-
-    const failed = body.results[0];
-    expect(failed.status).toBe("error");
-    expect(failed.reason).toContain("posting the bill failed");
-    // The approval itself survived the platform failure — same contract as the
-    // single-document route, which also refuses to lose a human's approval.
-    expect(failed.invoiceId).toBeTruthy();
-
-    expect(body.results[1].status).toBe("approved");
-    expect(body.summary.postedTotals).toEqual({ GBP: 36 });
-  });
-
-  it("counts a document that failed to post as approved-but-not-posted, never as posted", async () => {
-    // Guard on the summary arithmetic: an error must not inflate "Total posted".
-    const posted = xero.calls.map((c) => c.supplierName);
-    expect(posted).not.toContain("Brackley Tools");
-    expect(posted).toContain("Lowther Print");
+    expect(body.summary.postedTotals).toEqual({});
+    expect(body.summary.approvedWithoutPosting).toBe(true);
   });
 });
 

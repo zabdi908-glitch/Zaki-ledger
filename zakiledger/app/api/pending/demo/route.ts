@@ -26,7 +26,7 @@ export async function POST() {
   try {
     const ids: string[] = [];
     for (const { filename, extraction } of sampleBulkBatch()) {
-      ids.push(await savePendingDocument(user.id, { extraction, filename }));
+      ids.push(await savePendingDocument(user.id, { extraction, filename, synthetic: true }));
     }
     return NextResponse.json({ seeded: ids.length, documentIds: ids });
   } catch (err) {

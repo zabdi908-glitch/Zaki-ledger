@@ -87,6 +87,8 @@ export interface PendingDocument {
   lastReason: string | null;
   /** The approved invoice row this became, when it got that far. */
   invoiceId: string | null;
+  /** Durable provenance guard; true rows may never be proposed to a live target. */
+  synthetic: boolean;
 }
 
 // --- In-memory fallback (used only when Supabase isn't configured) ----------
@@ -656,15 +658,19 @@ export async function findDuplicateDocument(
 // --- Pending queue ----------------------------------------------------------
 
 function mapPendingRow(row: Record<string, unknown>): PendingDocument {
+  const extraction = row.extraction as InvoiceExtraction;
   return {
     id: String(row.id),
     createdAt: String(row.created_at),
     filename: (row.filename as string) ?? null,
-    extraction: row.extraction as InvoiceExtraction,
+    extraction,
     status: (row.status as PendingDocument["status"]) ?? "pending",
     lastOutcome: (row.last_outcome as PendingOutcome) ?? null,
     lastReason: (row.last_reason as string) ?? null,
     invoiceId: (row.invoice_id as string) ?? null,
+    synthetic: (extraction as InvoiceExtraction & {
+      __zakiPostingProvenance?: { synthetic?: boolean };
+    }).__zakiPostingProvenance?.synthetic === true,
   };
 }
 
@@ -675,19 +681,26 @@ function mapPendingRow(row: Record<string, unknown>): PendingDocument {
  */
 export async function savePendingDocument(
   userId: string,
-  p: { extraction: InvoiceExtraction; filename?: string | null },
+  p: { extraction: InvoiceExtraction; filename?: string | null; synthetic?: boolean },
 ): Promise<string> {
+  const extraction = p.synthetic === true
+    ? {
+        ...p.extraction,
+        __zakiPostingProvenance: { synthetic: true },
+      } as InvoiceExtraction
+    : p.extraction;
   const db = getSupabase();
   if (!db) {
     const entry: PendingDocument & { userId: string } = {
       id: crypto.randomUUID(),
       createdAt: new Date().toISOString(),
       filename: p.filename ?? null,
-      extraction: p.extraction,
+      extraction,
       status: "pending",
       lastOutcome: null,
       lastReason: null,
       invoiceId: null,
+      synthetic: p.synthetic === true,
       userId,
     };
     memPending.push(entry);
@@ -697,7 +710,7 @@ export async function savePendingDocument(
   const { data, error } = await db
     .from("pending_documents")
     .insert({
-      extraction: p.extraction,
+      extraction,
       filename: p.filename ?? null,
       status: "pending",
       user_id: userId,

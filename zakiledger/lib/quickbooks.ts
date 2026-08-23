@@ -4,7 +4,6 @@ import {
   saveConnection,
   type TokenSet,
 } from "./oauth-store";
-import { billLineDescription, type ApprovedBill } from "./accounting";
 import type { QbTransactionInput } from "./reconciliation-schema";
 
 /**
@@ -159,29 +158,6 @@ export async function quickBooksConnectionStatus(userId: string): Promise<{
   }
 }
 
-/** Escape a value for inclusion in a QuickBooks SQL-like query string. */
-function escapeQuery(value: string): string {
-  return value.replace(/'/g, "\\'");
-}
-
-/** Today as a YYYY-MM-DD string (UTC). */
-function today(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
-/** True when `s` is a date string Date can actually parse (e.g. YYYY-MM-DD). */
-function isParsableDate(s: string | null | undefined): s is string {
-  if (!s || s.trim() === "") return false;
-  return !Number.isNaN(new Date(`${s}T00:00:00Z`).getTime());
-}
-
-/** Add `days` to an ISO date (YYYY-MM-DD), returning a YYYY-MM-DD string. */
-function addDays(isoDate: string, days: number): string {
-  const d = new Date(`${isoDate}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() + days);
-  return d.toISOString().slice(0, 10);
-}
-
 async function qboGet(
   path: string,
   accessToken: string,
@@ -192,63 +168,6 @@ async function qboGet(
   });
   if (!res.ok) throw new Error(`QuickBooks GET ${path} failed (${res.status}): ${await res.text()}`);
   return res.json();
-}
-
-async function qboPost(
-  path: string,
-  accessToken: string,
-  realmId: string,
-  payload: unknown,
-): Promise<Record<string, unknown>> {
-  const res = await fetch(`${apiBase()}/v3/company/${realmId}/${path}?minorversion=65`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
-      Accept: "application/json",
-    },
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok) throw new Error(`QuickBooks POST ${path} failed (${res.status}): ${await res.text()}`);
-  return res.json();
-}
-
-/** Find a vendor by display name, creating one if it doesn't exist. Returns its Id. */
-async function findOrCreateVendor(
-  name: string,
-  accessToken: string,
-  realmId: string,
-): Promise<string> {
-  const query = `select Id from Vendor where DisplayName = '${escapeQuery(name)}'`;
-  const found = (await qboGet(
-    `query?query=${encodeURIComponent(query)}&minorversion=65`,
-    accessToken,
-    realmId,
-  )) as { QueryResponse?: { Vendor?: Array<{ Id: string }> } };
-
-  const existing = found.QueryResponse?.Vendor?.[0]?.Id;
-  if (existing) return existing;
-
-  const created = (await qboPost("vendor", accessToken, realmId, { DisplayName: name })) as {
-    Vendor?: { Id?: string };
-  };
-  const id = created.Vendor?.Id;
-  if (!id) throw new Error("QuickBooks vendor creation returned no id.");
-  return id;
-}
-
-/** The Id of the first Expense-type account — needed for the bill's expense line. */
-async function firstExpenseAccountId(accessToken: string, realmId: string): Promise<string> {
-  const query = "select Id from Account where AccountType = 'Expense' maxresults 1";
-  const found = (await qboGet(
-    `query?query=${encodeURIComponent(query)}&minorversion=65`,
-    accessToken,
-    realmId,
-  )) as { QueryResponse?: { Account?: Array<{ Id: string }> } };
-
-  const id = found.QueryResponse?.Account?.[0]?.Id;
-  if (!id) throw new Error("QuickBooks company has no Expense account to book the bill against.");
-  return id;
 }
 
 /**
@@ -325,56 +244,4 @@ export async function listQuickBooksPurchases(
   }
 
   return results;
-}
-
-/**
- * Post an approved invoice as a QuickBooks Bill and return its Id. A Bill needs
- * a VendorRef (we find/create the vendor by name) and each line needs an
- * AccountRef (we use the first Expense account). Amount = the approved total.
- */
-export async function createQuickBooksBill(userId: string, bill: ApprovedBill): Promise<string> {
-  const access = await getValidQboAccess(userId);
-  if (!access) throw new Error("QuickBooks is not connected.");
-  const { accessToken, realmId } = access;
-
-  const vendorId = await findOrCreateVendor(
-    bill.supplierName || "Unknown supplier",
-    accessToken,
-    realmId,
-  );
-  const accountId = await firstExpenseAccountId(accessToken, realmId);
-
-  const payload: Record<string, unknown> = {
-    VendorRef: { value: vendorId },
-    Line: [
-      {
-        DetailType: "AccountBasedExpenseLineDetail",
-        Amount: bill.total ?? 0,
-        Description: billLineDescription(bill),
-        AccountBasedExpenseLineDetail: { AccountRef: { value: accountId } },
-      },
-    ],
-  };
-  if (bill.invoiceNumber) payload.DocNumber = bill.invoiceNumber;
-
-  // Use the invoice's own date only when it's actually parseable — a missing,
-  // blank, or oddly-formatted value (`??` alone doesn't catch "" or bad formats)
-  // would produce an Invalid Date and make addDays() throw "Invalid time value".
-  // Fall back to today so the bill still posts cleanly.
-  const txnDate = isParsableDate(bill.invoiceDate) ? bill.invoiceDate : today();
-  payload.TxnDate = txnDate;
-  // Intentionally ignore the invoice's original due date / payment terms. If we
-  // pass a due date already in the past (common for invoices dated before today),
-  // QuickBooks immediately marks the bill "Overdue" — which looks wrong in a
-  // review queue, where Xero shows the equivalent bill as a clean "Draft". The
-  // goal here is just getting the bill into the books for a bookkeeper to review,
-  // not preserving payment terms, so we always set DueDate to bill date + 30 days.
-  payload.DueDate = addDays(txnDate, 30);
-
-  const created = (await qboPost("bill", accessToken, realmId, payload)) as {
-    Bill?: { Id?: string };
-  };
-  const id = created.Bill?.Id;
-  if (!id) throw new Error("QuickBooks did not return a bill id.");
-  return id;
 }

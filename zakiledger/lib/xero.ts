@@ -5,7 +5,6 @@ import {
   setConnectionOrgId,
   type TokenSet,
 } from "./oauth-store";
-import { billLineDescription, type ApprovedBill } from "./accounting";
 import type { QbTransactionInput } from "./reconciliation-schema";
 
 /**
@@ -314,63 +313,4 @@ export async function listXeroBankTransactions(
   }
 
   return results;
-}
-
-/**
- * Post an approved invoice as a DRAFT accounts-payable bill (ACCPAY) and return
- * the created bill's InvoiceID. Draft status means Xero accepts an incomplete
- * bill (no account codes required) for a human to finalise inside Xero.
- */
-export async function createXeroDraftBill(userId: string, bill: ApprovedBill): Promise<string> {
-  const access = await getValidXeroAccess(userId);
-  if (!access) throw new Error("Xero is not connected.");
-
-  // Prefer the extracted line items; fall back to a single summary line so the
-  // bill total is always represented even when line items weren't captured.
-  const lineItems =
-    bill.lineItems && bill.lineItems.length > 0
-      ? bill.lineItems.map((li) => ({
-          Description: li.description || "Item",
-          Quantity: li.quantity,
-          UnitAmount: li.unitPrice,
-          LineAmount: li.amount,
-        }))
-      : [
-          {
-            Description: billLineDescription(bill),
-            Quantity: 1,
-            UnitAmount: bill.total ?? 0,
-            LineAmount: bill.total ?? 0,
-          },
-        ];
-
-  const payload: Record<string, unknown> = {
-    Type: "ACCPAY",
-    Status: "DRAFT",
-    Contact: { Name: bill.supplierName || "Unknown supplier" },
-    LineItems: lineItems,
-    LineAmountTypes: "Exclusive",
-  };
-  if (bill.invoiceNumber) payload.InvoiceNumber = bill.invoiceNumber;
-  if (bill.invoiceDate) payload.Date = bill.invoiceDate;
-  if (bill.currency) payload.CurrencyCode = bill.currency;
-
-  const res = await fetch(`${API_BASE}/Invoices`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${access.accessToken}`,
-      "Xero-tenant-id": access.tenantId,
-      "Content-Type": "application/json",
-      Accept: "application/json",
-    },
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok) {
-    throw new Error(`Xero bill creation failed (${res.status}): ${await res.text()}`);
-  }
-
-  const body = (await res.json()) as { Invoices?: Array<{ InvoiceID?: string }> };
-  const id = body.Invoices?.[0]?.InvoiceID;
-  if (!id) throw new Error("Xero did not return a bill id.");
-  return id;
 }

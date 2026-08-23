@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { bulkApprove } from "@/lib/bulk-approve";
+import type { ApprovedBillPostingRequest } from "@/lib/accounting";
 import { requireUser } from "@/lib/auth";
 
 /**
@@ -16,7 +17,10 @@ export async function POST(req: NextRequest) {
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   try {
-    const { documentIds } = (await req.json()) as { documentIds?: unknown };
+    const { documentIds, postingByDocumentId } = (await req.json()) as {
+      documentIds?: unknown;
+      postingByDocumentId?: Record<string, ApprovedBillPostingRequest>;
+    };
 
     if (!Array.isArray(documentIds) || documentIds.some((id) => typeof id !== "string")) {
       return NextResponse.json(
@@ -28,7 +32,21 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "No documents selected." }, { status: 400 });
     }
 
-    const { results, summary } = await bulkApprove(user.id, documentIds as string[]);
+    if (
+      postingByDocumentId !== undefined &&
+      (!postingByDocumentId || Array.isArray(postingByDocumentId) || typeof postingByDocumentId !== "object")
+    ) {
+      return NextResponse.json(
+        { error: "postingByDocumentId must be an object keyed by document id." },
+        { status: 400 },
+      );
+    }
+
+    const { results, summary } = await bulkApprove(
+      user.id,
+      documentIds as string[],
+      postingByDocumentId ?? {},
+    );
     console.log(
       `[bulk-approve] ${documentIds.length} submitted → ${summary.approved} approved, ` +
         `${summary.blocked} blocked, ${summary.errors} error(s), posted ${summary.postedLabel}`,
