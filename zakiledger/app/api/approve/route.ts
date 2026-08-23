@@ -16,6 +16,8 @@ import {
 } from "@/lib/accounting";
 import type { PostingSubmitResult } from "@/lib/posting-contract";
 import { requireUser } from "@/lib/auth";
+import { CanonicalDocumentEvidenceService, canonicalEvidenceContext } from "@/lib/canonical-document-evidence";
+import { getSupabase } from "@/lib/supabase";
 
 /** Parse a human-facing string into a number, or null when it isn't one. */
 function toNumber(s: string): number | null {
@@ -62,9 +64,9 @@ export async function POST(req: NextRequest) {
         posting?: ApprovedBillPostingRequest;
       };
 
-    if (posting && (!documentId || posting.sourceDocumentId !== documentId)) {
+    if (posting && !documentId) {
       return NextResponse.json(
-        { error: "Posting requires the exact durable source document being approved." },
+        { error: "Posting requires the stored document being approved." },
         { status: 400 },
       );
     }
@@ -187,6 +189,41 @@ export async function POST(req: NextRequest) {
         reason: gateReasonSummary(gate, documentType),
         reasons: gate.reasons,
       });
+    }
+
+    // Canonical evidence is the source of truth. The legacy invoice/confirmation
+    // ledger remains for UI learning only and cannot qualify a posting by itself.
+    const db = getSupabase();
+    const canonicalEvidence = (pendingDocument?.extraction as InvoiceExtraction & {
+      __zakiCanonicalEvidence?: { artifactId: string; extractionId: string };
+    } | undefined)?.__zakiCanonicalEvidence;
+    let canonicalDocumentId: string | undefined;
+    if (db) {
+      if (!documentId || !canonicalEvidence) {
+        return NextResponse.json({ error: "Approval requires retained canonical source evidence." }, { status: 409 });
+      }
+      const minor = (value: number | null) => value === null ? null : String(Math.round(value * 100));
+      const confirmedRevision = {
+        obligation_status: "open", resolution_status: "resolved", issuer_name: supplierName,
+        document_number: invoiceNumber || null, document_date: invoiceDate,
+        amount_minor: minor(total), currency_code: finalCurrency, minor_unit_exponent: "2",
+        raw_amount_text: total === null ? null : total.toFixed(2), raw_currency_text: finalCurrency,
+        fields: { subtotal: toNumber(finalOf("subtotal")), tax: toNumber(finalOf("tax")), total },
+      };
+      const context = await canonicalEvidenceContext(user.id);
+      const confirmation = await new CanonicalDocumentEvidenceService(db).confirm({
+        userId: user.id, practiceId: context.practiceId, clientEntityId: context.clientEntityId,
+        ledgerBookId: context.internalLedgerBookId, extractionId: canonicalEvidence.extractionId,
+        idempotencyKey: `pending:${documentId}:approval`, documentKind: documentType,
+        confirmedRevision,
+      });
+      if (confirmation.outcome === "DESTINATION_REJECTED" || confirmation.outcome === "IDEMPOTENCY_CONFLICT" || !confirmation.documentId) {
+        return NextResponse.json({ error: "Canonical evidence confirmation was not accepted." }, { status: 409 });
+      }
+      canonicalDocumentId = confirmation.documentId;
+      if (posting && posting.sourceDocumentId !== canonicalDocumentId) {
+        return NextResponse.json({ error: "Posting must reference the canonical document created by this confirmation." }, { status: 400 });
+      }
     }
 
     // Persist the human-approved document first, so corrections can link to it.

@@ -21,6 +21,8 @@ import {
 } from "./accounting";
 import type { PostingState } from "./posting-contract";
 import { formatMoney, isSupportedCurrency, unsupportedCurrencyReason } from "./currency";
+import { CanonicalDocumentEvidenceService, canonicalEvidenceContext } from "./canonical-document-evidence";
+import { getSupabase } from "./supabase";
 
 /**
  * Bulk approve: run the ordinary approval decision over a batch of queued
@@ -177,6 +179,27 @@ async function approveOne(
       `${new Date(dup.createdAt).toLocaleDateString("en-GB")} — approve it individually to confirm.`;
     await resolvePendingDocument(userId, doc.id, { outcome: "blocked", reason });
     return { ...id, status: "blocked", reason };
+  }
+
+  const db = getSupabase();
+  if (db) {
+    const evidence = (x as InvoiceExtraction & { __zakiCanonicalEvidence?: { extractionId: string } }).__zakiCanonicalEvidence;
+    if (!evidence) return { ...id, status: "error", reason: "Retained canonical source evidence is required." };
+    const context = await canonicalEvidenceContext(userId);
+    const confirmation = await new CanonicalDocumentEvidenceService(db).confirm({
+      userId, practiceId: context.practiceId, clientEntityId: context.clientEntityId, ledgerBookId: context.internalLedgerBookId,
+      extractionId: evidence.extractionId, idempotencyKey: `pending:${doc.id}:bulk-approval`, documentKind: documentType,
+      confirmedRevision: { obligation_status: "open", resolution_status: "resolved", issuer_name: id.merchantName,
+        document_number: invoiceNumber || null, document_date: invoiceDate, amount_minor: id.total === null ? null : String(Math.round(id.total * 100)),
+        currency_code: id.currency, minor_unit_exponent: "2", raw_amount_text: id.total === null ? null : id.total.toFixed(2), raw_currency_text: id.currency,
+        fields: { subtotal: x.subtotal.value, tax: x.tax.value, total: id.total } },
+    });
+    if (confirmation.outcome === "DESTINATION_REJECTED" || confirmation.outcome === "IDEMPOTENCY_CONFLICT") {
+      return { ...id, status: "error", reason: "Canonical evidence confirmation was not accepted." };
+    }
+    if (posting && posting.sourceDocumentId !== confirmation.documentId) {
+      return { ...id, status: "error", reason: "Posting must reference the canonical document created by this confirmation." };
+    }
   }
 
   // --- Committed from here: it clears the gate, so it enters the ledger. ---

@@ -722,6 +722,30 @@ export async function savePendingDocument(
   return (data as { id: string }).id;
 }
 
+/** Attach the immutable canonical extraction identity to the legacy UI queue.
+ * The queue remains a convenience view; the canonical ID is the only eligible
+ * source identity for a future posting intent. */
+export async function attachCanonicalEvidenceToPendingDocument(
+  userId: string,
+  id: string,
+  evidence: { artifactId: string; extractionId: string },
+): Promise<void> {
+  const pending = await getPendingDocument(userId, id);
+  if (!pending) throw new Error("Pending document is absent or not owned by the current user.");
+  const extraction = {
+    ...pending.extraction,
+    __zakiCanonicalEvidence: evidence,
+  } as InvoiceExtraction;
+  const db = getSupabase();
+  if (!db) {
+    const entry = memPending.find((row) => row.id === id && row.userId === userId);
+    if (entry) entry.extraction = extraction;
+    return;
+  }
+  const { error } = await db.from("pending_documents").update({ extraction }).eq("id", id).eq("user_id", userId).eq("status", "pending");
+  if (error) throw new Error(`Failed to attach canonical evidence: ${error.message}`);
+}
+
 /**
  * The queue, oldest first — a work queue reads FIFO. Resolved documents drop out;
  * blocked and errored ones stay, because they still need a human. Scoped to

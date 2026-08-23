@@ -2,7 +2,10 @@ import { extractDocument } from "./openai";
 import { extractDocumentEscalation } from "./anthropic";
 import { buildHints } from "./learning";
 import { arithmeticMismatch, REVIEWABLE_FIELDS, type InvoiceExtraction } from "./schema";
-import { confirmationStatsForSupplier, findDuplicateDocument, savePendingDocument } from "./store";
+import { attachCanonicalEvidenceToPendingDocument, confirmationStatsForSupplier, findDuplicateDocument, savePendingDocument } from "./store";
+import { CanonicalDocumentEvidenceService, canonicalEvidenceContext } from "./canonical-document-evidence";
+import { getSupabase } from "./supabase";
+import { createHash } from "crypto";
 import { calibrateConfidence, FLOOR_MIN_CONFIRMATIONS } from "./calibration";
 import { isDemoUnreadable, sampleForFilename } from "./demo";
 
@@ -220,11 +223,41 @@ export async function extractOneDocument(userId: string, file: File): Promise<Ex
   let queueError: string | null = null;
   try {
     documentId = await savePendingDocument(userId, { extraction, filename: file.name ?? null });
+    // A queue row is only a UI convenience. On a configured database, retain
+    // the immutable upload and link its extraction before returning success.
+    const db = getSupabase();
+    if (db && documentId) {
+      const bytes = Buffer.from(await file.arrayBuffer());
+      const digest = createHash("sha256").update(bytes).digest("hex");
+      const context = await canonicalEvidenceContext(userId);
+      const locator = `${context.clientEntityId}/${digest}-${bytes.length}`;
+      const upload = await db.storage.from("document-evidence").upload(locator, bytes, {
+        contentType: file.type || "application/octet-stream", upsert: false,
+      });
+      if (upload.error && !/already exists/i.test(upload.error.message)) {
+        throw new Error(`Failed to retain uploaded source: ${upload.error.message}`);
+      }
+      const retained = await new CanonicalDocumentEvidenceService(db).retainExtraction({
+        userId, practiceId: context.practiceId, clientEntityId: context.clientEntityId,
+        ledgerBookId: context.internalLedgerBookId, bytes, storageLocator: locator,
+        filename: file.name ?? null, mimeType: file.type || "application/octet-stream", extraction,
+        extractorName: demo ? "zaki-demo" : "zaki-extraction", extractorVersion: "eyes-memory-v1",
+      });
+      if (retained.outcome !== "CREATED" || !retained.artifactId || !retained.extractionId) {
+        throw new Error("Canonical evidence retention was rejected.");
+      }
+      await attachCanonicalEvidenceToPendingDocument(userId, documentId, {
+        artifactId: retained.artifactId, extractionId: retained.extractionId,
+      });
+    }
   } catch (err) {
     queueError = err instanceof Error ? err.message : String(err);
     console.error(
       `[pending-queue] could not queue this document (bulk approve unavailable): ${queueError}`,
     );
+    // In a canonical deployment, returning a reviewable document without its
+    // retained immutable source would recreate the posting-evidence bypass.
+    if (getSupabase()) throw err;
   }
 
   return {
