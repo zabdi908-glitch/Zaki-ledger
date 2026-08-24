@@ -334,7 +334,7 @@ describe("safe QuickBooks ENSURE_VENDOR execution", () => {
     const billPreparation = readFileSync(
       join(process.cwd(), "..", "supabase", "migrations", "016_quickbooks_bill_execution.sql"), "utf8");
     const vendorMigration = readFileSync(
-      join(process.cwd(), "..", "supabase", "migrations", "019_quickbooks_vendor_execution.sql"), "utf8");
+      join(process.cwd(), "..", "supabase", "migrations", "023_quickbooks_vendor_execution.sql"), "utf8");
     expect(billPreparation).toContain("v_child.current_state <> 'SUCCEEDED'");
     expect(billPreparation).toContain("VENDOR_CHILD_UNRESOLVED");
     expect(vendorMigration).toContain("QUICKBOOKS_VENDOR_READ_ONLY_RECOVERY");
