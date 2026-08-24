@@ -27,6 +27,11 @@ import {
   SupabaseQuickBooksExecutionStore,
 } from "./quickbooks-execution-store";
 import {
+  type QuickBooksVendorExecutionStore,
+  SupabaseQuickBooksVendorExecutionStore,
+  type VendorExecutionResult,
+} from "./quickbooks-vendor-execution-store";
+import {
   expectedQuickBooksBillMaterial,
   normalizedQuickBooksBillMaterial,
   quickBooksProviderStateFingerprint,
@@ -35,6 +40,13 @@ import {
   type QuickBooksPostingAdapter,
   type QuickBooksRecoveryOutcome,
 } from "./provider-adapters/quickbooks-posting-adapter";
+import {
+  expectedQuickBooksVendorMaterial,
+  normalizedQuickBooksVendorMaterial,
+  quickBooksVendorProviderStateFingerprint,
+  type QuickBooksVendorPostingAdapter,
+  type QuickBooksVendorRecoveryGrant,
+} from "./provider-adapters/quickbooks-vendor-posting-adapter";
 
 const PASSIVE_RETRY_STATES = new Set<PostingState>([
   "AUTHORIZED",
@@ -71,6 +83,7 @@ export class AuthoritativePostingService {
     private readonly coreSafetyGate = new CorePostingSafetyGate(),
     private readonly permissionGate = new Step5DeterministicPermissionGate(),
     private readonly executionStore?: QuickBooksExecutionStore,
+    private readonly vendorExecutionStore?: QuickBooksVendorExecutionStore,
   ) {}
 
   async submit(intentInput: PostingIntent, actor: PostingActor): Promise<PostingSubmitResult> {
@@ -286,6 +299,69 @@ export class AuthoritativePostingService {
     );
   }
 
+  /**
+   * Executes only an already-authorized ENSURE_VENDOR child. It is deliberately
+   * separate from Bill execution so a Bill can never create a Vendor implicitly.
+   */
+  async executeQuickBooksVendor(
+    operationId: string,
+    actor: PostingActor,
+    adapter: QuickBooksVendorPostingAdapter,
+  ): Promise<VendorExecutionResult> {
+    const executionStore = this.vendorExecutionStore;
+    if (!executionStore) throw new Error("QuickBooks Vendor execution store is not configured");
+    const prepared = await executionStore.prepareQuickBooksVendorSubmission(operationId, actor);
+    if (prepared.kind === "SUCCEEDED") {
+      return {
+        operationId,
+        state: "SUCCEEDED",
+        externalVendorId: prepared.externalVendorId,
+        reasonCodes: ["EXACT_RETRY_EXISTING_SUCCESS"],
+        resumed: true,
+        recovered: false,
+      };
+    }
+    if (prepared.kind === "BLOCKED" || prepared.kind === "DENIED") {
+      return {
+        operationId,
+        state: prepared.state,
+        externalVendorId: null,
+        reasonCodes: [prepared.reasonCode],
+        resumed: true,
+        recovered: false,
+      };
+    }
+    if (prepared.kind === "RECOVERY_REQUIRED") {
+      return this.recoverQuickBooksVendor(operationId, actor, adapter, executionStore);
+    }
+    const grant = prepared.grant;
+    const submission = await adapter.executeAuthorizedVendor(grant);
+    if (submission.kind === "FAILED_SAFE" || submission.kind === "UNCERTAIN") {
+      return executionStore.recordQuickBooksVendorFailure(
+        operationId,
+        grant.attempt.id,
+        submission.kind,
+        submission.failure,
+      );
+    }
+    // Persist the acknowledgement before read-back. A crash here leaves the
+    // durable state SUBMITTING and its exact retry enters read-only recovery.
+    await executionStore.recordQuickBooksVendorAcknowledged(
+      operationId,
+      grant.attempt.id,
+      submission.externalVendorId,
+      submission.providerRequestId,
+    );
+    const observation = await adapter.readBack(grant, submission.externalVendorId);
+    return this.finishQuickBooksVendorVerification(
+      grant,
+      grant.attempt.id,
+      observation,
+      executionStore,
+      false,
+    );
+  }
+
   private async recoverQuickBooksBill(
     operationId: string,
     actor: PostingActor,
@@ -315,6 +391,43 @@ export class AuthoritativePostingService {
     }
     const observation = await adapter.recover(recovery.grant);
     return this.finishQuickBooksVerification(
+      recovery.grant,
+      recovery.grant.attempt.id,
+      observation,
+      executionStore,
+      true,
+    );
+  }
+
+  private async recoverQuickBooksVendor(
+    operationId: string,
+    actor: PostingActor,
+    adapter: QuickBooksVendorPostingAdapter,
+    executionStore: QuickBooksVendorExecutionStore,
+  ): Promise<VendorExecutionResult> {
+    const recovery = await executionStore.beginQuickBooksVendorRecovery(operationId, actor);
+    if (recovery.kind === "SUCCEEDED") {
+      return {
+        operationId,
+        state: "SUCCEEDED",
+        externalVendorId: recovery.externalVendorId,
+        reasonCodes: ["EXACT_RETRY_EXISTING_SUCCESS"],
+        resumed: true,
+        recovered: true,
+      };
+    }
+    if (recovery.kind === "BLOCKED") {
+      return {
+        operationId,
+        state: recovery.state,
+        externalVendorId: null,
+        reasonCodes: [recovery.reasonCode],
+        resumed: true,
+        recovered: true,
+      };
+    }
+    const observation = await adapter.recover(recovery.grant);
+    return this.finishQuickBooksVendorVerification(
       recovery.grant,
       recovery.grant.attempt.id,
       observation,
@@ -362,6 +475,44 @@ export class AuthoritativePostingService {
     });
   }
 
+  private finishQuickBooksVendorVerification(
+    grant: QuickBooksVendorRecoveryGrant | Parameters<QuickBooksVendorPostingAdapter["executeAuthorizedVendor"]>[0],
+    attemptId: string,
+    outcome: Awaited<ReturnType<QuickBooksVendorPostingAdapter["readBack"]>>,
+    executionStore: QuickBooksVendorExecutionStore,
+    recovered: boolean,
+  ): Promise<VendorExecutionResult> {
+    if (outcome.kind === "INCONCLUSIVE") {
+      return executionStore.recordQuickBooksVendorObservation({
+        operationId: grant.operation.id,
+        attemptId,
+        externalVendorId: "knownExternalVendorId" in grant ? grant.knownExternalVendorId : null,
+        providerVersion: null,
+        providerStateFingerprint: null,
+        normalizedProviderState: null,
+        comparisonOutcome: "INCONCLUSIVE",
+        reasonCode: outcome.reasonCode,
+      });
+    }
+    const observed = outcome.observation;
+    const normalized = normalizedQuickBooksVendorMaterial(observed);
+    const expected = expectedQuickBooksVendorMaterial(grant);
+    const matches = observed.realmId === grant.operation.externalOrganisationId &&
+      canonicalJson(normalized) === canonicalJson(expected);
+    return executionStore.recordQuickBooksVendorObservation({
+      operationId: grant.operation.id,
+      attemptId,
+      externalVendorId: observed.id,
+      providerVersion: observed.providerVersion,
+      providerStateFingerprint: quickBooksVendorProviderStateFingerprint(observed),
+      normalizedProviderState: normalized,
+      comparisonOutcome: matches ? "MATCH" : "MISMATCH",
+      reasonCode: matches
+        ? (recovered ? "QUICKBOOKS_VENDOR_RECOVERED_AND_VERIFIED" : "QUICKBOOKS_VENDOR_VERIFIED")
+        : "QUICKBOOKS_VENDOR_MATERIAL_MISMATCH",
+    });
+  }
+
   private move(
     operation: PostingOperation,
     toState: PostingState,
@@ -381,5 +532,6 @@ export function createAuthoritativePostingService(): AuthoritativePostingService
     new CorePostingSafetyGate(),
     new Step5DeterministicPermissionGate(),
     new SupabaseQuickBooksExecutionStore(db),
+    new SupabaseQuickBooksVendorExecutionStore(db),
   );
 }
