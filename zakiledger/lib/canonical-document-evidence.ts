@@ -10,6 +10,31 @@ export interface CanonicalEvidenceStore {
   rpc(name: string, input: Record<string, unknown>): PromiseLike<{ data: unknown; error: { message: string } | null }>;
 }
 
+function optionalId(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+/** Supabase RPC JSON uses the database's snake_case keys; keep the app-facing
+ * contract camelCase so callers cannot mistake a successful retention for a
+ * rejected one merely because the transport shape changed. */
+function normalizeEvidenceIngestResult(data: unknown): EvidenceIngestResult {
+  const row = (data && typeof data === "object" ? data : {}) as Record<string, unknown>;
+  return {
+    outcome: row.outcome as EvidenceIngestResult["outcome"],
+    artifactId: optionalId(row.artifact_id) ?? optionalId(row.artifactId),
+    extractionId: optionalId(row.extraction_id) ?? optionalId(row.extractionId),
+  };
+}
+
+function normalizeEvidenceConfirmationResult(data: unknown): EvidenceConfirmationResult {
+  const row = (data && typeof data === "object" ? data : {}) as Record<string, unknown>;
+  return {
+    outcome: row.outcome as EvidenceConfirmationResult["outcome"],
+    documentId: optionalId(row.document_id) ?? optionalId(row.documentId),
+    revisionId: optionalId(row.revision_id) ?? optionalId(row.revisionId),
+  };
+}
+
 /** The single route-facing bridge from uploaded bytes to immutable canonical evidence. */
 export class CanonicalDocumentEvidenceService {
   constructor(private readonly store: CanonicalEvidenceStore) {}
@@ -25,7 +50,7 @@ export class CanonicalDocumentEvidenceService {
       p_extractor_name: input.extractorName, p_extractor_version: input.extractorVersion,
     });
     if (error) throw new Error(`Canonical evidence retention failed: ${error.message}`);
-    return data as EvidenceIngestResult;
+    return normalizeEvidenceIngestResult(data);
   }
 
   async confirm(input: { userId: string; practiceId: string; clientEntityId: string; ledgerBookId: string; pendingDocumentId: string; extractionId: string; idempotencyKey: string; documentKind: string; confirmedRevision: Record<string, unknown> }): Promise<EvidenceConfirmationResult> {
@@ -36,7 +61,7 @@ export class CanonicalDocumentEvidenceService {
       p_confirmed_fingerprint_hex: fingerprint, p_document_kind: input.documentKind, p_confirmed_revision: input.confirmedRevision,
     });
     if (error) throw new Error(`Canonical evidence confirmation failed: ${error.message}`);
-    return data as EvidenceConfirmationResult;
+    return normalizeEvidenceConfirmationResult(data);
   }
 }
 

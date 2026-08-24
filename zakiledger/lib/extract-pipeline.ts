@@ -221,6 +221,7 @@ export async function extractOneDocument(userId: string, file: File): Promise<Ex
   // travels back so the UI can say what happened.
   let documentId: string | null = null;
   let queueError: string | null = null;
+  let evidenceCorrelation: { requestFingerprint?: string; artifactId?: string; extractionId?: string } = {};
   try {
     documentId = await savePendingDocument(userId, { extraction, filename: file.name ?? null });
     // A queue row is only a UI convenience. On a configured database, retain
@@ -243,6 +244,11 @@ export async function extractOneDocument(userId: string, file: File): Promise<Ex
         filename: file.name ?? null, mimeType: file.type || "application/octet-stream", extraction,
         extractorName: demo ? "zaki-demo" : "zaki-extraction", extractorVersion: "eyes-memory-v1",
       });
+      evidenceCorrelation = {
+        requestFingerprint: digest,
+        artifactId: retained.artifactId,
+        extractionId: retained.extractionId,
+      };
       if (retained.outcome !== "CREATED" || !retained.artifactId || !retained.extractionId) {
         throw new Error("Canonical evidence retention was rejected.");
       }
@@ -250,9 +256,11 @@ export async function extractOneDocument(userId: string, file: File): Promise<Ex
     }
   } catch (err) {
     queueError = err instanceof Error ? err.message : String(err);
-    console.error(
-      `[pending-queue] could not queue this document (bulk approve unavailable): ${queueError}`,
-    );
+    console.error("[pending-queue] could not queue this document (bulk approve unavailable)", {
+      pendingDocumentId: documentId,
+      ...evidenceCorrelation,
+      error: queueError,
+    });
     // In a canonical deployment, returning a reviewable document without its
     // retained immutable source would recreate the posting-evidence bypass.
     if (getSupabase()) throw err;
