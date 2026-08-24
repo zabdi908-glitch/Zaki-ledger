@@ -213,7 +213,7 @@ export async function POST(req: NextRequest) {
       const context = await canonicalEvidenceContext(user.id);
       const confirmation = await new CanonicalDocumentEvidenceService(db).confirm({
         userId: user.id, practiceId: context.practiceId, clientEntityId: context.clientEntityId,
-        ledgerBookId: context.internalLedgerBookId, extractionId: canonicalEvidence.extractionId,
+        ledgerBookId: context.internalLedgerBookId, pendingDocumentId: documentId, extractionId: canonicalEvidence.extractionId,
         idempotencyKey: `pending:${documentId}:approval`, documentKind: documentType,
         confirmedRevision,
       });
@@ -221,6 +221,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: "Canonical evidence confirmation was not accepted." }, { status: 409 });
       }
       canonicalDocumentId = confirmation.documentId;
+      console.info("[eyes-memory] confirmed+linked", { pendingDocumentId: documentId, extractionId: canonicalEvidence.extractionId, documentId: confirmation.documentId, revisionId: confirmation.revisionId });
       if (posting && posting.sourceDocumentId !== canonicalDocumentId) {
         return NextResponse.json({ error: "Posting must reference the canonical document created by this confirmation." }, { status: 400 });
       }

@@ -2,7 +2,7 @@ import { extractDocument } from "./openai";
 import { extractDocumentEscalation } from "./anthropic";
 import { buildHints } from "./learning";
 import { arithmeticMismatch, REVIEWABLE_FIELDS, type InvoiceExtraction } from "./schema";
-import { attachCanonicalEvidenceToPendingDocument, confirmationStatsForSupplier, findDuplicateDocument, savePendingDocument } from "./store";
+import { confirmationStatsForSupplier, findDuplicateDocument, savePendingDocument } from "./store";
 import { CanonicalDocumentEvidenceService, canonicalEvidenceContext } from "./canonical-document-evidence";
 import { getSupabase } from "./supabase";
 import { createHash } from "crypto";
@@ -238,7 +238,7 @@ export async function extractOneDocument(userId: string, file: File): Promise<Ex
         throw new Error(`Failed to retain uploaded source: ${upload.error.message}`);
       }
       const retained = await new CanonicalDocumentEvidenceService(db).retainExtraction({
-        userId, practiceId: context.practiceId, clientEntityId: context.clientEntityId,
+        userId, practiceId: context.practiceId, clientEntityId: context.clientEntityId, pendingDocumentId: documentId,
         ledgerBookId: context.internalLedgerBookId, bytes, storageLocator: locator,
         filename: file.name ?? null, mimeType: file.type || "application/octet-stream", extraction,
         extractorName: demo ? "zaki-demo" : "zaki-extraction", extractorVersion: "eyes-memory-v1",
@@ -246,9 +246,7 @@ export async function extractOneDocument(userId: string, file: File): Promise<Ex
       if (retained.outcome !== "CREATED" || !retained.artifactId || !retained.extractionId) {
         throw new Error("Canonical evidence retention was rejected.");
       }
-      await attachCanonicalEvidenceToPendingDocument(userId, documentId, {
-        artifactId: retained.artifactId, extractionId: retained.extractionId,
-      });
+      console.info("[eyes-memory] retained+linked", { pendingDocumentId: documentId, artifactId: retained.artifactId, extractionId: retained.extractionId, requestFingerprint: digest });
     }
   } catch (err) {
     queueError = err instanceof Error ? err.message : String(err);

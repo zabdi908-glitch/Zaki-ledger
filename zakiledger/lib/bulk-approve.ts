@@ -187,7 +187,7 @@ async function approveOne(
     if (!evidence) return { ...id, status: "error", reason: "Retained canonical source evidence is required." };
     const context = await canonicalEvidenceContext(userId);
     const confirmation = await new CanonicalDocumentEvidenceService(db).confirm({
-      userId, practiceId: context.practiceId, clientEntityId: context.clientEntityId, ledgerBookId: context.internalLedgerBookId,
+      userId, practiceId: context.practiceId, clientEntityId: context.clientEntityId, ledgerBookId: context.internalLedgerBookId, pendingDocumentId: doc.id,
       extractionId: evidence.extractionId, idempotencyKey: `pending:${doc.id}:bulk-approval`, documentKind: documentType,
       confirmedRevision: { obligation_status: "open", resolution_status: "resolved", issuer_name: id.merchantName,
         document_number: invoiceNumber || null, document_date: invoiceDate, amount_minor: id.total === null ? null : String(Math.round(id.total * 100)),
