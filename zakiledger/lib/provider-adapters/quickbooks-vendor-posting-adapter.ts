@@ -34,6 +34,14 @@ export interface QuickBooksVendorRecoveryGrant {
   knownExternalVendorId: string | null;
 }
 
+export interface QuickBooksVendorAdoptionGrant {
+  operation: QuickBooksVendorOperation & { stateAtAdoption: "AUTHORIZED" };
+  attempt: { id: string; number: number; kind: "VERIFY"; providerIdempotencyToken: null };
+  requestedObject: Record<string, unknown>;
+  expectedMaterialState: Record<string, unknown>;
+  externalVendorId: string;
+}
+
 export interface QuickBooksCreateVendorRequest {
   realmId: string;
   providerConnectionId: string;
@@ -57,11 +65,24 @@ export interface QuickBooksVendorPostingTransport {
     externalVendorId: string;
     providerRequestId: string | null;
   }>;
-  readVendor(realmId: string, externalVendorId: string): Promise<QuickBooksObservedVendor | null>;
+  readVendor(
+    realmId: string,
+    providerConnectionId: string,
+    externalVendorId: string,
+  ): Promise<QuickBooksObservedVendor | null>;
   findVendorsByCorrelation(
     realmId: string,
     correlationTag: string,
   ): Promise<QuickBooksObservedVendor[]>;
+}
+
+/** Read-only capability used by the adopt-existing workflow. */
+export interface QuickBooksVendorReadTransport {
+  readVendor(
+    realmId: string,
+    providerConnectionId: string,
+    externalVendorId: string,
+  ): Promise<QuickBooksObservedVendor | null>;
 }
 
 export class QuickBooksVendorSubmissionError extends Error {
@@ -202,6 +223,7 @@ export class QuickBooksVendorPostingAdapter implements ProviderPostingAdapter {
     try {
       const observed = await this.transport.readVendor(
         grant.operation.externalOrganisationId,
+        grant.operation.providerConnectionId,
         externalVendorId,
       );
       return observed
@@ -227,6 +249,34 @@ export class QuickBooksVendorPostingAdapter implements ProviderPostingAdapter {
           : "VENDOR_ABSENCE_NOT_CONCLUSIVE" };
     } catch {
       return { kind: "INCONCLUSIVE", reasonCode: "VENDOR_RECOVERY_QUERY_UNAVAILABLE" };
+    }
+  }
+}
+
+export class QuickBooksVendorAdoptionAdapter {
+  constructor(private readonly transport: QuickBooksVendorReadTransport) {}
+
+  async readBack(
+    grant: QuickBooksVendorAdoptionGrant,
+  ): Promise<QuickBooksVendorRecoveryOutcome> {
+    if (grant.operation.provider !== "quickbooks" ||
+        grant.operation.externalObjectType !== "VENDOR" ||
+        grant.operation.action !== "CREATE" ||
+        grant.operation.stateAtAdoption !== "AUTHORIZED" ||
+        !grant.externalVendorId.trim()) {
+      return { kind: "INCONCLUSIVE", reasonCode: "INVALID_VENDOR_ADOPTION_GRANT" };
+    }
+    try {
+      const observed = await this.transport.readVendor(
+        grant.operation.externalOrganisationId,
+        grant.operation.providerConnectionId,
+        grant.externalVendorId,
+      );
+      return observed
+        ? { kind: "OBSERVED", observation: observed }
+        : { kind: "INCONCLUSIVE", reasonCode: "VENDOR_ADOPTION_READ_BACK_NOT_FOUND" };
+    } catch {
+      return { kind: "INCONCLUSIVE", reasonCode: "VENDOR_ADOPTION_READ_BACK_UNAVAILABLE" };
     }
   }
 }

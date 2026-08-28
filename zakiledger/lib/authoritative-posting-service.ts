@@ -3,6 +3,7 @@ import { getSupabase } from "./supabase";
 import {
   canonicalJson,
   canonicalizePostingIntent,
+  sha256Hex,
   type CanonicalPostingIntent,
   type GateDecision,
   type PostingActor,
@@ -28,6 +29,7 @@ import {
 } from "./quickbooks-execution-store";
 import {
   type QuickBooksVendorExecutionStore,
+  type QuickBooksVendorAdoptionStore,
   SupabaseQuickBooksVendorExecutionStore,
   type VendorExecutionResult,
 } from "./quickbooks-vendor-execution-store";
@@ -45,6 +47,7 @@ import {
   normalizedQuickBooksVendorMaterial,
   quickBooksVendorProviderStateFingerprint,
   type QuickBooksVendorPostingAdapter,
+  type QuickBooksVendorAdoptionAdapter,
   type QuickBooksVendorRecoveryGrant,
 } from "./provider-adapters/quickbooks-vendor-posting-adapter";
 
@@ -84,6 +87,7 @@ export class AuthoritativePostingService {
     private readonly permissionGate = new Step5DeterministicPermissionGate(),
     private readonly executionStore?: QuickBooksExecutionStore,
     private readonly vendorExecutionStore?: QuickBooksVendorExecutionStore,
+    private readonly vendorAdoptionStore?: QuickBooksVendorAdoptionStore,
   ) {}
 
   async submit(intentInput: PostingIntent, actor: PostingActor): Promise<PostingSubmitResult> {
@@ -229,6 +233,87 @@ export class AuthoritativePostingService {
 
     operation = await this.store.getOperation(operation.id);
     return result(operation, intent, [], resumed);
+  }
+
+  /** Adopts a caller-specified existing Vendor using read-back only; no CREATE capability is invoked. */
+  async adoptExistingQuickBooksVendor(
+    operationId: string,
+    actor: PostingActor,
+    externalVendorId: string,
+    adapter: QuickBooksVendorAdoptionAdapter,
+  ): Promise<VendorExecutionResult> {
+    const store = this.vendorAdoptionStore;
+    if (!store) throw new Error("QuickBooks Vendor adoption store is not configured");
+    const prepared = await store.prepareQuickBooksVendorAdoption(
+      operationId,
+      actor,
+      externalVendorId,
+    );
+    if (prepared.kind === "SUCCEEDED") {
+      return {
+        operationId,
+        state: "SUCCEEDED",
+        externalVendorId: prepared.externalVendorId,
+        reasonCodes: ["EXACT_RETRY_EXISTING_SUCCESS"],
+        resumed: true,
+        recovered: false,
+      };
+    }
+    if (prepared.kind === "BLOCKED") {
+      return {
+        operationId,
+        state: prepared.state,
+        externalVendorId: null,
+        reasonCodes: [prepared.reasonCode],
+        resumed: true,
+        recovered: false,
+      };
+    }
+    const grant = prepared.grant;
+    const outcome = await adapter.readBack(grant);
+    if (outcome.kind === "INCONCLUSIVE") {
+      return store.recordQuickBooksVendorAdoptionObservation({
+        operationId,
+        attemptId: grant.attempt.id,
+        externalVendorId: grant.externalVendorId,
+        providerVersion: null,
+        providerStateFingerprint: null,
+        normalizedProviderState: null,
+        comparisonOutcome: "INCONCLUSIVE",
+        reasonCode: outcome.reasonCode,
+      });
+    }
+    const observed = outcome.observation;
+    const normalized: Record<string, unknown> = {
+      ...normalizedQuickBooksVendorMaterial(observed),
+      providerVendorId: observed.id,
+      realmId: observed.realmId,
+    };
+    const expected: Record<string, unknown> = {
+      ...expectedQuickBooksVendorMaterial(grant),
+      providerVendorId: grant.externalVendorId,
+      realmId: grant.operation.externalOrganisationId,
+    };
+    const reasonCode = observed.realmId !== grant.operation.externalOrganisationId
+      ? "QUICKBOOKS_VENDOR_ADOPTION_REALM_MISMATCH"
+      : observed.id !== grant.externalVendorId
+      ? "QUICKBOOKS_VENDOR_ADOPTION_ID_MISMATCH"
+      : observed.displayName !== expected.displayName
+      ? "QUICKBOOKS_VENDOR_ADOPTION_NAME_MISMATCH"
+      : !observed.active
+      ? "QUICKBOOKS_VENDOR_ADOPTION_INACTIVE"
+      : "QUICKBOOKS_VENDOR_ADOPTED_AND_VERIFIED";
+    const matches = reasonCode === "QUICKBOOKS_VENDOR_ADOPTED_AND_VERIFIED";
+    return store.recordQuickBooksVendorAdoptionObservation({
+      operationId,
+      attemptId: grant.attempt.id,
+      externalVendorId: grant.externalVendorId,
+      providerVersion: observed.providerVersion,
+      providerStateFingerprint: sha256Hex(normalized),
+      normalizedProviderState: normalized,
+      comparisonOutcome: matches ? "MATCH" : "MISMATCH",
+      reasonCode,
+    });
   }
 
   /**
@@ -532,6 +617,7 @@ export function createAuthoritativePostingService(): AuthoritativePostingService
     new CorePostingSafetyGate(),
     new Step5DeterministicPermissionGate(),
     new SupabaseQuickBooksExecutionStore(db),
+    new SupabaseQuickBooksVendorExecutionStore(db),
     new SupabaseQuickBooksVendorExecutionStore(db),
   );
 }

@@ -3,6 +3,7 @@ import type { PostingActor, PostingState } from "./posting-contract";
 import type { SanitizedProviderFailure } from "./provider-adapters/provider-posting-adapter";
 import type {
   QuickBooksAuthorizedVendorGrant,
+  QuickBooksVendorAdoptionGrant,
   QuickBooksVendorRecoveryGrant,
 } from "./provider-adapters/quickbooks-vendor-posting-adapter";
 
@@ -60,6 +61,29 @@ export interface QuickBooksVendorExecutionStore {
   }): Promise<VendorExecutionResult>;
 }
 
+export type QuickBooksVendorAdoptionPrepareResult =
+  | { kind: "VERIFY"; grant: QuickBooksVendorAdoptionGrant }
+  | { kind: "SUCCEEDED"; externalVendorId: string }
+  | { kind: "BLOCKED"; state: PostingState; reasonCode: string };
+
+export interface QuickBooksVendorAdoptionStore {
+  prepareQuickBooksVendorAdoption(
+    operationId: string,
+    actor: PostingActor,
+    externalVendorId: string,
+  ): Promise<QuickBooksVendorAdoptionPrepareResult>;
+  recordQuickBooksVendorAdoptionObservation(input: {
+    operationId: string;
+    attemptId: string;
+    externalVendorId: string;
+    providerVersion: string | null;
+    providerStateFingerprint: string | null;
+    normalizedProviderState: Record<string, unknown> | null;
+    comparisonOutcome: "MATCH" | "MISMATCH" | "INCONCLUSIVE";
+    reasonCode: string;
+  }): Promise<VendorExecutionResult>;
+}
+
 function rpcPayload<T>(data: unknown, label: string): T {
   const value = Array.isArray(data) ? data[0] : data;
   if (!value || typeof value !== "object") throw new Error(`${label} returned no payload`);
@@ -77,7 +101,8 @@ function mapResult(payload: Record<string, unknown>): VendorExecutionResult {
   };
 }
 
-export class SupabaseQuickBooksVendorExecutionStore implements QuickBooksVendorExecutionStore {
+export class SupabaseQuickBooksVendorExecutionStore
+  implements QuickBooksVendorExecutionStore, QuickBooksVendorAdoptionStore {
   constructor(private readonly db: SupabaseClient) {}
 
   async prepareQuickBooksVendorSubmission(operationId: string, actor: PostingActor):
@@ -161,5 +186,46 @@ export class SupabaseQuickBooksVendorExecutionStore implements QuickBooksVendorE
     });
     if (error) throw new Error(`QuickBooks Vendor observation persistence failed: ${error.message}`);
     return mapResult(rpcPayload<Record<string, unknown>>(data, "record_quickbooks_vendor_observation_v1"));
+  }
+
+  async prepareQuickBooksVendorAdoption(
+    operationId: string,
+    actor: PostingActor,
+    externalVendorId: string,
+  ): Promise<QuickBooksVendorAdoptionPrepareResult> {
+    const { data, error } = await this.db.rpc("prepare_quickbooks_vendor_adoption_v1", {
+      p_operation_id: operationId,
+      p_actor_user_id: actor.userId,
+      p_external_vendor_id: externalVendorId,
+      p_adapter_name: "QuickBooksVendorAdoptionAdapter",
+      p_adapter_version: "step5-vendor-adopt-v1",
+      p_lease_seconds: 120,
+    });
+    if (error) throw new Error(`QuickBooks Vendor adoption preparation failed: ${error.message}`);
+    return rpcPayload<QuickBooksVendorAdoptionPrepareResult>(data, "prepare_quickbooks_vendor_adoption_v1");
+  }
+
+  async recordQuickBooksVendorAdoptionObservation(input: {
+    operationId: string;
+    attemptId: string;
+    externalVendorId: string;
+    providerVersion: string | null;
+    providerStateFingerprint: string | null;
+    normalizedProviderState: Record<string, unknown> | null;
+    comparisonOutcome: "MATCH" | "MISMATCH" | "INCONCLUSIVE";
+    reasonCode: string;
+  }): Promise<VendorExecutionResult> {
+    const { data, error } = await this.db.rpc("record_quickbooks_vendor_adoption_observation_v1", {
+      p_operation_id: input.operationId,
+      p_attempt_id: input.attemptId,
+      p_external_vendor_id: input.externalVendorId,
+      p_provider_version: input.providerVersion,
+      p_provider_state_fingerprint_hex: input.providerStateFingerprint,
+      p_normalized_provider_state: input.normalizedProviderState,
+      p_comparison_outcome: input.comparisonOutcome,
+      p_reason_code: input.reasonCode,
+    });
+    if (error) throw new Error(`QuickBooks Vendor adoption observation persistence failed: ${error.message}`);
+    return mapResult(rpcPayload<Record<string, unknown>>(data, "record_quickbooks_vendor_adoption_observation_v1"));
   }
 }

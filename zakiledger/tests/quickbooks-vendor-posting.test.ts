@@ -211,7 +211,7 @@ class FakeVendorTransport implements QuickBooksVendorPostingTransport {
     return { externalVendorId: id, providerRequestId: `vendor-request-${this.createCalls}` };
   }
 
-  async readVendor(_realmId: string, id: string) {
+  async readVendor(_realmId: string, _providerConnectionId: string, id: string) {
     this.readCalls += 1;
     const vendor = this.vendors.get(id);
     return vendor ? { ...vendor } : null;
