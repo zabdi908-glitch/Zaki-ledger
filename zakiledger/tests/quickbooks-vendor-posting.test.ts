@@ -21,6 +21,10 @@ import {
   type QuickBooksVendorPostingTransport,
   type QuickBooksVendorRecoveryGrant,
 } from "../lib/provider-adapters/quickbooks-vendor-posting-adapter";
+import {
+  createAuthenticatedQuickBooksVendorPostingAdapter,
+  type QuickBooksHttpClient,
+} from "../lib/provider-adapters/quickbooks-authenticated-posting-transport";
 
 const OPERATION_ID = "c7100000-0000-0000-0000-000000000001";
 const ACTOR: PostingActor = { kind: "USER", userId: "c7000000-0000-0000-0000-000000000001" };
@@ -339,5 +343,59 @@ describe("safe QuickBooks ENSURE_VENDOR execution", () => {
     expect(billPreparation).toContain("VENDOR_CHILD_UNRESOLVED");
     expect(vendorMigration).toContain("QUICKBOOKS_VENDOR_READ_ONLY_RECOVERY");
     expect(vendorMigration).not.toMatch(/findOrCreateVendor|createQuickBooksBill|oauth_connections/);
+  });
+
+  it("uses the shared authenticated transport for Vendor CREATE and read-back in the exact realm/connection scope", async () => {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const http: QuickBooksHttpClient = async (url, init) => {
+      calls.push({ url, init });
+      const isCreate = init.method === "POST";
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: (name) => name.toLowerCase() === "intuit_tid" ? "fake-intuit-tid" : null },
+        json: async () => isCreate
+          ? { Vendor: { Id: "authenticated-vendor-1" } }
+          : { Vendor: { Id: "authenticated-vendor-1", DisplayName: "Safe Vendor", Active: true, SyncToken: "7" } },
+      };
+    };
+    const authorized = grant();
+    const adapter = createAuthenticatedQuickBooksVendorPostingAdapter({
+      actorUserId: ACTOR.userId,
+      providerConnectionId: authorized.operation.providerConnectionId,
+      realmId: authorized.operation.externalOrganisationId,
+    }, {
+      getAccess: async () => ({ accessToken: "fake-access-token", realmId: "vendor-safe-realm" }),
+    }, http);
+
+    const submitted = await adapter.executeAuthorizedVendor(authorized);
+    expect(submitted).toMatchObject({ kind: "ACKNOWLEDGED", externalVendorId: "authenticated-vendor-1" });
+    const readBack = await adapter.readBack(authorized, "authenticated-vendor-1");
+    expect(readBack).toMatchObject({ kind: "OBSERVED", observation: { providerVersion: "7" } });
+    expect(calls).toHaveLength(2);
+    expect(calls[0].url).toContain("/v3/company/vendor-safe-realm/vendor?");
+    expect(calls[0].url).toContain("requestid=zaki-qb-vendor-");
+    expect(calls[0].init.headers).toMatchObject({ Authorization: "Bearer fake-access-token" });
+  });
+
+  it("fails before CREATE when the authenticated transport's realm or provider connection scope differs", async () => {
+    let calls = 0;
+    const authorized = grant();
+    const adapter = createAuthenticatedQuickBooksVendorPostingAdapter({
+      actorUserId: ACTOR.userId,
+      providerConnectionId: "different-provider-connection",
+      realmId: "different-realm",
+    }, {
+      getAccess: async () => ({ accessToken: "fake-access-token", realmId: "different-realm" }),
+    }, async () => {
+      calls += 1;
+      throw new Error("must not call fake transport");
+    });
+
+    await expect(adapter.executeAuthorizedVendor(authorized)).resolves.toMatchObject({
+      kind: "FAILED_SAFE",
+      failure: { classification: "BEFORE_DELIVERY" },
+    });
+    expect(calls).toBe(0);
   });
 });

@@ -20,7 +20,8 @@ const TOKEN_URL = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer";
 const SCOPE = "com.intuit.quickbooks.accounting";
 
 /** Sandbox by default; set QUICKBOOKS_ENVIRONMENT=production to hit live company data. */
-function apiBase(): string {
+/** Shared accounting API base for authenticated, capability-scoped clients. */
+export function quickBooksAccountingApiBase(): string {
   return process.env.QUICKBOOKS_ENVIRONMENT === "production"
     ? "https://quickbooks.api.intuit.com"
     : "https://sandbox-quickbooks.api.intuit.com";
@@ -163,7 +164,7 @@ async function qboGet(
   accessToken: string,
   realmId: string,
 ): Promise<Record<string, unknown>> {
-  const res = await fetch(`${apiBase()}/v3/company/${realmId}/${path}`, {
+  const res = await fetch(`${quickBooksAccountingApiBase()}/v3/company/${realmId}/${path}`, {
     headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
   });
   if (!res.ok) throw new Error(`QuickBooks GET ${path} failed (${res.status}): ${await res.text()}`);

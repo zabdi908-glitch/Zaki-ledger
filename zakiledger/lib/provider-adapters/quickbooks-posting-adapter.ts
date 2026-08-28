@@ -85,6 +85,7 @@ export interface QuickBooksBillRecoveryGrant {
 
 export interface QuickBooksCreateBillRequest {
   realmId: string;
+  providerConnectionId: string;
   providerIdempotencyToken: string;
   correlationTag: string;
   vendorId: string;
@@ -272,6 +273,7 @@ function requestFromGrant(grant: QuickBooksAuthorizedBillGrant): QuickBooksCreat
   const lines = material.lines as QuickBooksBillLine[];
   return {
     realmId: grant.operation.externalOrganisationId,
+    providerConnectionId: grant.operation.providerConnectionId,
     providerIdempotencyToken: grant.attempt.providerIdempotencyToken,
     correlationTag: tag,
     vendorId: material.vendorId as string,
