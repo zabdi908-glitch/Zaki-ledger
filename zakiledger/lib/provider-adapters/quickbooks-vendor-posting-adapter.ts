@@ -36,6 +36,7 @@ export interface QuickBooksVendorRecoveryGrant {
 
 export interface QuickBooksCreateVendorRequest {
   realmId: string;
+  providerConnectionId: string;
   providerIdempotencyToken: string;
   correlationTag: string;
   displayName: string;
@@ -136,6 +137,7 @@ function requestFromGrant(grant: QuickBooksAuthorizedVendorGrant): QuickBooksCre
   const tag = correlationTag(grant.operation.id, grant.operation.authorizedRequestFingerprint);
   return {
     realmId: grant.operation.externalOrganisationId,
+    providerConnectionId: grant.operation.providerConnectionId,
     providerIdempotencyToken: text(grant.attempt.providerIdempotencyToken, "provider idempotency token"),
     correlationTag: tag,
     displayName: material.displayName as string,
