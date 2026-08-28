@@ -11,6 +11,7 @@ import {
 } from "./quickbooks-posting-adapter";
 import {
   QuickBooksVendorPostingAdapter,
+  QuickBooksVendorAdoptionAdapter,
   QuickBooksVendorSubmissionError,
   type QuickBooksCreateVendorRequest,
   type QuickBooksObservedVendor,
@@ -241,7 +242,12 @@ export class AuthenticatedQuickBooksPostingTransport
     return asRecord(await response.json());
   }
 
-  async readVendor(realmId: string, externalVendorId: string): Promise<QuickBooksObservedVendor | null> {
+  async readVendor(
+    realmId: string,
+    providerConnectionId: string,
+    externalVendorId: string,
+  ): Promise<QuickBooksObservedVendor | null> {
+    this.assertProviderConnection(providerConnectionId);
     const body = await this.get(realmId, `vendor/${encodeURIComponent(externalVendorId)}?minorversion=65`);
     return observedVendor(realmId, body.Vendor);
   }
@@ -280,6 +286,17 @@ export function createAuthenticatedQuickBooksVendorPostingAdapter(
   http?: QuickBooksHttpClient,
 ): QuickBooksVendorPostingAdapter {
   return new QuickBooksVendorPostingAdapter(
+    new AuthenticatedQuickBooksPostingTransport(scope, accessClient, http),
+  );
+}
+
+/** Read-only authenticated adapter for adopting a known existing Vendor. */
+export function createAuthenticatedQuickBooksVendorAdoptionAdapter(
+  scope: QuickBooksAuthenticatedPostingScope,
+  accessClient?: QuickBooksAuthenticatedAccessClient,
+  http?: QuickBooksHttpClient,
+): QuickBooksVendorAdoptionAdapter {
+  return new QuickBooksVendorAdoptionAdapter(
     new AuthenticatedQuickBooksPostingTransport(scope, accessClient, http),
   );
 }
