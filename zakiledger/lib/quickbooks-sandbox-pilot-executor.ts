@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAuthoritativePostingService, type AuthoritativePostingService } from "./authoritative-posting-service";
 import type { PostingActor, PostingState } from "./posting-contract";
@@ -45,8 +46,39 @@ export type QuickBooksSandboxPilotPrepareResult =
   | { kind: "READY"; scope: QuickBooksSandboxPilotScope }
   | { kind: "STOP"; state: PostingState; reasonCode: string };
 
+export type QuickBooksSandboxPilotMappingResult =
+  | { kind: "READY" }
+  | { kind: "STOP"; state: PostingState; reasonCode: string };
+
+export type QuickBooksSandboxPilotAuthorizationResult =
+  | {
+      kind: "REFRESHED";
+      authorizations: Array<{
+        operationId: string;
+        authorizationId: string;
+        expiresAt: string;
+        refreshed: boolean;
+      }>;
+    }
+  | { kind: "BLOCKED"; operationId?: string; reasonCode: string };
+
 export interface QuickBooksSandboxPilotStore {
-  prepare(input: QuickBooksSandboxPilotInput, actor: PostingActor): Promise<QuickBooksSandboxPilotPrepareResult>;
+  validateEligibility(
+    input: QuickBooksSandboxPilotInput,
+    actor: PostingActor,
+  ): Promise<QuickBooksSandboxPilotPrepareResult>;
+  reverifyMappings(
+    input: QuickBooksSandboxPilotInput,
+    actor: PostingActor,
+  ): Promise<QuickBooksSandboxPilotMappingResult>;
+  refreshAuthorization(
+    input: QuickBooksSandboxPilotInput,
+    actor: PostingActor,
+  ): Promise<QuickBooksSandboxPilotAuthorizationResult>;
+  prepareDispatch(
+    input: QuickBooksSandboxPilotInput,
+    actor: PostingActor,
+  ): Promise<QuickBooksSandboxPilotPrepareResult>;
   audit(
     input: QuickBooksSandboxPilotInput,
     actor: PostingActor,
@@ -80,7 +112,48 @@ function payload<T>(data: unknown, label: string): T {
 export class SupabaseQuickBooksSandboxPilotStore implements QuickBooksSandboxPilotStore {
   constructor(private readonly db: SupabaseClient) {}
 
-  async prepare(input: QuickBooksSandboxPilotInput, actor: PostingActor) {
+  async validateEligibility(input: QuickBooksSandboxPilotInput, actor: PostingActor) {
+    const { data, error } = await this.db.rpc("prepare_quickbooks_sandbox_pilot_eligibility_v2", {
+      p_vendor_operation_id: input.vendorOperationId,
+      p_bill_operation_id: input.billOperationId,
+      p_actor_user_id: actor.userId,
+      p_external_vendor_id: input.externalVendorId,
+    });
+    if (error) throw new Error(`QuickBooks Sandbox pilot eligibility failed: ${error.message}`);
+    return payload<QuickBooksSandboxPilotPrepareResult>(
+      data,
+      "prepare_quickbooks_sandbox_pilot_eligibility_v2",
+    );
+  }
+
+  async reverifyMappings(input: QuickBooksSandboxPilotInput, actor: PostingActor) {
+    const { data, error } = await this.db.rpc("reverify_quickbooks_sandbox_pilot_mappings_v1", {
+      p_vendor_operation_id: input.vendorOperationId,
+      p_bill_operation_id: input.billOperationId,
+      p_actor_user_id: actor.userId,
+    });
+    if (error) throw new Error(`QuickBooks Sandbox pilot mapping revalidation failed: ${error.message}`);
+    return payload<QuickBooksSandboxPilotMappingResult>(
+      data,
+      "reverify_quickbooks_sandbox_pilot_mappings_v1",
+    );
+  }
+
+  async refreshAuthorization(input: QuickBooksSandboxPilotInput, actor: PostingActor) {
+    const { data, error } = await this.db.rpc("refresh_posting_human_authorizations_v1", {
+      p_operation_ids: [input.vendorOperationId, input.billOperationId],
+      p_actor_user_id: actor.userId,
+      p_refresh_request_id: randomUUID(),
+      p_ttl_seconds: 3600,
+    });
+    if (error) throw new Error(`QuickBooks Sandbox pilot authorization refresh failed: ${error.message}`);
+    return payload<QuickBooksSandboxPilotAuthorizationResult>(
+      data,
+      "refresh_posting_human_authorizations_v1",
+    );
+  }
+
+  async prepareDispatch(input: QuickBooksSandboxPilotInput, actor: PostingActor) {
     const { data, error } = await this.db.rpc("prepare_quickbooks_sandbox_pilot_v1", {
       p_vendor_operation_id: input.vendorOperationId,
       p_bill_operation_id: input.billOperationId,
@@ -184,13 +257,13 @@ export class QuickBooksSandboxPilotExecutor {
       return stopped(input, "QUICKBOOKS_SANDBOX_REQUIRED", flow, null, null);
     }
 
-    const prepared = await this.store.prepare(input, actor);
-    if (prepared.kind === "STOP") {
-      flow.push("preflight:STOP");
-      return stopped(input, prepared.reasonCode, flow, null, prepared.state);
+    const eligibility = await this.store.validateEligibility(input, actor);
+    if (eligibility.kind === "STOP") {
+      flow.push("immutable-operation-evidence-scope:STOP");
+      return stopped(input, eligibility.reasonCode, flow, null, eligibility.state);
     }
-    const scope = prepared.scope;
-    flow.push("operation-pair-and-current-gates:ALLOW");
+    let scope = eligibility.scope;
+    flow.push("immutable-operation-evidence-scope:VERIFIED");
     if (!pilotRealmAllowed(scope.realmId)) {
       flow.push("pilot-realm:STOP");
       return stopped(
@@ -201,7 +274,6 @@ export class QuickBooksSandboxPilotExecutor {
         scope.billState,
       );
     }
-
     let oauthResult: { accountName: string | null };
     try {
       oauthResult = await this.oauth.verify(actor.userId, scope.realmId);
@@ -222,6 +294,19 @@ export class QuickBooksSandboxPilotExecutor {
     });
     flow.push("live-oauth:VERIFIED");
 
+    const mappings = await this.store.reverifyMappings(input, actor);
+    if (mappings.kind === "STOP") {
+      flow.push("account-tax-mappings:REVIEW");
+      return stopped(
+        input,
+        mappings.reasonCode,
+        flow,
+        scope.vendorState,
+        mappings.state,
+      );
+    }
+    flow.push("account-tax-mappings:VERIFIED");
+
     if (scope.billState === "SUCCEEDED" && scope.existingBillId) {
       await this.store.audit(input, actor, "SANDBOX_PILOT_EXISTING_SUCCESS", {
         externalBillId: scope.existingBillId,
@@ -240,6 +325,57 @@ export class QuickBooksSandboxPilotExecutor {
         flow,
       };
     }
+
+    const authorization = await this.store.refreshAuthorization(input, actor);
+    if (authorization.kind === "BLOCKED") {
+      await this.store.audit(input, actor, "SANDBOX_PILOT_AUTHORIZATION_REVIEW", {
+        operationId: authorization.operationId ?? null,
+        reasonCode: authorization.reasonCode,
+        providerWrite: false,
+      });
+      flow.push("exact-human-authorization:REVIEW");
+      return stopped(
+        input,
+        authorization.reasonCode,
+        flow,
+        scope.vendorState,
+        "REVIEW",
+      );
+    }
+    const refreshedOperationIds = new Set(
+      authorization.authorizations.map((item) => item.operationId),
+    );
+    if (authorization.authorizations.length !== 2 ||
+        !refreshedOperationIds.has(input.vendorOperationId) ||
+        !refreshedOperationIds.has(input.billOperationId)) {
+      await this.store.audit(input, actor, "SANDBOX_PILOT_AUTHORIZATION_REVIEW", {
+        reasonCode: "PILOT_AUTHORIZATION_REFRESH_INCOMPLETE",
+        providerWrite: false,
+      });
+      flow.push("exact-human-authorization:REVIEW");
+      return stopped(
+        input,
+        "PILOT_AUTHORIZATION_REFRESH_INCOMPLETE",
+        flow,
+        scope.vendorState,
+        "REVIEW",
+      );
+    }
+    await this.store.audit(input, actor, "SANDBOX_PILOT_AUTHORIZATION_REFRESHED", {
+      authorizations: authorization.authorizations,
+      providerWrite: false,
+    });
+    flow.push("exact-human-authorization:REFRESHED");
+
+    // Migration 026 remains the final dispatch gate. It rechecks every prior
+    // invariant after the refresh and before any provider operation.
+    const prepared = await this.store.prepareDispatch(input, actor);
+    if (prepared.kind === "STOP") {
+      flow.push("final-dispatch-preflight:STOP");
+      return stopped(input, prepared.reasonCode, flow, scope.vendorState, prepared.state);
+    }
+    scope = prepared.scope;
+    flow.push("final-dispatch-preflight:ALLOW");
 
     const adapterScope: QuickBooksAuthenticatedPostingScope = {
       actorUserId: actor.userId,
