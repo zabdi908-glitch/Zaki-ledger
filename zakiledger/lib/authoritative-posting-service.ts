@@ -325,6 +325,7 @@ export class AuthoritativePostingService {
     operationId: string,
     actor: PostingActor,
     adapter: QuickBooksPostingAdapter,
+    options: { recoverExisting?: boolean } = {},
   ): Promise<PostingExecutionResult> {
     const executionStore = this.executionStore;
     if (!executionStore) throw new Error("QuickBooks execution store is not configured");
@@ -351,6 +352,16 @@ export class AuthoritativePostingService {
       };
     }
     if (prepared.kind === "RECOVERY_REQUIRED") {
+      if (options.recoverExisting === false) {
+        return {
+          operationId,
+          state: prepared.state,
+          externalBillId: null,
+          reasonCodes: ["PILOT_STOP_RECOVERY_REQUIRED"],
+          resumed: true,
+          recovered: false,
+        };
+      }
       return this.recoverQuickBooksBill(operationId, actor, adapter, executionStore);
     }
 
