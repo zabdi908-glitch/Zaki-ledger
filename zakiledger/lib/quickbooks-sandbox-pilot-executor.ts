@@ -50,6 +50,44 @@ export type QuickBooksSandboxPilotMappingResult =
   | { kind: "READY" }
   | { kind: "STOP"; state: PostingState; reasonCode: string };
 
+export interface QuickBooksSandboxPilotAccountMappingExpectation {
+  mappingId: string;
+  providerAccountId: string;
+  providerAccountCode: string | null;
+  providerAccountName: string | null;
+  providerAccountType: string;
+  providerAccountSubtype: string | null;
+  providerVersion: string | null;
+}
+
+export interface QuickBooksSandboxPilotTaxMappingExpectation {
+  treatmentId: string;
+  providerTaxCode: string;
+  treatmentName: string;
+  evidenceFingerprint: string;
+  providerVersion: string | null;
+}
+
+export type QuickBooksSandboxPilotMappingExpectationResult =
+  | {
+      kind: "READY";
+      account: QuickBooksSandboxPilotAccountMappingExpectation;
+      tax: QuickBooksSandboxPilotTaxMappingExpectation;
+    }
+  | { kind: "STOP"; state: PostingState; reasonCode: string };
+
+export interface QuickBooksSandboxPilotMappingObservation {
+  account: QuickBooksSandboxPilotAccountMappingExpectation & {
+    active: boolean;
+    providerRequestId: string | null;
+  };
+  tax: QuickBooksSandboxPilotTaxMappingExpectation & {
+    active: boolean;
+    providerRequestId: string | null;
+    verificationSource: "QBO_TAX_CODE" | "QBO_US_SPECIAL_NON";
+  };
+}
+
 export type QuickBooksSandboxPilotAuthorizationResult =
   | {
       kind: "REFRESHED";
@@ -71,6 +109,15 @@ export interface QuickBooksSandboxPilotStore {
     input: QuickBooksSandboxPilotInput,
     actor: PostingActor,
   ): Promise<QuickBooksSandboxPilotMappingResult>;
+  getMappingExpectations(
+    input: QuickBooksSandboxPilotInput,
+    actor: PostingActor,
+  ): Promise<QuickBooksSandboxPilotMappingExpectationResult>;
+  refreshMappingEligibility(
+    input: QuickBooksSandboxPilotInput,
+    actor: PostingActor,
+    observation: QuickBooksSandboxPilotMappingObservation,
+  ): Promise<QuickBooksSandboxPilotMappingResult>;
   refreshAuthorization(
     input: QuickBooksSandboxPilotInput,
     actor: PostingActor,
@@ -89,6 +136,14 @@ export interface QuickBooksSandboxPilotStore {
 
 export interface QuickBooksSandboxOAuthVerifier {
   verify(userId: string, realmId: string): Promise<{ accountName: string | null }>;
+}
+
+export interface QuickBooksSandboxMappingVerifier {
+  verify(
+    userId: string,
+    realmId: string,
+    expected: Extract<QuickBooksSandboxPilotMappingExpectationResult, { kind: "READY" }>,
+  ): Promise<QuickBooksSandboxPilotMappingObservation>;
 }
 
 export interface QuickBooksSandboxPilotResult {
@@ -136,6 +191,45 @@ export class SupabaseQuickBooksSandboxPilotStore implements QuickBooksSandboxPil
     return payload<QuickBooksSandboxPilotMappingResult>(
       data,
       "reverify_quickbooks_sandbox_pilot_mappings_v1",
+    );
+  }
+
+  async getMappingExpectations(input: QuickBooksSandboxPilotInput, actor: PostingActor) {
+    const { data, error } = await this.db.rpc(
+      "prepare_quickbooks_sandbox_pilot_mapping_refresh_v1",
+      {
+        p_vendor_operation_id: input.vendorOperationId,
+        p_bill_operation_id: input.billOperationId,
+        p_actor_user_id: actor.userId,
+      },
+    );
+    if (error) throw new Error(`QuickBooks Sandbox mapping expectation failed: ${error.message}`);
+    return payload<QuickBooksSandboxPilotMappingExpectationResult>(
+      data,
+      "prepare_quickbooks_sandbox_pilot_mapping_refresh_v1",
+    );
+  }
+
+  async refreshMappingEligibility(
+    input: QuickBooksSandboxPilotInput,
+    actor: PostingActor,
+    observation: QuickBooksSandboxPilotMappingObservation,
+  ) {
+    const { data, error } = await this.db.rpc(
+      "refresh_quickbooks_sandbox_pilot_mapping_eligibility_v1",
+      {
+        p_vendor_operation_id: input.vendorOperationId,
+        p_bill_operation_id: input.billOperationId,
+        p_actor_user_id: actor.userId,
+        p_account_observation: observation.account,
+        p_tax_observation: observation.tax,
+        p_ttl_seconds: 3600,
+      },
+    );
+    if (error) throw new Error(`QuickBooks Sandbox mapping refresh failed: ${error.message}`);
+    return payload<QuickBooksSandboxPilotMappingResult>(
+      data,
+      "refresh_quickbooks_sandbox_pilot_mapping_eligibility_v1",
     );
   }
 
@@ -212,6 +306,115 @@ export class LiveQuickBooksSandboxOAuthVerifier implements QuickBooksSandboxOAut
   }
 }
 
+function nullableString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function record(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === "object" ? value as Record<string, unknown> : {};
+}
+
+/** Read-only live verification. Only the refresh RPC below can mutate mapping freshness. */
+export class LiveQuickBooksSandboxMappingVerifier implements QuickBooksSandboxMappingVerifier {
+  constructor(
+    private readonly access: QuickBooksAuthenticatedAccessClient = { getAccess: getValidQboAccess },
+    private readonly http: QuickBooksHttpClient = fetch,
+  ) {}
+
+  private async get(
+    accessToken: string,
+    realmId: string,
+    path: string,
+  ): Promise<{ body: Record<string, unknown>; providerRequestId: string | null }> {
+    const response = await this.http(
+      `${SANDBOX_API_BASE}/v3/company/${encodeURIComponent(realmId)}/${path}`,
+      { method: "GET", headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" } },
+    );
+    if (!response.ok) throw new Error(`QUICKBOOKS_MAPPING_READ_${response.status}`);
+    return { body: record(await response.json()), providerRequestId: response.headers.get("intuit_tid") };
+  }
+
+  async verify(
+    userId: string,
+    realmId: string,
+    expected: Extract<QuickBooksSandboxPilotMappingExpectationResult, { kind: "READY" }>,
+  ): Promise<QuickBooksSandboxPilotMappingObservation> {
+    if (!sandboxPilotBaseRuntimeAllowed() || !pilotRealmAllowed(realmId)) {
+      throw new Error("QUICKBOOKS_SANDBOX_REQUIRED");
+    }
+    const credential = await this.access.getAccess(userId);
+    if (!credential || credential.realmId !== realmId || !credential.accessToken.trim()) {
+      throw new Error("QUICKBOOKS_LIVE_OAUTH_REQUIRED");
+    }
+
+    const accountResult = await this.get(
+      credential.accessToken,
+      realmId,
+      `account/${encodeURIComponent(expected.account.providerAccountId)}?minorversion=65`,
+    );
+    const account = record(accountResult.body.Account);
+    const observedAccount = {
+      mappingId: expected.account.mappingId,
+      providerAccountId: nullableString(account.Id) ?? "",
+      providerAccountCode: nullableString(account.AcctNum),
+      providerAccountName: nullableString(account.Name),
+      providerAccountType: nullableString(account.AccountType) ?? "",
+      providerAccountSubtype: nullableString(account.AccountSubType),
+      active: account.Active === true,
+      providerVersion: nullableString(account.SyncToken),
+      providerRequestId: accountResult.providerRequestId,
+    };
+
+    let observedTax: QuickBooksSandboxPilotMappingObservation["tax"];
+    if (expected.tax.providerTaxCode === "NON" && expected.tax.treatmentName === "NON_TAXABLE") {
+      // QBO's US automated-sales-tax realm uses NON as a special line code,
+      // not a queryable TaxCode entity. Preferences is the live tax surface.
+      const preferenceResult = await this.get(
+        credential.accessToken,
+        realmId,
+        "preferences?minorversion=65",
+      );
+      const taxPrefs = record(record(preferenceResult.body.Preferences).TaxPrefs);
+      if (typeof taxPrefs.UsingSalesTax !== "boolean") {
+        throw new Error("QUICKBOOKS_TAX_PREFERENCES_UNVERIFIABLE");
+      }
+      observedTax = {
+        ...expected.tax,
+        active: taxPrefs.UsingSalesTax === true,
+        providerRequestId: preferenceResult.providerRequestId,
+        verificationSource: "QBO_US_SPECIAL_NON",
+      };
+    } else {
+      const escapedCode = expected.tax.providerTaxCode
+        .replace(/\\/g, "\\\\")
+        .replace(/'/g, "\\'");
+      const query = `select * from TaxCode where Name = '${escapedCode}'`;
+      const taxResult = await this.get(
+        credential.accessToken,
+        realmId,
+        `query?query=${encodeURIComponent(query)}&minorversion=65`,
+      );
+      const rows = record(taxResult.body.QueryResponse).TaxCode;
+      if (!Array.isArray(rows) || rows.length !== 1) {
+        throw new Error("QUICKBOOKS_TAX_CODE_UNVERIFIABLE");
+      }
+      const taxCode = record(rows[0]);
+      observedTax = {
+        treatmentId: expected.tax.treatmentId,
+        providerTaxCode: nullableString(taxCode.Name) ?? "",
+        treatmentName: expected.tax.treatmentName,
+        evidenceFingerprint: expected.tax.evidenceFingerprint,
+        active: taxCode.Active === true,
+        providerVersion: nullableString(taxCode.SyncToken),
+        providerRequestId: taxResult.providerRequestId,
+        verificationSource: "QBO_TAX_CODE",
+      };
+    }
+
+    return { account: observedAccount, tax: observedTax };
+  }
+}
+
 function stopped(
   input: QuickBooksSandboxPilotInput,
   reasonCode: string,
@@ -244,6 +447,7 @@ export class QuickBooksSandboxPilotExecutor {
     private readonly posting: Pick<AuthoritativePostingService,
       "adoptExistingQuickBooksVendor" | "executeQuickBooksBill">,
     private readonly oauth: QuickBooksSandboxOAuthVerifier,
+    private readonly mappings: QuickBooksSandboxMappingVerifier,
     private readonly accessClient?: QuickBooksAuthenticatedAccessClient,
     private readonly http?: QuickBooksHttpClient,
   ) {}
@@ -294,16 +498,67 @@ export class QuickBooksSandboxPilotExecutor {
     });
     flow.push("live-oauth:VERIFIED");
 
-    const mappings = await this.store.reverifyMappings(input, actor);
-    if (mappings.kind === "STOP") {
+    const expectedMappings = await this.store.getMappingExpectations(input, actor);
+    if (expectedMappings.kind === "STOP") {
+      await this.store.audit(input, actor, "SANDBOX_PILOT_LIVE_MAPPING_REVIEW", {
+        reasonCode: expectedMappings.reasonCode,
+        providerWrite: false,
+      });
       flow.push("account-tax-mappings:REVIEW");
       return stopped(
         input,
-        mappings.reasonCode,
+        expectedMappings.reasonCode,
         flow,
         scope.vendorState,
-        mappings.state,
+        expectedMappings.state,
       );
+    }
+    flow.push("mapping-expectations:VERIFIED");
+
+    let observedMappings: QuickBooksSandboxPilotMappingObservation;
+    try {
+      observedMappings = await this.mappings.verify(
+        actor.userId,
+        scope.realmId,
+        expectedMappings,
+      );
+    } catch {
+      await this.store.audit(input, actor, "SANDBOX_PILOT_LIVE_MAPPING_REVIEW", {
+        reasonCode: "PILOT_LIVE_MAPPING_UNVERIFIABLE",
+        providerWrite: false,
+      });
+      flow.push("live-account-tax-mappings:REVIEW");
+      return stopped(
+        input,
+        "PILOT_LIVE_MAPPING_UNVERIFIABLE",
+        flow,
+        scope.vendorState,
+        "REVIEW",
+      );
+    }
+    flow.push("live-account-tax-mappings:VERIFIED");
+
+    const refreshedMappings = await this.store.refreshMappingEligibility(
+      input,
+      actor,
+      observedMappings,
+    );
+    if (refreshedMappings.kind === "STOP") {
+      flow.push("mapping-eligibility:REVIEW");
+      return stopped(
+        input,
+        refreshedMappings.reasonCode,
+        flow,
+        scope.vendorState,
+        refreshedMappings.state,
+      );
+    }
+    flow.push("mapping-eligibility:REFRESHED");
+
+    const mappings = await this.store.reverifyMappings(input, actor);
+    if (mappings.kind === "STOP") {
+      flow.push("account-tax-mappings:REVIEW");
+      return stopped(input, mappings.reasonCode, flow, scope.vendorState, mappings.state);
     }
     flow.push("account-tax-mappings:VERIFIED");
 
@@ -473,5 +728,6 @@ export function createQuickBooksSandboxPilotExecutor(): QuickBooksSandboxPilotEx
     new SupabaseQuickBooksSandboxPilotStore(db),
     createAuthoritativePostingService(),
     new LiveQuickBooksSandboxOAuthVerifier(),
+    new LiveQuickBooksSandboxMappingVerifier(),
   );
 }

@@ -5,6 +5,7 @@ import type { AuthoritativePostingService } from "../lib/authoritative-posting-s
 import type { PostingActor, PostingState } from "../lib/posting-contract";
 import { quickBooksAccountingApiBase } from "../lib/quickbooks";
 import {
+  LiveQuickBooksSandboxMappingVerifier,
   LiveQuickBooksSandboxOAuthVerifier,
   QuickBooksSandboxPilotExecutor,
   type QuickBooksSandboxPilotInput,
@@ -28,6 +29,39 @@ const SCOPE = {
   billState: "AUTHORIZED" as const,
   existingBillId: null,
 };
+const EXPECTED_MAPPINGS = {
+  kind: "READY" as const,
+  account: {
+    mappingId: "aa100000-0000-4000-8000-000000000007",
+    providerAccountId: "14",
+    providerAccountCode: null,
+    providerAccountName: "Miscellaneous",
+    providerAccountType: "Other Expense",
+    providerAccountSubtype: "OtherMiscellaneousExpense",
+    providerVersion: null,
+  },
+  tax: {
+    treatmentId: "aa100000-0000-4000-8000-000000000008",
+    providerTaxCode: "NON",
+    treatmentName: "NON_TAXABLE",
+    evidenceFingerprint: "b".repeat(64),
+    providerVersion: null,
+  },
+};
+const OBSERVED_MAPPINGS = {
+  account: {
+    ...EXPECTED_MAPPINGS.account,
+    active: true,
+    providerVersion: "0",
+    providerRequestId: "account-read",
+  },
+  tax: {
+    ...EXPECTED_MAPPINGS.tax,
+    active: true,
+    providerRequestId: "tax-read",
+    verificationSource: "QBO_US_SPECIAL_NON" as const,
+  },
+};
 
 class MemoryPilotStore implements QuickBooksSandboxPilotStore {
   events: string[] = [];
@@ -36,6 +70,11 @@ class MemoryPilotStore implements QuickBooksSandboxPilotStore {
     scope: SCOPE,
   };
   mappingResult: Awaited<ReturnType<QuickBooksSandboxPilotStore["reverifyMappings"]>> = {
+    kind: "READY",
+  };
+  expectationResult: Awaited<ReturnType<QuickBooksSandboxPilotStore["getMappingExpectations"]>> =
+    EXPECTED_MAPPINGS;
+  refreshMappingResult: Awaited<ReturnType<QuickBooksSandboxPilotStore["refreshMappingEligibility"]>> = {
     kind: "READY",
   };
   authorizationResult: Awaited<ReturnType<QuickBooksSandboxPilotStore["refreshAuthorization"]>> = {
@@ -70,6 +109,16 @@ class MemoryPilotStore implements QuickBooksSandboxPilotStore {
     return this.mappingResult;
   }
 
+  async getMappingExpectations() {
+    this.events.push("MAPPING_EXPECTATIONS");
+    return this.expectationResult;
+  }
+
+  async refreshMappingEligibility() {
+    this.events.push("REFRESH_MAPPING_ELIGIBILITY");
+    return this.refreshMappingResult;
+  }
+
   async refreshAuthorization() {
     this.events.push("REFRESH_AUTHORIZATION");
     return this.authorizationResult;
@@ -88,6 +137,16 @@ class MemoryPilotStore implements QuickBooksSandboxPilotStore {
   ) {
     this.events.push(reasonCode);
   }
+}
+
+function pilotExecutor(
+  store: QuickBooksSandboxPilotStore,
+  service: Pick<AuthoritativePostingService,
+    "adoptExistingQuickBooksVendor" | "executeQuickBooksBill">,
+  oauth: { verify(userId: string, realmId: string): Promise<{ accountName: string | null }> },
+  mappings = { verify: vi.fn().mockResolvedValue(OBSERVED_MAPPINGS) },
+) {
+  return new QuickBooksSandboxPilotExecutor(store, service, oauth, mappings);
 }
 
 function posting(
@@ -140,7 +199,7 @@ describe("QuickBooks Sandbox pilot executor", () => {
     const store = new MemoryPilotStore();
     const target = posting();
     const oauth = { verify: vi.fn().mockResolvedValue({ accountName: "Sandbox Co" }) };
-    const executor = new QuickBooksSandboxPilotExecutor(store, target.service, oauth);
+    const executor = pilotExecutor(store, target.service, oauth);
 
     await expect(executor.execute(INPUT, ACTOR)).resolves.toMatchObject({
       verdict: "SUCCEEDED",
@@ -151,6 +210,9 @@ describe("QuickBooks Sandbox pilot executor", () => {
       flow: [
         "immutable-operation-evidence-scope:VERIFIED",
         "live-oauth:VERIFIED",
+        "mapping-expectations:VERIFIED",
+        "live-account-tax-mappings:VERIFIED",
+        "mapping-eligibility:REFRESHED",
         "account-tax-mappings:VERIFIED",
         "exact-human-authorization:REFRESHED",
         "final-dispatch-preflight:ALLOW",
@@ -163,6 +225,8 @@ describe("QuickBooks Sandbox pilot executor", () => {
     expect(store.events).toEqual([
       "ELIGIBILITY",
       "SANDBOX_PILOT_OAUTH_VERIFIED",
+      "MAPPING_EXPECTATIONS",
+      "REFRESH_MAPPING_ELIGIBILITY",
       "MAPPINGS",
       "REFRESH_AUTHORIZATION",
       "SANDBOX_PILOT_AUTHORIZATION_REFRESHED",
@@ -178,7 +242,7 @@ describe("QuickBooks Sandbox pilot executor", () => {
       store.eligibilityResult = { kind: "STOP", state, reasonCode: `PAIR_${state}` };
       const target = posting();
       const oauth = { verify: vi.fn() };
-      const result = await new QuickBooksSandboxPilotExecutor(store, target.service, oauth)
+      const result = await pilotExecutor(store, target.service, oauth)
         .execute(INPUT, ACTOR);
       expect(result).toMatchObject({ verdict: "STOPPED", reasonCode: `PAIR_${state}` });
       expect(oauth.verify).not.toHaveBeenCalled();
@@ -190,7 +254,7 @@ describe("QuickBooks Sandbox pilot executor", () => {
     const store = new MemoryPilotStore();
     const target = posting();
     const oauth = { verify: vi.fn().mockRejectedValue(new Error("revoked")) };
-    const result = await new QuickBooksSandboxPilotExecutor(store, target.service, oauth)
+    const result = await pilotExecutor(store, target.service, oauth)
       .execute(INPUT, ACTOR);
     expect(result).toMatchObject({
       verdict: "STOPPED",
@@ -202,7 +266,7 @@ describe("QuickBooks Sandbox pilot executor", () => {
     expect(store.events).not.toContain("REFRESH_AUTHORIZATION");
   });
 
-  it("stops on mapping REVIEW after OAuth and before authorization refresh", async () => {
+  it("stops when the final DB mapping recheck fails after live refresh", async () => {
     const store = new MemoryPilotStore();
     store.mappingResult = {
       kind: "STOP",
@@ -210,7 +274,7 @@ describe("QuickBooks Sandbox pilot executor", () => {
       reasonCode: "PILOT_ACCOUNT_MAPPING_NOT_CURRENT",
     };
     const target = posting();
-    const result = await new QuickBooksSandboxPilotExecutor(
+    const result = await pilotExecutor(
       store,
       target.service,
       { verify: vi.fn().mockResolvedValue({ accountName: "Sandbox Co" }) },
@@ -222,10 +286,97 @@ describe("QuickBooks Sandbox pilot executor", () => {
       flow: [
         "immutable-operation-evidence-scope:VERIFIED",
         "live-oauth:VERIFIED",
+        "mapping-expectations:VERIFIED",
+        "live-account-tax-mappings:VERIFIED",
+        "mapping-eligibility:REFRESHED",
         "account-tax-mappings:REVIEW",
       ],
     });
     expect(store.events).not.toContain("REFRESH_AUTHORIZATION");
+    expect(target.calls).toEqual([]);
+  });
+
+  it("stops REVIEW without authorization or provider writes when live account identity differs", async () => {
+    const store = new MemoryPilotStore();
+    store.refreshMappingResult = {
+      kind: "STOP",
+      state: "REVIEW",
+      reasonCode: "PILOT_ACCOUNT_PROVIDER_MISMATCH",
+    };
+    const target = posting();
+    const mappingVerifier = {
+      verify: vi.fn().mockResolvedValue({
+        ...OBSERVED_MAPPINGS,
+        account: { ...OBSERVED_MAPPINGS.account, providerAccountId: "different" },
+      }),
+    };
+    const result = await pilotExecutor(
+      store,
+      target.service,
+      { verify: vi.fn().mockResolvedValue({ accountName: "Sandbox Co" }) },
+      mappingVerifier,
+    ).execute(INPUT, ACTOR);
+
+    expect(result).toMatchObject({
+      verdict: "STOPPED",
+      billState: "REVIEW",
+      reasonCode: "PILOT_ACCOUNT_PROVIDER_MISMATCH",
+      flow: expect.arrayContaining(["mapping-eligibility:REVIEW"]),
+    });
+    expect(store.events).not.toContain("REFRESH_AUTHORIZATION");
+    expect(store.events).not.toContain("MAPPINGS");
+    expect(target.calls).toEqual([]);
+  });
+
+  it("stops REVIEW without mutating the Bill path when live tax identity differs", async () => {
+    const store = new MemoryPilotStore();
+    store.refreshMappingResult = {
+      kind: "STOP",
+      state: "REVIEW",
+      reasonCode: "PILOT_TAX_PROVIDER_MISMATCH",
+    };
+    const target = posting();
+    const mappingVerifier = {
+      verify: vi.fn().mockResolvedValue({
+        ...OBSERVED_MAPPINGS,
+        tax: { ...OBSERVED_MAPPINGS.tax, providerTaxCode: "TAX" },
+      }),
+    };
+    const result = await pilotExecutor(
+      store,
+      target.service,
+      { verify: vi.fn().mockResolvedValue({ accountName: "Sandbox Co" }) },
+      mappingVerifier,
+    ).execute(INPUT, ACTOR);
+
+    expect(result).toMatchObject({
+      verdict: "STOPPED",
+      billState: "REVIEW",
+      reasonCode: "PILOT_TAX_PROVIDER_MISMATCH",
+      flow: expect.arrayContaining(["mapping-eligibility:REVIEW"]),
+    });
+    expect(store.events).not.toContain("REFRESH_AUTHORIZATION");
+    expect(store.events).not.toContain("MAPPINGS");
+    expect(target.calls).toEqual([]);
+  });
+
+  it("stops REVIEW when live tax verification cannot be obtained", async () => {
+    const store = new MemoryPilotStore();
+    const target = posting();
+    const result = await pilotExecutor(
+      store,
+      target.service,
+      { verify: vi.fn().mockResolvedValue({ accountName: "Sandbox Co" }) },
+      { verify: vi.fn().mockRejectedValue(new Error("tax unavailable")) },
+    ).execute(INPUT, ACTOR);
+
+    expect(result).toMatchObject({
+      verdict: "STOPPED",
+      reasonCode: "PILOT_LIVE_MAPPING_UNVERIFIABLE",
+      flow: expect.arrayContaining(["live-account-tax-mappings:REVIEW"]),
+    });
+    expect(store.events).toContain("SANDBOX_PILOT_LIVE_MAPPING_REVIEW");
+    expect(store.events).not.toContain("REFRESH_MAPPING_ELIGIBILITY");
     expect(target.calls).toEqual([]);
   });
 
@@ -237,7 +388,7 @@ describe("QuickBooks Sandbox pilot executor", () => {
       reasonCode: "CURRENT_TAX_MAPPING_INVALID",
     };
     const target = posting();
-    const result = await new QuickBooksSandboxPilotExecutor(
+    const result = await pilotExecutor(
       store,
       target.service,
       { verify: vi.fn().mockResolvedValue({ accountName: "Sandbox Co" }) },
@@ -261,7 +412,7 @@ describe("QuickBooks Sandbox pilot executor", () => {
       reasonCode: "PILOT_EXACT_AUTHORIZATION_STALE",
     };
     const target = posting();
-    const result = await new QuickBooksSandboxPilotExecutor(
+    const result = await pilotExecutor(
       store,
       target.service,
       { verify: vi.fn().mockResolvedValue({ accountName: "Sandbox Co" }) },
@@ -278,7 +429,7 @@ describe("QuickBooks Sandbox pilot executor", () => {
   it("never dispatches Bill unless Vendor adoption returns exact SUCCEEDED binding", async () => {
     const store = new MemoryPilotStore();
     const target = posting("REVIEW");
-    const result = await new QuickBooksSandboxPilotExecutor(
+    const result = await pilotExecutor(
       store,
       target.service,
       { verify: vi.fn().mockResolvedValue({ accountName: null }) },
@@ -296,7 +447,7 @@ describe("QuickBooks Sandbox pilot executor", () => {
       return originalAudit(input, actor, reasonCode, details);
     };
     const target = posting();
-    await expect(new QuickBooksSandboxPilotExecutor(
+    await expect(pilotExecutor(
       store,
       target.service,
       { verify: vi.fn().mockResolvedValue({ accountName: null }) },
@@ -307,7 +458,7 @@ describe("QuickBooks Sandbox pilot executor", () => {
   it("stops on an UNCERTAIN Bill outcome and does not retry", async () => {
     const store = new MemoryPilotStore();
     const target = posting("SUCCEEDED", "UNCERTAIN");
-    const result = await new QuickBooksSandboxPilotExecutor(
+    const result = await pilotExecutor(
       store,
       target.service,
       { verify: vi.fn().mockResolvedValue({ accountName: null }) },
@@ -324,7 +475,7 @@ describe("QuickBooks Sandbox pilot executor", () => {
       scope: { ...SCOPE, vendorState: "SUCCEEDED", billState: "SUCCEEDED", existingBillId: "801" },
     };
     const target = posting();
-    const result = await new QuickBooksSandboxPilotExecutor(
+    const result = await pilotExecutor(
       store,
       target.service,
       { verify: vi.fn().mockResolvedValue({ accountName: "Sandbox Co" }) },
@@ -339,7 +490,7 @@ describe("QuickBooks Sandbox pilot executor", () => {
     const store = new MemoryPilotStore();
     const target = posting();
     const oauth = { verify: vi.fn() };
-    const result = await new QuickBooksSandboxPilotExecutor(store, target.service, oauth)
+    const result = await pilotExecutor(store, target.service, oauth)
       .execute(INPUT, ACTOR);
     expect(result).toMatchObject({ verdict: "STOPPED", reasonCode: "QUICKBOOKS_SANDBOX_REQUIRED" });
     expect(store.events).toEqual([]);
@@ -353,7 +504,7 @@ describe("QuickBooks Sandbox pilot executor", () => {
     const target = posting();
     const oauth = { verify: vi.fn().mockResolvedValue({ accountName: "Sandbox Co" }) };
 
-    await expect(new QuickBooksSandboxPilotExecutor(store, target.service, oauth)
+    await expect(pilotExecutor(store, target.service, oauth)
       .execute(INPUT, ACTOR)).resolves.toMatchObject({
         verdict: "SUCCEEDED",
         vendorState: "SUCCEEDED",
@@ -367,7 +518,7 @@ describe("QuickBooks Sandbox pilot executor", () => {
     const store = new MemoryPilotStore();
     const target = posting();
     const oauth = { verify: vi.fn() };
-    const result = await new QuickBooksSandboxPilotExecutor(store, target.service, oauth)
+    const result = await pilotExecutor(store, target.service, oauth)
       .execute({ ...INPUT, billOperationId: "aa100000-0000-4000-8000-000000000099" }, ACTOR);
 
     expect(result).toMatchObject({ verdict: "STOPPED", reasonCode: "QUICKBOOKS_SANDBOX_REQUIRED" });
@@ -382,7 +533,7 @@ describe("QuickBooks Sandbox pilot executor", () => {
     store.eligibilityResult = { kind: "READY", scope: { ...SCOPE, realmId: "different-realm" } };
     const target = posting();
     const oauth = { verify: vi.fn() };
-    const result = await new QuickBooksSandboxPilotExecutor(store, target.service, oauth)
+    const result = await pilotExecutor(store, target.service, oauth)
       .execute(INPUT, ACTOR);
 
     expect(result).toMatchObject({
@@ -437,6 +588,102 @@ describe("live Sandbox OAuth verifier", () => {
   });
 });
 
+describe("live Sandbox mapping verifier", () => {
+  it("reads the exact account and special NON tax preference without provider writes", async () => {
+    const http = vi.fn(async (url: string, init: RequestInit) => {
+      expect(init.method).toBe("GET");
+      if (url.includes("/account/14")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => "account-read" },
+          json: async () => ({ Account: {
+            Id: "14",
+            Name: "Miscellaneous",
+            Active: true,
+            AccountType: "Other Expense",
+            AccountSubType: "OtherMiscellaneousExpense",
+            SyncToken: "0",
+          } }),
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => "tax-read" },
+        json: async () => ({ Preferences: { TaxPrefs: { UsingSalesTax: true } } }),
+      };
+    });
+    const verifier = new LiveQuickBooksSandboxMappingVerifier(
+      { getAccess: vi.fn().mockResolvedValue({ accessToken: "live-token", realmId: SCOPE.realmId }) },
+      http,
+    );
+
+    await expect(verifier.verify(ACTOR.userId, SCOPE.realmId, EXPECTED_MAPPINGS))
+      .resolves.toEqual(OBSERVED_MAPPINGS);
+    expect(http).toHaveBeenCalledTimes(2);
+    expect(http.mock.calls.every(([, init]) => init.method === "GET")).toBe(true);
+  });
+
+  it("preserves a materially different live account identity for the DB to reject", async () => {
+    const http = vi.fn(async (url: string) => url.includes("/account/14") ? {
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      json: async () => ({ Account: {
+        Id: "99", Name: "Changed", Active: false,
+        AccountType: "Income", AccountSubType: "SalesOfProductIncome",
+      } }),
+    } : {
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      json: async () => ({ Preferences: { TaxPrefs: { UsingSalesTax: true } } }),
+    });
+    const verifier = new LiveQuickBooksSandboxMappingVerifier(
+      { getAccess: vi.fn().mockResolvedValue({ accessToken: "live-token", realmId: SCOPE.realmId }) },
+      http,
+    );
+
+    const observed = await verifier.verify(ACTOR.userId, SCOPE.realmId, EXPECTED_MAPPINGS);
+    expect(observed.account).toMatchObject({
+      providerAccountId: "99",
+      providerAccountName: "Changed",
+      active: false,
+    });
+    expect(observed.tax.evidenceFingerprint).toBe(EXPECTED_MAPPINGS.tax.evidenceFingerprint);
+  });
+
+  it("marks the special NON treatment inactive when live tax preferences differ", async () => {
+    const http = vi.fn(async (url: string) => url.includes("/account/14") ? {
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      json: async () => ({ Account: {
+        Id: "14", Name: "Miscellaneous", Active: true, SyncToken: "0",
+        AccountType: "Other Expense", AccountSubType: "OtherMiscellaneousExpense",
+      } }),
+    } : {
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      json: async () => ({ Preferences: { TaxPrefs: { UsingSalesTax: false } } }),
+    });
+    const verifier = new LiveQuickBooksSandboxMappingVerifier(
+      { getAccess: vi.fn().mockResolvedValue({ accessToken: "live-token", realmId: SCOPE.realmId }) },
+      http,
+    );
+
+    const observed = await verifier.verify(ACTOR.userId, SCOPE.realmId, EXPECTED_MAPPINGS);
+    expect(observed.tax).toMatchObject({
+      providerTaxCode: "NON",
+      evidenceFingerprint: EXPECTED_MAPPINGS.tax.evidenceFingerprint,
+      active: false,
+      verificationSource: "QBO_US_SPECIAL_NON",
+    });
+  });
+});
+
 describe("migration 026 contract", () => {
   const sql = readFileSync(
     join(process.cwd(), "..", "supabase", "migrations", "026_quickbooks_sandbox_pilot_executor.sql"),
@@ -479,6 +726,31 @@ describe("migration 027 ordering contract", () => {
     expect(sql).toMatch(/REVOKE ALL ON FUNCTION public\.prepare_quickbooks_sandbox_pilot_eligibility_v2[\s\S]*authenticated, service_role/i);
     expect(sql).toMatch(/GRANT EXECUTE ON FUNCTION public\.prepare_quickbooks_sandbox_pilot_eligibility_v2[\s\S]*TO service_role/i);
     expect(sql).toMatch(/REVOKE ALL ON FUNCTION public\.reverify_quickbooks_sandbox_pilot_mappings_v1[\s\S]*authenticated, service_role/i);
+    expect(sql).not.toMatch(/http_(?:get|post)|net\.http/i);
+  });
+});
+
+describe("migration 028 mapping refresh contract", () => {
+  const sql = readFileSync(
+    join(process.cwd(), "..", "supabase", "migrations", "028_quickbooks_sandbox_mapping_refresh.sql"),
+    "utf8",
+  );
+
+  it("refreshes both mappings only after exact account and tax comparisons", () => {
+    expect(sql).toMatch(/PILOT_ACCOUNT_PROVIDER_MISMATCH/);
+    expect(sql).toMatch(/PILOT_TAX_PROVIDER_MISMATCH/);
+    expect(sql).toMatch(/UPDATE public\.provider_posting_account_mappings/);
+    expect(sql).toMatch(/UPDATE public\.provider_tax_treatment_mappings/);
+    expect(sql).toMatch(/SANDBOX_PILOT_MAPPING_ELIGIBILITY_REFRESHED/);
+    expect(sql).toMatch(/accountPreviousExpiry/);
+    expect(sql).toMatch(/taxPreviousExpiry/);
+  });
+
+  it("never mutates posting intent and exposes only service-role coordinator RPCs", () => {
+    expect(sql).not.toMatch(/UPDATE public\.posting_operations/);
+    expect(sql).toMatch(/billIntentMutated',false/);
+    expect(sql).toMatch(/REVOKE ALL ON FUNCTION public\.refresh_quickbooks_sandbox_pilot_mapping_eligibility_v1[\s\S]*authenticated,service_role/i);
+    expect(sql).toMatch(/GRANT EXECUTE ON FUNCTION public\.refresh_quickbooks_sandbox_pilot_mapping_eligibility_v1[\s\S]*TO service_role/i);
     expect(sql).not.toMatch(/http_(?:get|post)|net\.http/i);
   });
 });
