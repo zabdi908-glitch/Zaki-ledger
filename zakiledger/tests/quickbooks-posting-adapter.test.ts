@@ -397,6 +397,25 @@ describe("QuickBooksPostingAdapter CREATE BILL", () => {
     expect(transport.recoveryCalls).toBe(1);
   });
 
+  it("lets the bounded pilot stop on UNCERTAIN without starting recovery", async () => {
+    const store = new MemoryQuickBooksExecutionStore();
+    store.state = "UNCERTAIN";
+    const transport = new FakeQuickBooksPostingTransport();
+    const stopped = await service(store).executeQuickBooksBill(
+      OPERATION_ID,
+      ACTOR,
+      new QuickBooksPostingAdapter(transport),
+      { recoverExisting: false },
+    );
+    expect(stopped).toMatchObject({
+      state: "UNCERTAIN",
+      reasonCodes: ["PILOT_STOP_RECOVERY_REQUIRED"],
+      recovered: false,
+    });
+    expect(transport.createCalls).toBe(0);
+    expect(transport.recoveryCalls).toBe(0);
+  });
+
   it("maps deterministic provider validation rejection to FAILED_SAFE", async () => {
     const store = new MemoryQuickBooksExecutionStore();
     const transport = new FakeQuickBooksPostingTransport("VALIDATION_REJECTION");

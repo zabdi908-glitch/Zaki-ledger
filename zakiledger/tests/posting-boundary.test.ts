@@ -104,7 +104,9 @@ describe("provider posting module boundary", () => {
       }
       const isAuthoritativeBoundary =
         file.endsWith("/lib/authoritative-posting-service.ts") ||
-        file.endsWith("/lib/quickbooks-execution-store.ts");
+        file.endsWith("/lib/quickbooks-execution-store.ts") ||
+        file.endsWith("/lib/quickbooks-vendor-execution-store.ts") ||
+        file.endsWith("/lib/quickbooks-sandbox-pilot-executor.ts");
       if (!file.includes("/provider-adapters/") && !isAuthoritativeBoundary &&
           source.includes("/provider-adapters/")) {
         violations.push(`${relative(runtimeRoot, file)}: imports provider adapter`);
