@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthoritativePostingService } from "../lib/authoritative-posting-service";
 import type { PostingActor, PostingState } from "../lib/posting-contract";
+import { quickBooksAccountingApiBase } from "../lib/quickbooks";
 import {
   LiveQuickBooksSandboxOAuthVerifier,
   QuickBooksSandboxPilotExecutor,
@@ -11,8 +12,8 @@ import {
 } from "../lib/quickbooks-sandbox-pilot-executor";
 
 const INPUT: QuickBooksSandboxPilotInput = {
-  vendorOperationId: "aa100000-0000-4000-8000-000000000001",
-  billOperationId: "aa100000-0000-4000-8000-000000000002",
+  vendorOperationId: "249d5c5b-1111-42b2-9615-108e51a31696",
+  billOperationId: "1c93b544-c9b2-4f0a-a573-c96d9a07f61e",
   externalVendorId: "70",
 };
 const ACTOR: PostingActor = {
@@ -84,11 +85,13 @@ function posting(
 }
 
 beforeEach(() => {
-  process.env.QUICKBOOKS_ENVIRONMENT = "sandbox";
+  vi.stubEnv("NODE_ENV", "test");
+  process.env.QUICKBOOKS_ENVIRONMENT = "production";
   process.env.QUICKBOOKS_SANDBOX_PILOT_ENABLED = "true";
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   delete process.env.QUICKBOOKS_ENVIRONMENT;
   delete process.env.QUICKBOOKS_SANDBOX_PILOT_ENABLED;
 });
@@ -209,8 +212,8 @@ describe("QuickBooks Sandbox pilot executor", () => {
     expect(target.calls).toEqual([]);
   });
 
-  it("fails closed before database or network access when configured for production", async () => {
-    process.env.QUICKBOOKS_ENVIRONMENT = "production";
+  it("fails closed before database or network access when the pilot is disabled", async () => {
+    process.env.QUICKBOOKS_SANDBOX_PILOT_ENABLED = "false";
     const store = new MemoryPilotStore();
     const target = posting();
     const oauth = { verify: vi.fn() };
@@ -218,6 +221,54 @@ describe("QuickBooks Sandbox pilot executor", () => {
       .execute(INPUT, ACTOR);
     expect(result).toMatchObject({ verdict: "STOPPED", reasonCode: "QUICKBOOKS_SANDBOX_REQUIRED" });
     expect(store.events).toEqual([]);
+    expect(oauth.verify).not.toHaveBeenCalled();
+    expect(target.calls).toEqual([]);
+  });
+
+  it("allows a production-hosted Sandbox run for the code-pinned operations and realm", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    const store = new MemoryPilotStore();
+    const target = posting();
+    const oauth = { verify: vi.fn().mockResolvedValue({ accountName: "Sandbox Co" }) };
+
+    await expect(new QuickBooksSandboxPilotExecutor(store, target.service, oauth)
+      .execute(INPUT, ACTOR)).resolves.toMatchObject({
+        verdict: "SUCCEEDED",
+        vendorState: "SUCCEEDED",
+        billState: "SUCCEEDED",
+      });
+    expect(target.calls).toEqual(["VENDOR_READ_BACK", "BILL_CREATE_AND_READ_BACK"]);
+  });
+
+  it("stops before preflight when an operation is not the code-pinned pilot operation", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    const store = new MemoryPilotStore();
+    const target = posting();
+    const oauth = { verify: vi.fn() };
+    const result = await new QuickBooksSandboxPilotExecutor(store, target.service, oauth)
+      .execute({ ...INPUT, billOperationId: "aa100000-0000-4000-8000-000000000099" }, ACTOR);
+
+    expect(result).toMatchObject({ verdict: "STOPPED", reasonCode: "QUICKBOOKS_SANDBOX_REQUIRED" });
+    expect(store.events).toEqual([]);
+    expect(oauth.verify).not.toHaveBeenCalled();
+    expect(target.calls).toEqual([]);
+  });
+
+  it("stops before OAuth when the resolved realm is not the code-pinned Sandbox realm", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    const store = new MemoryPilotStore();
+    store.prepareResult = { kind: "READY", scope: { ...SCOPE, realmId: "different-realm" } };
+    const target = posting();
+    const oauth = { verify: vi.fn() };
+    const result = await new QuickBooksSandboxPilotExecutor(store, target.service, oauth)
+      .execute(INPUT, ACTOR);
+
+    expect(result).toMatchObject({
+      verdict: "STOPPED",
+      reasonCode: "QUICKBOOKS_SANDBOX_REQUIRED",
+      flow: ["operation-pair-and-current-gates:ALLOW", "pilot-realm:STOP"],
+    });
+    expect(store.events).toEqual(["PREPARE"]);
     expect(oauth.verify).not.toHaveBeenCalled();
     expect(target.calls).toEqual([]);
   });
@@ -240,6 +291,27 @@ describe("live Sandbox OAuth verifier", () => {
     });
     expect(http).toHaveBeenCalledWith(expect.stringContaining("sandbox-quickbooks.api.intuit.com"),
       expect.objectContaining({ method: "GET" }));
+  });
+
+  it("keeps a production-hosted OAuth probe pinned to the configured realm and Sandbox URL", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    const http = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ CompanyInfo: { CompanyName: "Sandbox Co" } }),
+    });
+    const access = { getAccess: vi.fn().mockResolvedValue({ accessToken: "live-token", realmId: SCOPE.realmId }) };
+    const verifier = new LiveQuickBooksSandboxOAuthVerifier(access, http);
+
+    await expect(verifier.verify(ACTOR.userId, SCOPE.realmId)).resolves.toEqual({
+      accountName: "Sandbox Co",
+    });
+    expect(quickBooksAccountingApiBase()).toBe("https://quickbooks.api.intuit.com");
+    expect(http.mock.calls[0][0]).toMatch(/^https:\/\/sandbox-quickbooks\.api\.intuit\.com\//);
+
+    await expect(verifier.verify(ACTOR.userId, "different-realm"))
+      .rejects.toThrow("QUICKBOOKS_SANDBOX_REQUIRED");
+    expect(access.getAccess).toHaveBeenCalledTimes(1);
+    expect(http).toHaveBeenCalledTimes(1);
   });
 });
 

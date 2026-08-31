@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAuthoritativePostingService, type AuthoritativePostingService } from "./authoritative-posting-service";
 import type { PostingActor, PostingState } from "./posting-contract";
-import { getValidQboAccess, quickBooksAccountingApiBase } from "./quickbooks";
+import { getValidQboAccess } from "./quickbooks";
 import {
   createAuthenticatedQuickBooksPostingAdapter,
   createAuthenticatedQuickBooksVendorAdoptionAdapter,
@@ -12,12 +12,21 @@ import {
 import { getSupabase } from "./supabase";
 
 const SANDBOX_API_BASE = "https://sandbox-quickbooks.api.intuit.com";
+const PILOT_REALM_ID = "9341457595863196";
+const PILOT_VENDOR_OPERATION_ID = "249d5c5b-1111-42b2-9615-108e51a31696";
+const PILOT_BILL_OPERATION_ID = "1c93b544-c9b2-4f0a-a573-c96d9a07f61e";
 
-function sandboxPilotRuntimeAllowed(): boolean {
-  return process.env.NODE_ENV !== "production" &&
-    process.env.QUICKBOOKS_ENVIRONMENT === "sandbox" &&
-    process.env.QUICKBOOKS_SANDBOX_PILOT_ENABLED === "true" &&
-    quickBooksAccountingApiBase() === SANDBOX_API_BASE;
+function sandboxPilotBaseRuntimeAllowed(): boolean {
+  return process.env.QUICKBOOKS_SANDBOX_PILOT_ENABLED === "true";
+}
+
+function pilotOperationsAllowed(input: QuickBooksSandboxPilotInput): boolean {
+  return input.vendorOperationId === PILOT_VENDOR_OPERATION_ID &&
+    input.billOperationId === PILOT_BILL_OPERATION_ID;
+}
+
+function pilotRealmAllowed(realmId: string): boolean {
+  return realmId === PILOT_REALM_ID;
 }
 
 export interface QuickBooksSandboxPilotInput {
@@ -106,7 +115,7 @@ export class LiveQuickBooksSandboxOAuthVerifier implements QuickBooksSandboxOAut
   ) {}
 
   async verify(userId: string, realmId: string): Promise<{ accountName: string | null }> {
-    if (!sandboxPilotRuntimeAllowed()) {
+    if (!sandboxPilotBaseRuntimeAllowed() || !pilotRealmAllowed(realmId)) {
       throw new Error("QUICKBOOKS_SANDBOX_REQUIRED");
     }
     const credential = await this.access.getAccess(userId);
@@ -171,7 +180,7 @@ export class QuickBooksSandboxPilotExecutor {
     actor: PostingActor,
   ): Promise<QuickBooksSandboxPilotResult> {
     const flow: string[] = [];
-    if (!sandboxPilotRuntimeAllowed()) {
+    if (!sandboxPilotBaseRuntimeAllowed() || !pilotOperationsAllowed(input)) {
       return stopped(input, "QUICKBOOKS_SANDBOX_REQUIRED", flow, null, null);
     }
 
@@ -182,6 +191,16 @@ export class QuickBooksSandboxPilotExecutor {
     }
     const scope = prepared.scope;
     flow.push("operation-pair-and-current-gates:ALLOW");
+    if (!pilotRealmAllowed(scope.realmId)) {
+      flow.push("pilot-realm:STOP");
+      return stopped(
+        input,
+        "QUICKBOOKS_SANDBOX_REQUIRED",
+        flow,
+        scope.vendorState,
+        scope.billState,
+      );
+    }
 
     let oauthResult: { accountName: string | null };
     try {
@@ -235,6 +254,7 @@ export class QuickBooksSandboxPilotExecutor {
         adapterScope,
         this.accessClient,
         this.http,
+        "sandbox",
       ),
     );
     flow.push(`vendor-adopt-read-back:${vendor.state}`);
@@ -266,7 +286,12 @@ export class QuickBooksSandboxPilotExecutor {
     const bill = await this.posting.executeQuickBooksBill(
       input.billOperationId,
       actor,
-      createAuthenticatedQuickBooksPostingAdapter(adapterScope, this.accessClient, this.http),
+      createAuthenticatedQuickBooksPostingAdapter(
+        adapterScope,
+        this.accessClient,
+        this.http,
+        "sandbox",
+      ),
       { recoverExisting: false },
     );
     flow.push(`bill-dispatch-and-read-back:${bill.state}`);
