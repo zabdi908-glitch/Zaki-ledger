@@ -48,6 +48,7 @@ export type QuickBooksHttpClient = (
 const defaultAccessClient: QuickBooksAuthenticatedAccessClient = {
   getAccess: getValidQboAccess,
 };
+const QUICKBOOKS_SANDBOX_API_BASE = "https://sandbox-quickbooks.api.intuit.com";
 
 function nonBlank(value: string, label: string): string {
   if (!value.trim()) throw new Error(`${label} is required`);
@@ -126,17 +127,22 @@ function observedBill(realmId: string, value: unknown): QuickBooksObservedBill |
 export class AuthenticatedQuickBooksPostingTransport
   implements QuickBooksPostingTransport, QuickBooksVendorPostingTransport {
   private readonly scope: QuickBooksAuthenticatedPostingScope;
+  private readonly apiBase: string;
 
   constructor(
     scope: QuickBooksAuthenticatedPostingScope,
     private readonly accessClient: QuickBooksAuthenticatedAccessClient = defaultAccessClient,
     private readonly http: QuickBooksHttpClient = fetch,
+    environmentOverride?: "sandbox",
   ) {
     this.scope = {
       actorUserId: nonBlank(scope.actorUserId, "actor user ID"),
       providerConnectionId: nonBlank(scope.providerConnectionId, "provider connection ID"),
       realmId: nonBlank(scope.realmId, "QuickBooks realm ID"),
     };
+    this.apiBase = environmentOverride === "sandbox"
+      ? QUICKBOOKS_SANDBOX_API_BASE
+      : quickBooksAccountingApiBase();
   }
 
   private async headers(realmId: string): Promise<HeadersInit> {
@@ -154,7 +160,7 @@ export class AuthenticatedQuickBooksPostingTransport
   }
 
   private url(realmId: string, path: string): string {
-    return `${quickBooksAccountingApiBase()}/v3/company/${encodeURIComponent(realmId)}/${path}`;
+    return `${this.apiBase}/v3/company/${encodeURIComponent(realmId)}/${path}`;
   }
 
   private assertProviderConnection(providerConnectionId: string): void {
@@ -284,9 +290,10 @@ export function createAuthenticatedQuickBooksVendorPostingAdapter(
   scope: QuickBooksAuthenticatedPostingScope,
   accessClient?: QuickBooksAuthenticatedAccessClient,
   http?: QuickBooksHttpClient,
+  environmentOverride?: "sandbox",
 ): QuickBooksVendorPostingAdapter {
   return new QuickBooksVendorPostingAdapter(
-    new AuthenticatedQuickBooksPostingTransport(scope, accessClient, http),
+    new AuthenticatedQuickBooksPostingTransport(scope, accessClient, http, environmentOverride),
   );
 }
 
@@ -295,9 +302,10 @@ export function createAuthenticatedQuickBooksVendorAdoptionAdapter(
   scope: QuickBooksAuthenticatedPostingScope,
   accessClient?: QuickBooksAuthenticatedAccessClient,
   http?: QuickBooksHttpClient,
+  environmentOverride?: "sandbox",
 ): QuickBooksVendorAdoptionAdapter {
   return new QuickBooksVendorAdoptionAdapter(
-    new AuthenticatedQuickBooksPostingTransport(scope, accessClient, http),
+    new AuthenticatedQuickBooksPostingTransport(scope, accessClient, http, environmentOverride),
   );
 }
 
@@ -306,8 +314,9 @@ export function createAuthenticatedQuickBooksPostingAdapter(
   scope: QuickBooksAuthenticatedPostingScope,
   accessClient?: QuickBooksAuthenticatedAccessClient,
   http?: QuickBooksHttpClient,
+  environmentOverride?: "sandbox",
 ): QuickBooksPostingAdapter {
   return new QuickBooksPostingAdapter(
-    new AuthenticatedQuickBooksPostingTransport(scope, accessClient, http),
+    new AuthenticatedQuickBooksPostingTransport(scope, accessClient, http, environmentOverride),
   );
 }

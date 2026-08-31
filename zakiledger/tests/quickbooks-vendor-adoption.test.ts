@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { AuthoritativePostingService } from "../lib/authoritative-posting-service";
 import type { PostingActor, PostingState } from "../lib/posting-contract";
 import type { PostingStore } from "../lib/posting-store";
@@ -300,6 +300,36 @@ describe("safe QuickBooks ENSURE_VENDOR adopt-existing", () => {
     expect(calls[0].url).toContain(`/v3/company/${REALM}/vendor/${VENDOR_ID}?minorversion=65`);
     expect(calls[0].init.method).toBeUndefined();
     expect(calls[0].init.body).toBeUndefined();
+  });
+
+  it("supports a code-only Sandbox override without changing the global QuickBooks environment", async () => {
+    vi.stubEnv("QUICKBOOKS_ENVIRONMENT", "production");
+    try {
+      const calls: string[] = [];
+      const adapter = createAuthenticatedQuickBooksVendorAdoptionAdapter(
+        { actorUserId: ACTOR.userId, providerConnectionId: CONNECTION_ID, realmId: REALM },
+        { getAccess: async () => ({ accessToken: "fake-access-token", realmId: REALM }) },
+        async (url) => {
+          calls.push(url);
+          return {
+            ok: true,
+            status: 200,
+            headers: { get: () => null },
+            json: async () => ({
+              Vendor: { Id: VENDOR_ID, DisplayName: "Sandbox Vendor", Active: true, SyncToken: "1" },
+            }),
+          };
+        },
+        "sandbox",
+      );
+
+      await expect(adapter.readBack(adoptionGrant())).resolves.toMatchObject({ kind: "OBSERVED" });
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatch(/^https:\/\/sandbox-quickbooks\.api\.intuit\.com\//);
+      expect(process.env.QUICKBOOKS_ENVIRONMENT).toBe("production");
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("fails closed before HTTP when the provider connection scope differs", async () => {
