@@ -6,6 +6,7 @@ import { requireUser } from "@/lib/auth";
 import { isReconciliationWriteFrozen, reconciliationFreezeResponse } from "@/lib/reconciliation-freeze";
 import type { FileFormat } from "@/lib/reconciliation-schema";
 import { sha256Hex } from "@/lib/financial-identity";
+import { MAX_OFX_UPLOAD_BYTES, retainOfxEvidence } from "@/lib/ofx-evidence-store";
 
 /** File extension -> parser. */
 function detectFormat(fileName: string): FileFormat | null {
@@ -42,6 +43,13 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    if (format === "ofx" && (file.size === 0 || file.size > MAX_OFX_UPLOAD_BYTES)) {
+      return NextResponse.json(
+        { error: `OFX upload must be between 1 and ${MAX_OFX_UPLOAD_BYTES} bytes.` },
+        { status: 413 },
+      );
+    }
+
     const fileBytes = new Uint8Array(await file.arrayBuffer());
     const sourceArtifactHash = sha256Hex(fileBytes);
     const text = format === "pdf" ? null : new TextDecoder().decode(fileBytes);
@@ -59,9 +67,19 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    let artifactId: string | undefined;
+    if (format === "ofx") {
+      const evidence = await retainOfxEvidence({ userId: user.id, rawBytes: fileBytes, parsed });
+      if (evidence.contentSha256 !== sourceArtifactHash || evidence.contentLength !== fileBytes.byteLength) {
+        throw new Error("OFX evidence verification failed before statement ingestion");
+      }
+      artifactId = evidence.artifactId;
+    }
+
     const statement = await saveBankStatement(user.id, file.name, format, parsed, { sourceArtifactHash });
 
     return NextResponse.json({
+      ...(artifactId ? { artifactId } : {}),
       statementId: statement.id,
       transactionCount: statement.transactionCount,
       dateRange: { start: statement.periodStart, end: statement.periodEnd },
