@@ -22,6 +22,14 @@ function sourceFiles(root: string): string[] {
   return output;
 }
 
+function importsProviderAdapterAtRuntime(source: string): boolean {
+  const providerModule = `["'][^"'\\n]*\\/provider-adapters\\/[^"'\\n]*["']`;
+  return new RegExp(`^\\s*import\\s+(?!type\\b)[^;]*${providerModule}`, "m").test(source) ||
+    new RegExp(`^\\s*export\\s+(?!type\\b)[^;]*\\sfrom\\s+${providerModule}`, "m").test(source) ||
+    new RegExp(`\\brequire\\s*\\(\\s*${providerModule}`).test(source) ||
+    new RegExp(`\\bimport\\s*\\(\\s*${providerModule}`).test(source);
+}
+
 const bill = {
   documentType: "invoice" as const,
   supplierName: "Boundary Supplier",
@@ -82,6 +90,21 @@ const allowContext: PostingValidationContext = {
 };
 
 describe("provider posting module boundary", () => {
+  it("distinguishes erased type imports from runtime provider-adapter dependencies", () => {
+    expect(importsProviderAdapterAtRuntime(
+      'import type { QuickBooksHttpClient } from "./provider-adapters/quickbooks-transport";',
+    )).toBe(false);
+    expect(importsProviderAdapterAtRuntime(
+      'import { QuickBooksPostingAdapter } from "./provider-adapters/quickbooks-posting-adapter";',
+    )).toBe(true);
+    expect(importsProviderAdapterAtRuntime(
+      'import "./provider-adapters/quickbooks-posting-adapter";',
+    )).toBe(true);
+    expect(importsProviderAdapterAtRuntime(
+      'const adapter = await import("./provider-adapters/quickbooks-posting-adapter");',
+    )).toBe(true);
+  });
+
   it("contains the former mutation primitives outside the runtime call graph", () => {
     const runtimeFiles = [
       ...sourceFiles(join(runtimeRoot, "app", "api")),
@@ -108,7 +131,7 @@ describe("provider posting module boundary", () => {
         file.endsWith("/lib/quickbooks-vendor-execution-store.ts") ||
         file.endsWith("/lib/quickbooks-sandbox-pilot-executor.ts");
       if (!file.includes("/provider-adapters/") && !isAuthoritativeBoundary &&
-          source.includes("/provider-adapters/")) {
+          importsProviderAdapterAtRuntime(source)) {
         violations.push(`${relative(runtimeRoot, file)}: imports provider adapter`);
       }
     }

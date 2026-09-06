@@ -20,7 +20,7 @@ describe("Step 7 pure policy evaluator", () => {
     ["evidence", { ...BASE_INPUT, evidence: { ...BASE_INPUT.evidence, completeness: "INCOMPLETE" as const } }, "EVIDENCE_INCOMPLETE"],
     ["confidence", { ...BASE_INPUT, confidence: [{ fact: "vendor", basisPoints: 9_899, provenance: "DETERMINISTIC" as const }] }, "CONFIDENCE_INSUFFICIENT"],
     ["history", { ...BASE_INPUT, history: { ...BASE_INPUT.history, priorVerifiedActions: 2 } }, "HISTORY_INSUFFICIENT"],
-    ["authorization", { ...BASE_INPUT, humanAuthorization: { state: "MISSING" as const, authorizationId: null, authorizedActionFingerprint: null } }, "HUMAN_AUTHORIZATION_REQUIRED"],
+    ["authorization", { ...BASE_INPUT, humanAuthorization: { state: "MISSING" as const, authorizationId: null, authorizedActionFingerprint: null, authorizedClientEntityId: null, authorizedLedgerBookId: null, authorizedActionType: null } }, "HUMAN_AUTHORIZATION_REQUIRED"],
     ["duplicate check", { ...BASE_INPUT, profileFacts: { ...BASE_INPUT.profileFacts, duplicateCheck: "INCOMPLETE" as const } }, "DUPLICATE_CHECK_INCOMPLETE"],
     ["tax", { ...BASE_INPUT, taxTreatment: { certainty: "MISSING" as const, treatmentId: null, verified: false } }, "TAX_TREATMENT_UNCERTAIN"],
   ])("routes missing or ambiguous %s facts to REVIEW", (_name, input, reason) => {
