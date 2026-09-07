@@ -41,10 +41,12 @@ describe("migration 034 shadow orchestration foundation", () => {
     expect(sql).toContain("SHADOW_STAGE_OUTPUT_IS_IMMUTABLE");
     expect(sql).toContain("shadow_stage_outputs_immutable");
     expect(sql).toContain("fencing_token = public.shadow_orchestration_leases.fencing_token + 1");
+    expect(sql).toContain("extensions.digest(convert_to(");
     expect(sql).toContain("SHADOW_FENCING_TOKEN_MUST_BE_MONOTONIC");
     expect(sql).toContain("shadow_leases_no_delete");
     expect(sql).toContain("STALE_SHADOW_FENCE");
     expect(sql).toContain("SHADOW_STAGE_OUTPUT_INTEGRITY_CONFLICT");
+    expect(sql).toContain("SHADOW_RUN_HAS_ACTIVE_STAGE");
   });
 
   it("exposes only service-role mutation RPCs and tenant-scoped reads", () => {
