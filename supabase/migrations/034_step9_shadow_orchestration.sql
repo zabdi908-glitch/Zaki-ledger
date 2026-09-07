@@ -609,7 +609,7 @@ AS $$
 DECLARE v_run public.shadow_orchestration_runs%ROWTYPE; v_resource text; v_lease jsonb; v_attempt jsonb;
 BEGIN
   SELECT * INTO STRICT v_run FROM public.shadow_orchestration_runs WHERE id = p_run_id;
-  v_resource := encode(digest(convert_to(
+  v_resource := encode(extensions.digest(convert_to(
     'step9-shadow-lease-v1|' || v_run.practice_id || '|' || v_run.client_entity_id || '|' || v_run.ledger_book_id || '|' || p_stage,
     'UTF8'), 'sha256'), 'hex');
   v_lease := public.acquire_shadow_stage_lease_v1(v_run.practice_id, v_run.client_entity_id,
@@ -752,6 +752,13 @@ BEGIN
     RETURN v_output;
   END IF;
   IF v_stage.state <> 'RUNNING' OR v_attempt.state <> 'RUNNING' THEN RAISE EXCEPTION 'SHADOW_ATTEMPT_NOT_RUNNING'; END IF;
+  IF v_stage.stage = 'EXCEPTION_OUTPUT' AND EXISTS (
+    SELECT 1 FROM public.shadow_orchestration_stages active
+    WHERE active.run_id = p_run_id AND active.id <> v_stage.id
+      AND active.state IN ('PENDING','RUNNING','RETRYABLE')
+  ) THEN
+    RAISE EXCEPTION 'SHADOW_RUN_HAS_ACTIVE_STAGE' USING ERRCODE = '55P03';
+  END IF;
   IF NOT public.step9_shadow_transition_allowed_v1(v_stage.state, p_terminal_state) THEN RAISE EXCEPTION 'ILLEGAL_SHADOW_TRANSITION'; END IF;
   v_output := public.record_shadow_stage_output_v1(p_run_id, p_stage_id, p_input_fingerprint_hex,
     p_output_fingerprint_hex, p_output_canonical_json, p_provenance_canonical_json);
