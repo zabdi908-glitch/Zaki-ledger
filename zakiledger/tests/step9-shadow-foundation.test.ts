@@ -89,8 +89,11 @@ describe("Step 9 shadow foundation", () => {
     const extractionRequest = {
       ...ids, runId: "run-1", stageId: "stage-1", attemptId: "attempt-1", workerId: "worker-a",
       artifact: { namespace: "import_artifact" as const, id: "artifact-1", fingerprint: "a".repeat(64) },
-      artifactLength: 42, extractorName: "invoice", extractorVersion: "v1",
+      artifactLength: 42, artifactRetainedAt: "2026-09-07T00:59:00.000Z",
+      extractorName: "invoice", extractorVersion: "v1", modelProvider: "openai",
+      modelName: "gpt-4o-mini", modelVersion: "gpt-4o-mini-2024-07-18",
       modelConfigurationFingerprint: "b".repeat(64), promptFingerprint: "c".repeat(64), hintsFingerprint: null,
+      extractionContractVersion: "invoice-extraction-v1",
     };
     const first = await service.execute(extractionRequest, 1n, extractor);
     const second = await service.execute({ ...extractionRequest, attemptId: "attempt-2" }, 2n, extractor);
@@ -149,6 +152,35 @@ describe("Step 9 shadow foundation", () => {
     const result = await worker.run(request);
     expect(calls).toEqual(SHADOW_STAGES);
     expect(result.state).toBe("SUCCEEDED");
+  });
+
+  it("returns an identical terminal run replay without reopening stages or rerunning handlers", async () => {
+    const store = new InMemoryShadowOrchestrationStore();
+    const handler = vi.fn(async (context: { stage: string }) => ({
+      state: "SUCCEEDED" as const,
+      output: context.stage === "POLICY_EVALUATION" ? { decision: "ALLOW" }
+        : context.stage === "STEP8_PLANNING"
+          ? { decision: "SAFE_METHOD", grantsExecutionPermission: false }
+          : { stage: context.stage },
+      provenance: [], reasonCode: null,
+    }));
+    const handlers = Object.fromEntries(SHADOW_STAGES.map((stage) => [stage, handler]));
+    const worker = new ShadowOrchestrationWorker(store, "worker-a", handlers);
+    const first = await worker.run(request);
+    const replay = await worker.run({ ...request, correlationId: "redelivery-correlation" });
+    expect(replay).toMatchObject({ id: first.id, runKey: first.runKey, state: "SUCCEEDED", reused: true });
+    expect(handler).toHaveBeenCalledTimes(SHADOW_STAGES.length);
+  });
+
+  it("fails closed when a store returns conflicting content for the requested run identity", async () => {
+    class ConflictingStore extends InMemoryShadowOrchestrationStore {
+      override async createOrReuseRun(value: ShadowRunRequest) {
+        const run = await super.createOrReuseRun(value);
+        return { ...run, inputFingerprint: "0".repeat(64), reused: true };
+      }
+    }
+    const worker = new ShadowOrchestrationWorker(new ConflictingStore(), "worker-a", {});
+    await expect(worker.run(request)).rejects.toThrow("SHADOW_RUN_KEY_INTEGRITY_CONFLICT");
   });
 
   it("rejects sensitive exception diagnostics", () => {

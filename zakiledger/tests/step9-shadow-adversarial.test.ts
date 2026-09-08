@@ -47,9 +47,11 @@ function extractionRequest(changes: Partial<ShadowExtractionRequest> = {}): Shad
   return {
     ...ids, runId: "run-1", stageId: "stage-1", attemptId: "attempt-1", workerId: "worker-a",
     artifact: { namespace: "import_artifact", id: "artifact-1", fingerprint: "a".repeat(64) },
-    artifactLength: 42, extractorName: "invoice", extractorVersion: "v1",
+    artifactLength: 42, artifactRetainedAt: "2026-09-07T00:59:00.000Z",
+    extractorName: "invoice", extractorVersion: "v1", modelProvider: "openai",
+    modelName: "gpt-4o-mini", modelVersion: "gpt-4o-mini-2024-07-18",
     modelConfigurationFingerprint: "b".repeat(64), promptFingerprint: "c".repeat(64),
-    hintsFingerprint: null, ...changes,
+    hintsFingerprint: null, extractionContractVersion: "invoice-extraction-v1", ...changes,
   };
 }
 
@@ -149,10 +151,11 @@ describe("Step 9 extraction, canonical, and reconciliation adversarial contract"
     expect((await service.execute({ ...base, attemptId: "attempt-2" }, 2n, extractor)).extractionKey).toBe(exact.extractionKey);
     for (const changed of [
       { modelConfigurationFingerprint: "d".repeat(64) }, { promptFingerprint: "e".repeat(64) },
-      { extractorVersion: "v2" }, { hintsFingerprint: "f".repeat(64) },
+      { extractorVersion: "v2" }, { modelVersion: "model-v2" },
+      { hintsFingerprint: "f".repeat(64) }, { extractionContractVersion: "invoice-extraction-v2" },
     ]) await service.execute(extractionRequest(changed), 3n, extractor);
-    expect(extractor).toHaveBeenCalledTimes(5);
-    expect(rows.size).toBe(5);
+    expect(extractor).toHaveBeenCalledTimes(7);
+    expect(rows.size).toBe(7);
   });
 
   it("fails closed on artifact hash/scope mismatch before model invocation", async () => {

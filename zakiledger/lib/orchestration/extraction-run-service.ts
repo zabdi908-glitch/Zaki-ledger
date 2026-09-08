@@ -9,11 +9,16 @@ export interface ShadowExtractionRequest extends ShadowScope {
   workerId: string;
   artifact: ImmutableReference & { namespace: "import_artifact" };
   artifactLength: number;
+  artifactRetainedAt: string;
   extractorName: string;
   extractorVersion: string;
+  modelProvider: string;
+  modelName: string;
+  modelVersion: string;
   modelConfigurationFingerprint: string;
   promptFingerprint: string;
   hintsFingerprint: string | null;
+  extractionContractVersion: string;
 }
 
 export class SupabaseShadowExtractionPersistence implements ShadowExtractionPersistence {
@@ -91,6 +96,7 @@ export class ShadowExtractionRunService {
     if (!Number.isSafeInteger(request.artifactLength) || request.artifactLength < 0) {
       throw new Error("INVALID_ARTIFACT_LENGTH");
     }
+    assertFreshExtractionInvocation(request);
     if (!await this.artifactIntegrity.verify(request)) {
       throw new Error("EXTRACTION_ARTIFACT_SCOPE_OR_HASH_INTEGRITY_BLOCKED");
     }
@@ -99,9 +105,12 @@ export class ShadowExtractionRunService {
       practiceId: request.practiceId, clientEntityId: request.clientEntityId,
       ledgerBookId: request.ledgerBookId, artifact: request.artifact,
       artifactLength: request.artifactLength, extractorName: request.extractorName,
-      extractorVersion: request.extractorVersion,
+      artifactRetainedAt: request.artifactRetainedAt,
+      extractorVersion: request.extractorVersion, modelProvider: request.modelProvider,
+      modelName: request.modelName, modelVersion: request.modelVersion,
       modelConfigurationFingerprint: request.modelConfigurationFingerprint,
       promptFingerprint: request.promptFingerprint, hintsFingerprint: request.hintsFingerprint,
+      extractionContractVersion: request.extractionContractVersion,
     });
     const extractionKey = shadowSha256({
       namespace: "step9-shadow-extraction-key-v1",
@@ -112,9 +121,13 @@ export class ShadowExtractionRunService {
       artifactLength: request.artifactLength,
       extractorName: request.extractorName,
       extractorVersion: request.extractorVersion,
+      modelProvider: request.modelProvider,
+      modelName: request.modelName,
+      modelVersion: request.modelVersion,
       modelConfigurationFingerprint: request.modelConfigurationFingerprint,
       promptFingerprint: request.promptFingerprint,
       hintsFingerprint: request.hintsFingerprint,
+      extractionContractVersion: request.extractionContractVersion,
     });
     const existing = await this.persistence.find(extractionKey);
     if (existing) return { ...existing, reused: true };
@@ -128,5 +141,33 @@ export class ShadowExtractionRunService {
       request, inputFingerprint, extractionKey, outputFingerprint, outputCanonicalJson,
       extractionRunId: "", reused: false, fencingToken,
     });
+  }
+}
+
+const SHA256 = /^[0-9a-f]{64}$/;
+
+/** Rejects legacy artifacts/invocations that do not carry the complete Day-6 identity. */
+export function assertFreshExtractionInvocation(request: ShadowExtractionRequest): void {
+  const retainedAt = Date.parse(request.artifactRetainedAt);
+  if (!Number.isFinite(retainedAt)) throw new Error("EXTRACTION_ARTIFACT_RETAINED_AT_REQUIRED");
+  for (const [label, value] of [
+    ["EXTRACTOR_NAME", request.extractorName],
+    ["EXTRACTOR_VERSION", request.extractorVersion],
+    ["MODEL_PROVIDER", request.modelProvider],
+    ["MODEL_NAME", request.modelName],
+    ["MODEL_VERSION", request.modelVersion],
+    ["EXTRACTION_CONTRACT_VERSION", request.extractionContractVersion],
+  ] as const) {
+    if (!value.trim()) throw new Error(`${label}_REQUIRED`);
+  }
+  for (const [label, value] of [
+    ["ARTIFACT", request.artifact.fingerprint],
+    ["MODEL_CONFIGURATION", request.modelConfigurationFingerprint],
+    ["PROMPT", request.promptFingerprint],
+  ] as const) {
+    if (!SHA256.test(value)) throw new Error(`${label}_FINGERPRINT_REQUIRED`);
+  }
+  if (request.hintsFingerprint !== null && !SHA256.test(request.hintsFingerprint)) {
+    throw new Error("HINTS_FINGERPRINT_INVALID");
   }
 }
