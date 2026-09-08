@@ -3,18 +3,24 @@ import {
   rollupShadowRunState,
   SHADOW_STAGES,
   type ImmutableReference,
+  isTerminalShadowState,
   type ShadowRunRecord,
   type ShadowRunRequest,
   type ShadowStage,
 } from "./shadow-contract";
 import { fingerprintStageInput } from "./shadow-canonicalization";
 import type { ShadowOrchestrationStore } from "./shadow-store";
+import type { ShadowAttemptRecord, ShadowLease, ShadowStageRecord } from "./shadow-contract";
+import { fingerprintShadowRun } from "./shadow-canonicalization";
 
 export interface ShadowStageContext {
   run: ShadowRunRecord;
   stage: ShadowStage;
   dependencyFingerprint: string | null;
   priorTerminalOutcome: Exclude<ShadowStageHandlerResult["state"], "SUCCEEDED"> | null;
+  stageRecord: ShadowStageRecord;
+  attempt: ShadowAttemptRecord;
+  lease: ShadowLease;
 }
 
 export interface ShadowStageHandlerResult {
@@ -40,6 +46,12 @@ export class ShadowOrchestrationWorker {
   async run(request: ShadowRunRequest): Promise<ShadowRunRecord> {
     assertShadowOnly(request);
     const run = await this.store.createOrReuseRun(request);
+    if (run.inputFingerprint !== fingerprintShadowRun(request)) {
+      throw new Error("SHADOW_RUN_KEY_INTEGRITY_CONFLICT");
+    }
+    // Exact replay is a read/reuse operation. Never ask the store to reopen a
+    // terminal run or any of its terminal stages.
+    if (run.reused && isTerminalShadowState(run.state)) return run;
     let dependencyFingerprint: string | null = null;
     let priorTerminalOutcome: Exclude<ShadowStageHandlerResult["state"], "SUCCEEDED"> | null = null;
 
@@ -56,7 +68,10 @@ export class ShadowOrchestrationWorker {
       });
       let result: ShadowStageHandlerResult;
       try {
-        result = await handler({ run, stage, dependencyFingerprint, priorTerminalOutcome });
+        result = await handler({
+          run, stage, dependencyFingerprint, priorTerminalOutcome,
+          stageRecord: claimed.stage, attempt: claimed.attempt, lease: claimed.lease,
+        });
       } catch (error) {
         if (stage === "EXCEPTION_OUTPUT") {
           await this.store.markStageRetryable({

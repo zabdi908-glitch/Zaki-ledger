@@ -25,6 +25,7 @@ export interface ShadowReconciliationResult<T> {
   inputFingerprint: string;
   outputFingerprint: string;
   result: T;
+  inputMembers: readonly ReconciliationManifestMember[];
   outputMembers: readonly ReconciliationManifestMember[];
 }
 
@@ -34,7 +35,11 @@ export interface ReconciliationSnapshotRecordInput extends ShadowScope {
   reconciliationVersion: string; members: readonly ReconciliationManifestMember[];
 }
 
-export class SupabaseShadowReconciliationSnapshotStore {
+export interface ShadowReconciliationSnapshotStore {
+  record(input: ReconciliationSnapshotRecordInput): Promise<{ id: string; fingerprint: string; reused: boolean }>;
+}
+
+export class SupabaseShadowReconciliationSnapshotStore implements ShadowReconciliationSnapshotStore {
   constructor(private readonly db: SupabaseClient) {}
 
   async record(input: ReconciliationSnapshotRecordInput): Promise<{ id: string; fingerprint: string; reused: boolean }> {
@@ -60,7 +65,13 @@ export class SupabaseShadowReconciliationSnapshotStore {
 export class ShadowReconciliationAdapter<T> {
   constructor(private readonly domain: ReconciliationDomainPort<T>) {}
 
-  async reconcile(input: Omit<FrozenReconciliationInput, "members">): Promise<ShadowReconciliationResult<T>> {
+  async reconcile(
+    input: Omit<FrozenReconciliationInput, "members">,
+    snapshots: {
+      input?(members: readonly ReconciliationManifestMember[]): Promise<void>;
+      output?(members: readonly ReconciliationManifestMember[]): Promise<void>;
+    } = {},
+  ): Promise<ShadowReconciliationResult<T>> {
     if (!input.reconciliationVersion.trim()) throw new Error("RECONCILIATION_VERSION_REQUIRED");
     const scope = { ...input, statementId: input.statementId };
     const before = await this.domain.loadManifest(scope);
@@ -69,6 +80,7 @@ export class ShadowReconciliationAdapter<T> {
     const inputFingerprint = shadowSha256({
       namespace: "step9-reconciliation-input-v1", ...input, beforeManifest,
     });
+    await snapshots.input?.(before);
     const result = await this.domain.computeAndPersist(frozen);
     const after = await this.domain.loadOutputManifest(scope);
     const afterInputMembers = after.filter((item) => item.namespace !== "reconciliation_match");
@@ -80,8 +92,9 @@ export class ShadowReconciliationAdapter<T> {
       "step9-reconciliation-frontier-v1", beforeInputs, memberKey,
     );
     if (afterInputManifest !== stableInputManifest) throw new Error("RECONCILIATION_FRONTIER_DRIFT_UNCERTAIN");
+    await snapshots.output?.(after);
     return {
-      inputFingerprint, result, outputMembers: after,
+      inputFingerprint, result, inputMembers: before, outputMembers: after,
       outputFingerprint: fingerprintSortedManifest("step9-reconciliation-output-v1", after, memberKey),
     };
   }
