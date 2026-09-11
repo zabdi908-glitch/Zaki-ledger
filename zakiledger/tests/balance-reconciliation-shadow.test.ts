@@ -64,35 +64,85 @@ const REQUEST: BalanceShadowRequest = {
   closingOfx: CLOSING_OFX,
 };
 
-function qboReport(end = "2026-01-31") {
+function qboReport(input: {
+  end?: string;
+  basis?: string;
+  actualColumnKeys?: boolean;
+  blankSummary?: boolean;
+  movements?: Array<{ date: string; amount: string; balance: string }>;
+} = {}) {
   const column = (key: string) => ({ MetaData: [{ Name: "ColKey", Value: key }] });
+  const actual = input.actualColumnKeys ?? true;
+  const movements = input.movements ?? [{ date: "2026-01-15", amount: "10.00", balance: "110.00" }];
   return {
     Header: {
       ReportName: "GeneralLedger",
-      ReportBasis: "Accrual",
+      ReportBasis: input.basis ?? "Accrual",
       StartPeriod: "2026-01-01",
-      EndPeriod: end,
+      EndPeriod: input.end ?? "2026-01-31",
       Currency: "GBP",
     },
-    Columns: { Column: [column("tx_date"), column("txn_type"), column("amount"), column("balance")] },
+    Columns: { Column: [
+      column("tx_date"), column("txn_type"),
+      column(actual ? "subt_nat_amount" : "amount"),
+      column(actual ? "rbal_nat_amount" : "balance"),
+    ] },
     Rows: {
       Row: [{
         Header: { ColData: [{ value: "Proof Bank", id: "35" }] },
         Rows: { Row: [
           { ColData: [{ value: "" }, { value: "Beginning Balance" }, { value: "" }, { value: "100.00" }] },
-          { ColData: [{ value: "2026-01-15" }, { value: "Deposit" }, { value: "10.00" }, { value: "110.00" }] },
+          ...movements.map((movement) => ({ ColData: [
+            { value: movement.date }, { value: "Deposit" },
+            { value: movement.amount }, { value: movement.balance },
+          ] })),
         ] },
-        Summary: { ColData: [{ value: "" }, { value: "Total" }, { value: "10.00" }, { value: "110.00" }] },
+        Summary: { ColData: input.blankSummary
+          ? [{ value: "Total for Proof Bank" }, { value: "" }, { value: "" }, { value: "" }]
+          : [{ value: "" }, { value: "Total" }, { value: "10.00" }, { value: "110.00" }] },
       }],
     },
   };
 }
 
-function qboReader(report = qboReport()) {
+function qboTrialBalance(input: {
+  cutoff: string;
+  balance?: string;
+  basis?: string;
+  start?: string;
+  currency?: string;
+  accountRows?: number;
+}) {
+  const accountRows = input.accountRows ?? 1;
+  return {
+    Header: {
+      ReportName: "TrialBalance",
+      ReportBasis: input.basis ?? "Accrual",
+      StartPeriod: input.start ?? "2026-01-01",
+      EndPeriod: input.cutoff,
+      Currency: input.currency ?? "GBP",
+    },
+    Rows: { Row: Array.from({ length: accountRows }, () => ({
+      ColData: [
+        { value: "Proof Bank", id: "35" },
+        { value: input.balance ?? "100.00" },
+        { value: "" },
+      ],
+    })) },
+  };
+}
+
+function qboReader(input: {
+  generalLedger?: ReturnType<typeof qboReport>;
+  openingTrialBalance?: ReturnType<typeof qboTrialBalance>;
+  closingTrialBalance?: ReturnType<typeof qboTrialBalance>;
+} = {}) {
   const calls: Array<{ url: string; method?: string }> = [];
   const bodies = [
     { Account: { Id: "35", Active: true, CurrencyRef: { value: "GBP" } } },
-    report,
+    input.generalLedger ?? qboReport(),
+    input.openingTrialBalance ?? qboTrialBalance({ cutoff: "2025-12-31", balance: "100.00", start: "2025-01-01" }),
+    input.closingTrialBalance ?? qboTrialBalance({ cutoff: "2026-01-31", balance: "110.00" }),
   ];
   const http = vi.fn(async (url: string, init: RequestInit) => {
     calls.push({ url, method: init.method });
@@ -149,7 +199,7 @@ describe("Step 6 read-only balance shadow path", () => {
     expect(evidence.incompletenessReason).toContain("OFX_ROWS_INCOMPLETE");
   });
 
-  it("reads the exact QuickBooks account report with GET-only provider calls", async () => {
+  it("reads exact-period GL movements using actual QuickBooks column keys and Trial Balance cutoffs", async () => {
     const target = qboReader();
     const evidence = await target.reader.read(REQUEST, SCOPE);
     expect(evidence).toMatchObject({
@@ -165,18 +215,97 @@ describe("Step 6 read-only balance shadow path", () => {
     });
     expect(evidence.opening.balanceMinor).toBe("10000");
     expect(evidence.closing.balanceMinor).toBe("11000");
-    expect(target.calls).toHaveLength(2);
+    expect(target.calls).toHaveLength(4);
     expect(target.calls.every((call) => call.method === "GET")).toBe(true);
     expect(target.calls[1]?.url).toContain("reports/GeneralLedger");
     expect(target.calls[1]?.url).toContain("account=35");
+    expect(target.calls[2]?.url).toContain("reports/TrialBalance");
+    expect(target.calls[2]?.url).toContain("start_date=2025-01-01");
+    expect(target.calls[2]?.url).toContain("end_date=2025-12-31");
+    expect(target.calls[3]?.url).toContain("start_date=2026-01-01");
+    expect(target.calls[3]?.url).toContain("end_date=2026-01-31");
+    expect(evidence.providerRequestId?.split(",")).toHaveLength(4);
+    expect(evidence.responseFingerprint).toMatch(/^[0-9a-f]{64}$/);
+    expect(evidence.opening.rawPayloadHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(evidence.closing.rawPayloadHash).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it("marks a report REVIEW-grade when provider cutoff completeness is not proven", async () => {
-    const target = qboReader(qboReport("2026-01-30"));
+    const target = qboReader({ generalLedger: qboReport({ end: "2026-01-30" }) });
     const evidence = await target.reader.read(REQUEST, SCOPE);
     expect(evidence.completenessState).toBe("incomplete");
     expect(evidence.terminalBoundarySeen).toBe(false);
     expect(evidence.incompletenessReason).toContain("QUICKBOOKS_REPORT_HEADER_UNPROVEN");
+  });
+
+  it("fails closed as incomplete when the General Ledger basis is not Accrual", async () => {
+    const target = qboReader({ generalLedger: qboReport({ basis: "Cash" }) });
+    const evidence = await target.reader.read(REQUEST, SCOPE);
+    expect(evidence.completenessState).toBe("incomplete");
+    expect(evidence.incompletenessReason).toContain("QUICKBOOKS_REPORT_HEADER_UNPROVEN");
+  });
+
+  it("supports a blank GL summary and no movements when Trial Balance proves equal boundaries", async () => {
+    const target = qboReader({
+      generalLedger: qboReport({ blankSummary: true, movements: [] }),
+      openingTrialBalance: qboTrialBalance({ cutoff: "2025-12-31", balance: "100.00", start: "2025-01-01" }),
+      closingTrialBalance: qboTrialBalance({ cutoff: "2026-01-31", balance: "100.00" }),
+    });
+    const evidence = await target.reader.read(REQUEST, SCOPE);
+    expect(evidence).toMatchObject({
+      movementTotalMinor: "0", returnedCount: 0, acceptedCount: 0,
+      completenessState: "complete",
+    });
+    expect(evidence.opening.balanceMinor).toBe("10000");
+    expect(evidence.closing.balanceMinor).toBe("10000");
+  });
+
+  it("continues to accept the canonical GL amount and balance aliases", async () => {
+    const evidence = await qboReader({
+      generalLedger: qboReport({ actualColumnKeys: false }),
+    }).reader.read(REQUEST, SCOPE);
+    expect(evidence.movementTotalMinor).toBe("1000");
+    expect(evidence.completenessState).toBe("complete");
+  });
+
+  it("binds Account, GL, and both Trial Balance responses into retained fingerprints", async () => {
+    const baseline = await qboReader().reader.read(REQUEST, SCOPE);
+    const changedClosing = await qboReader({
+      closingTrialBalance: qboTrialBalance({ cutoff: "2026-01-31", balance: "111.00" }),
+    }).reader.read(REQUEST, SCOPE);
+    expect(changedClosing.responseFingerprint).not.toBe(baseline.responseFingerprint);
+    expect(changedClosing.opening.rawPayloadHash).toBe(baseline.opening.rawPayloadHash);
+    expect(changedClosing.closing.rawPayloadHash).not.toBe(baseline.closing.rawPayloadHash);
+    expect(changedClosing.setFingerprint).not.toBe(baseline.setFingerprint);
+  });
+
+  it.each([
+    ["opening", qboTrialBalance({ cutoff: "2025-12-30", balance: "100.00", start: "2025-01-01" }), undefined],
+    ["closing", undefined, qboTrialBalance({ cutoff: "2026-01-30", balance: "110.00" })],
+  ] as const)("fails closed when the %s Trial Balance cutoff is wrong", async (_boundary, opening, closing) => {
+    const target = qboReader({
+      ...(opening ? { openingTrialBalance: opening } : {}),
+      ...(closing ? { closingTrialBalance: closing } : {}),
+    });
+    await expect(target.reader.read(REQUEST, SCOPE)).rejects.toThrow(/exact cutoff/i);
+  });
+
+  it("fails closed when a Trial Balance uses the wrong accounting basis", async () => {
+    const target = qboReader({
+      openingTrialBalance: qboTrialBalance({
+        cutoff: "2025-12-31", balance: "100.00", start: "2025-01-01", basis: "Cash",
+      }),
+    });
+    await expect(target.reader.read(REQUEST, SCOPE)).rejects.toThrow(/exact cutoff/i);
+  });
+
+  it.each([0, 2])("fails closed when Trial Balance returns %i exact account rows", async (accountRows) => {
+    const target = qboReader({
+      openingTrialBalance: qboTrialBalance({
+        cutoff: "2025-12-31", balance: "100.00", start: "2025-01-01", accountRows,
+      }),
+    });
+    await expect(target.reader.read(REQUEST, SCOPE)).rejects.toThrow(/one exact account row/i);
   });
 
   it("rejects provider/account ownership drift before any QuickBooks request", async () => {

@@ -147,6 +147,10 @@ function previousDate(value: string): string {
   return date.toISOString().slice(0, 10);
 }
 
+function calendarYearStart(value: string): string {
+  return `${assertDate(value, "cutoff").slice(0, 4)}-01-01`;
+}
+
 function utcBoundary(value: string, timezone: string): string {
   if (timezone !== "UTC") {
     throw new Error("The Day 6 narrow reader requires a UTC account timezone");
@@ -381,25 +385,42 @@ export class QuickBooksGeneralLedgerBalanceReader {
         scope.ledgerOrganisationId !== this.bound.realmId) {
       throw new Error("QuickBooks reader scope does not match the frozen account ownership contract");
     }
+    if (scope.ledgerBalanceSignMultiplier !== 1 && scope.ledgerBalanceSignMultiplier !== -1) {
+      throw new Error("QuickBooks reader does not support the configured ledger balance sign convention");
+    }
     const started = new Date().toISOString();
     const accountResponse = await this.get(`account/${encodeURIComponent(scope.ledgerAccountId)}?minorversion=65`);
     const account = record(accountResponse.body.Account);
     if (text(account.Id) !== scope.ledgerAccountId || account.Active !== true) {
       throw new Error("QuickBooks account identity is not active and exact");
     }
-    const accountCurrency = text(record(account.CurrencyRef).value) || scope.currencyCode;
+    const accountCurrency = text(record(account.CurrencyRef).value);
     if (accountCurrency !== scope.currencyCode) throw new Error("QuickBooks account currency mismatch");
 
-    const query = new URLSearchParams({
+    const generalLedgerQuery = new URLSearchParams({
       start_date: request.periodStart,
       end_date: request.periodEnd,
       accounting_method: "Accrual",
       account: scope.ledgerAccountId,
       minorversion: "65",
     });
-    const reportResponse = await this.get(`reports/GeneralLedger?${query.toString()}`);
-    const report = reportResponse.body;
-    const header = record(report.Header);
+    const openingCutoff = previousDate(request.periodStart);
+    const closingCutoff = request.periodEnd;
+    const trialBalanceQuery = (cutoff: string) => new URLSearchParams({
+      start_date: calendarYearStart(cutoff),
+      end_date: cutoff,
+      accounting_method: "Accrual",
+      minorversion: "65",
+    });
+    const generalLedgerResponse = await this.get(`reports/GeneralLedger?${generalLedgerQuery.toString()}`);
+    const openingTrialBalanceResponse = await this.get(
+      `reports/TrialBalance?${trialBalanceQuery(openingCutoff).toString()}`,
+    );
+    const closingTrialBalanceResponse = await this.get(
+      `reports/TrialBalance?${trialBalanceQuery(closingCutoff).toString()}`,
+    );
+    const generalLedger = generalLedgerResponse.body;
+    const header = record(generalLedger.Header);
     const reasons: string[] = [];
     if (text(header.ReportName).toLowerCase().replace(/\s+/g, "") !== "generalledger" ||
         text(header.ReportBasis).toLowerCase() !== "accrual" ||
@@ -408,18 +429,20 @@ export class QuickBooksGeneralLedgerBalanceReader {
       reasons.push("QUICKBOOKS_REPORT_HEADER_UNPROVEN");
     }
 
-    const columns = Array.isArray(record(report.Columns).Column) ? record(report.Columns).Column as unknown[] : [];
+    const columns = Array.isArray(record(generalLedger.Columns).Column)
+      ? record(generalLedger.Columns).Column as unknown[] : [];
     const keys = columns.map((column) => {
       const metadata = record(column).MetaData;
       const values = Array.isArray(metadata) ? metadata : metadata ? [metadata] : [];
       return text(record(values.find((item) => text(record(item).Name) === "ColKey")).Value);
     });
     const dateIndex = keys.indexOf("tx_date");
-    const amountIndex = keys.indexOf("amount");
-    const balanceIndex = keys.indexOf("balance");
+    const amountIndex = keys.findIndex((key) => key === "subt_nat_amount" || key === "amount");
+    const balanceIndex = keys.findIndex((key) => key === "rbal_nat_amount" || key === "balance");
     if (dateIndex < 0 || amountIndex < 0 || balanceIndex < 0) reasons.push("QUICKBOOKS_REPORT_COLUMNS_UNPROVEN");
 
-    const topRows = Array.isArray(record(report.Rows).Row) ? record(report.Rows).Row as unknown[] : [];
+    const topRows = Array.isArray(record(generalLedger.Rows).Row)
+      ? record(generalLedger.Rows).Row as unknown[] : [];
     const accountSections = topRows.filter((row) => {
       const values = Array.isArray(record(record(row).Header).ColData)
         ? record(record(row).Header).ColData as unknown[] : [];
@@ -428,10 +451,6 @@ export class QuickBooksGeneralLedgerBalanceReader {
     if (accountSections.length !== 1) reasons.push("QUICKBOOKS_ACCOUNT_SECTION_UNPROVEN");
     const section = record(accountSections[0]);
     const rows = Array.isArray(record(section.Rows).Row) ? record(section.Rows).Row as unknown[] : [];
-    const summary = Array.isArray(record(section.Summary).ColData)
-      ? record(section.Summary).ColData as unknown[] : [];
-    let rawOpening = "";
-    let rawClosing = balanceIndex >= 0 ? text(record(summary[balanceIndex]).value) : "";
     const members: BalanceEvidenceMember[] = [];
     let rejected = 0;
     let considered = 0;
@@ -439,7 +458,6 @@ export class QuickBooksGeneralLedgerBalanceReader {
       const cells = Array.isArray(record(rawRow).ColData) ? record(rawRow).ColData as unknown[] : [];
       const values = cells.map((cell) => text(record(cell).value));
       if (values.some((value) => value.toLowerCase() === "beginning balance")) {
-        rawOpening = balanceIndex >= 0 ? values[balanceIndex] ?? "" : "";
         continue;
       }
       if (!values.some(Boolean)) continue;
@@ -464,7 +482,54 @@ export class QuickBooksGeneralLedgerBalanceReader {
         rejected++;
       }
     }
-    if (!rawOpening || !rawClosing) throw new Error("QuickBooks report did not provide opening and closing balances");
+
+    const trialBalanceAmount = (
+      response: { body: Record<string, unknown> },
+      cutoff: string,
+      boundary: "opening" | "closing",
+    ): string => {
+      const trialBalance = response.body;
+      const trialHeader = record(trialBalance.Header);
+      if (text(trialHeader.ReportName).toLowerCase().replace(/\s+/g, "") !== "trialbalance" ||
+          text(trialHeader.ReportBasis).toLowerCase() !== "accrual" ||
+          text(trialHeader.StartPeriod) !== calendarYearStart(cutoff) ||
+          text(trialHeader.EndPeriod) !== cutoff ||
+          text(trialHeader.Currency) !== scope.currencyCode) {
+        throw new Error(`QuickBooks ${boundary} Trial Balance header does not prove the exact cutoff`);
+      }
+
+      const matches: unknown[][] = [];
+      const visit = (value: unknown): void => {
+        if (Array.isArray(value)) {
+          for (const item of value) visit(item);
+          return;
+        }
+        const row = record(value);
+        if (!Object.keys(row).length) return;
+        const cells = Array.isArray(row.ColData) ? row.ColData as unknown[] : [];
+        if (cells.some((cell) => text(record(cell).id) === scope.ledgerAccountId)) matches.push(cells);
+        for (const child of Object.values(row)) visit(child);
+      };
+      visit(record(trialBalance.Rows));
+      if (matches.length !== 1) {
+        throw new Error(`QuickBooks ${boundary} Trial Balance did not provide one exact account row`);
+      }
+      const cells = matches[0];
+      if (!cells || text(record(cells[0]).id) !== scope.ledgerAccountId || cells.length < 3) {
+        throw new Error(`QuickBooks ${boundary} Trial Balance account identity is not exact`);
+      }
+      const debit = text(record(cells[1]).value);
+      const credit = text(record(cells[2]).value);
+      if (debit && credit) {
+        throw new Error(`QuickBooks ${boundary} Trial Balance has conflicting debit and credit balances`);
+      }
+      const rawAmount = credit ? `-${credit}` : debit || "0";
+      exactDecimalToMinor(rawAmount.replace(/,/g, ""), scope.minorUnitExponent);
+      return rawAmount;
+    };
+
+    const rawOpening = trialBalanceAmount(openingTrialBalanceResponse, openingCutoff, "opening");
+    const rawClosing = trialBalanceAmount(closingTrialBalanceResponse, closingCutoff, "closing");
     const openingRawMinor = exactDecimalToMinor(rawOpening.replace(/,/g, ""), scope.minorUnitExponent);
     const closingRawMinor = exactDecimalToMinor(rawClosing.replace(/,/g, ""), scope.minorUnitExponent);
     const openingMinor = signed(openingRawMinor, scope.ledgerBalanceSignMultiplier);
@@ -475,12 +540,24 @@ export class QuickBooksGeneralLedgerBalanceReader {
     if (!rollforwardOkay) reasons.push("QUICKBOOKS_BALANCE_ROLLFORWARD_BROKEN");
     const complete = reasons.length === 0;
     const conflicted = !rollforwardOkay && rejected === 0 && !reasons.some((reason) => reason.includes("UNPROVEN"));
-    const responseText = JSON.stringify({ account, report });
+    const responseText = JSON.stringify({
+      account,
+      generalLedger,
+      openingTrialBalance: openingTrialBalanceResponse.body,
+      closingTrialBalance: closingTrialBalanceResponse.body,
+    });
     const responseFingerprint = sha256(responseText);
+    const openingPayloadHash = sha256(JSON.stringify({
+      account, generalLedger, openingTrialBalance: openingTrialBalanceResponse.body,
+    }));
+    const closingPayloadHash = sha256(JSON.stringify({
+      account, generalLedger, closingTrialBalance: closingTrialBalanceResponse.body,
+    }));
     const requestFingerprint = sha256(JSON.stringify({
       provider: "quickbooks", realm: scope.ledgerOrganisationId,
       account: scope.ledgerAccountId, periodStart: request.periodStart,
-      periodEnd: request.periodEnd, basis: "Accrual",
+      periodEnd: request.periodEnd, basis: "Accrual", balanceReports: "TrialBalance",
+      openingCutoff, closingCutoff,
     }));
     const finished = new Date().toISOString();
     return {
@@ -490,7 +567,10 @@ export class QuickBooksGeneralLedgerBalanceReader {
       accountId: scope.ledgerAccountId,
       currencyCode: scope.currencyCode,
       minorUnitExponent: scope.minorUnitExponent,
-      providerRequestId: [accountResponse.requestId, reportResponse.requestId].filter(Boolean).join(",") || null,
+      providerRequestId: [
+        accountResponse.requestId, generalLedgerResponse.requestId,
+        openingTrialBalanceResponse.requestId, closingTrialBalanceResponse.requestId,
+      ].filter(Boolean).join(",") || null,
       opening: {
         localBoundaryDate: request.periodStart,
         asOfExclusive: utcBoundary(request.periodStart, scope.accountTimezone),
@@ -499,8 +579,10 @@ export class QuickBooksGeneralLedgerBalanceReader {
         balanceMinor: openingMinor.toString(),
         origin: "provider_reported",
         artifactId: null,
-        rawPayloadHash: responseFingerprint,
-        evidenceFingerprint: sha256(`qbo-opening|${requestFingerprint}|${responseFingerprint}|${openingMinor}`),
+        rawPayloadHash: openingPayloadHash,
+        evidenceFingerprint: sha256(
+          `qbo-opening|${requestFingerprint}|${responseFingerprint}|${openingPayloadHash}|${openingMinor}`,
+        ),
       },
       closing: {
         localBoundaryDate: nextDate(request.periodEnd),
@@ -510,8 +592,10 @@ export class QuickBooksGeneralLedgerBalanceReader {
         balanceMinor: closingMinor.toString(),
         origin: "provider_reported",
         artifactId: null,
-        rawPayloadHash: responseFingerprint,
-        evidenceFingerprint: sha256(`qbo-closing|${requestFingerprint}|${responseFingerprint}|${closingMinor}`),
+        rawPayloadHash: closingPayloadHash,
+        evidenceFingerprint: sha256(
+          `qbo-closing|${requestFingerprint}|${responseFingerprint}|${closingPayloadHash}|${closingMinor}`,
+        ),
       },
       dateBasis: "accounting_date",
       paginationMode: "not_applicable",
