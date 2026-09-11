@@ -444,7 +444,7 @@ function canonicalObservations(parsed: ParsedStatement, input: ManualShadowReque
         description: transaction.description?.value ?? null, counterparty: transaction.merchant?.value ?? null,
         reference_text: transaction.memo, raw_payload_hash_hex: rawHash,
         change_reason: "Step 9 retained OFX shadow extraction" },
-      identityClaims: [{ claim_kind: "ofx_fitid", strength: "authoritative", canonicalisation_version: 1,
+      identityClaims: [{ claim_kind: "ofx_fitid", strength: "strong", canonicalisation_version: 1,
         namespace_canonical: `ofx|${account.stableKey}`, claim_key_canonical: fitId,
         components: { fitid: fitId }, source_artifact_id: input.artifact.id }],
       eventRevision: { event_kind: "bank_transaction", lifecycle_status: "active", resolution_status: "resolved",

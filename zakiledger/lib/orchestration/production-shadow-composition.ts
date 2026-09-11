@@ -312,7 +312,83 @@ export async function runManualProductionShadow<TExtraction, TReconciliation, TB
       return result;
     };
   }
-  return new ShadowOrchestrationWorker(bindings.store, bindings.workerId, handlers).run(plan.request);
+  const resumeHydrators = {
+    INGESTION: ({ output }: { output: unknown }) => {
+      const value = resumeRecord(output, "INGESTION");
+      if (value.artifactId !== plan.extraction.artifact.id ||
+          value.artifactFingerprint !== plan.extraction.artifact.fingerprint ||
+          value.artifactLength !== plan.extraction.artifactLength ||
+          value.artifactRetainedAt !== plan.extraction.artifactRetainedAt ||
+          value.extractionIdentityFingerprint !== extractionIdentityFingerprint(plan.extraction)) {
+        throw new Error("SHADOW_RESUME_INGESTION_OUTPUT_MISMATCH");
+      }
+    },
+    EXTRACTION: ({ output, provenance }: { output: unknown; provenance: readonly ImmutableReference[] }) => {
+      const value = resumeRecord(output, "EXTRACTION");
+      if (typeof value.outputCanonicalJson !== "string" ||
+          typeof value.extractionRunId !== "string" || !value.extractionRunId ||
+          typeof value.extractionKey !== "string" || !/^[0-9a-f]{64}$/.test(value.extractionKey) ||
+          typeof value.outputFingerprint !== "string" || !/^[0-9a-f]{64}$/.test(value.outputFingerprint) ||
+          value.artifactRetainedAt !== plan.extraction.artifactRetainedAt ||
+          value.invocationFingerprint !== extractionIdentityFingerprint(plan.extraction) ||
+          canonicalShadowJson(value.invocation) !== canonicalShadowJson(freshExtractionInvocationMetadata(plan.extraction))) {
+        throw new Error("SHADOW_RESUME_EXTRACTION_OUTPUT_MALFORMED");
+      }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(value.outputCanonicalJson);
+      } catch {
+        throw new Error("SHADOW_RESUME_EXTRACTION_OUTPUT_MALFORMED");
+      }
+      if (canonicalShadowJson(parsed) !== value.outputCanonicalJson) {
+        throw new Error("SHADOW_RESUME_EXTRACTION_OUTPUT_MALFORMED");
+      }
+      const expectedExtractionFingerprint = shadowSha256({
+        namespace: "step9-shadow-extraction-output-v1",
+        extractionKey: value.extractionKey, output: parsed,
+      });
+      if (expectedExtractionFingerprint !== value.outputFingerprint) {
+        throw new Error("SHADOW_RESUME_EXTRACTION_OUTPUT_FINGERPRINT_MISMATCH");
+      }
+      const artifactReference = provenance.find((item) => item.namespace === "import_artifact");
+      const persistedReference = provenance.find((item) => item.namespace === "shadow_extraction_run");
+      if (!artifactReference || artifactReference.id !== plan.extraction.artifact.id ||
+          artifactReference.fingerprint !== plan.extraction.artifact.fingerprint ||
+          !persistedReference || persistedReference.id !== value.extractionRunId ||
+          persistedReference.fingerprint !== value.outputFingerprint) {
+        throw new Error("SHADOW_RESUME_EXTRACTION_PROVENANCE_MISMATCH");
+      }
+      extractionValue = parsed as TExtraction;
+      extractionRef = reference("shadow_extraction_run", value.extractionRunId, value.outputFingerprint);
+    },
+    RECONCILIATION: ({ output }: { output: unknown }) => {
+      const value = resumeRecord(output, "RECONCILIATION");
+      if (!("result" in value)) throw new Error("SHADOW_RESUME_RECONCILIATION_OUTPUT_MALFORMED");
+      reconciliationValue = value.result as TReconciliation;
+    },
+    BALANCE_PROOF: ({ output }: { output: unknown }) => {
+      resumeRecord(output, "BALANCE_PROOF");
+      balanceValue = output as TBalance;
+    },
+    POLICY_EVALUATION: ({ output }: { output: unknown }) => {
+      const value = resumeRecord(output, "POLICY_EVALUATION");
+      if (typeof value.id !== "string" || typeof value.resultSha256 !== "string" ||
+          !["ALLOW", "REVIEW", "DENY"].includes(String(value.decision))) {
+        throw new Error("SHADOW_RESUME_POLICY_OUTPUT_MALFORMED");
+      }
+      policyValue = value as unknown as StoredPolicyDecision;
+    },
+  };
+  return new ShadowOrchestrationWorker(
+    bindings.store, bindings.workerId, handlers, resumeHydrators,
+  ).run(plan.request);
+}
+
+function resumeRecord(value: unknown, stage: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`SHADOW_RESUME_${stage}_OUTPUT_MALFORMED`);
+  }
+  return value as Record<string, unknown>;
 }
 
 function success(output: unknown, provenance: readonly ImmutableReference[]): ShadowStageHandlerResult {
