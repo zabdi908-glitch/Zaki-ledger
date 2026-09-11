@@ -123,4 +123,36 @@ describe("Step 9 manual shadow entrypoint", () => {
     expect(source).not.toMatch(/method\s*:\s*["'](?:POST|PUT|PATCH|DELETE)["']/);
     expect(`${source}\n${route}`).not.toMatch(/cron|scheduleJob|setInterval/);
   });
+
+  it("binds ofx_fitid to the canonical registered strong strength", () => {
+    const source = readFileSync(join(process.cwd(), "lib", "orchestration", "manual-shadow-entrypoint.ts"), "utf8");
+    const canonical = readFileSync(join(process.cwd(), "..", "supabase", "migrations",
+      "010_additive_canonical_financial_foundation.sql"), "utf8");
+    expect(source).toMatch(/claim_kind:\s*"ofx_fitid",\s*strength:\s*"strong"/);
+    expect(source).not.toMatch(/claim_kind:\s*"ofx_fitid",\s*strength:\s*"authoritative"/);
+    expect(canonical).toContain("('ofx_fitid', 'strong')");
+  });
+
+  it("keeps unsupported identity-kind/strength pairs fail-closed at the canonical foreign key", () => {
+    const canonical = readFileSync(join(process.cwd(), "..", "supabase", "migrations",
+      "010_additive_canonical_financial_foundation.sql"), "utf8");
+    expect(canonical).not.toContain("('ofx_fitid', 'authoritative')");
+    expect(canonical).toMatch(/FOREIGN KEY \(claim_kind, strength\)\s+REFERENCES public\.financial_identity_claim_kinds/);
+  });
+
+  it("keeps one failed atomic observation ingest from writing partial canonical graph state", () => {
+    const canonical = readFileSync(join(process.cwd(), "..", "supabase", "migrations",
+      "010_additive_canonical_financial_foundation.sql"), "utf8");
+    const ingest = canonical.match(/CREATE OR REPLACE FUNCTION public\.ingest_financial_observation_v1\([\s\S]*?\n\$\$;\n/)?.[0];
+    expect(ingest).toBeDefined();
+    // A single PostgreSQL function statement owns observation, event, link, and
+    // identity-claim creation. With no exception handler swallowing an error,
+    // PostgreSQL rolls the entire failed statement back.
+    expect(ingest).toContain("public.create_financial_observation_v1");
+    expect(ingest).toContain("public.create_financial_event_v1");
+    expect(ingest).toContain("public.attach_financial_observation_v1");
+    expect(ingest).toContain("INSERT INTO public.financial_identity_claims");
+    expect(ingest).not.toMatch(/EXCEPTION\s+WHEN/);
+    expect(ingest).not.toMatch(/financial_relationships|financial_allocations/);
+  });
 });

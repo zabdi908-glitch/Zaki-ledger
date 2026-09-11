@@ -34,6 +34,13 @@ export interface BeginStageResult {
   lease: ShadowLease;
 }
 
+export interface SucceededStageCheckpoint {
+  stage: ShadowStageRecord;
+  scope: { practiceId: string; clientEntityId: string; ledgerBookId: string };
+  output: unknown;
+  provenance: readonly ImmutableReference[];
+}
+
 export interface FinalizeStageInput<T> {
   runId: string;
   stageId: string;
@@ -50,6 +57,7 @@ export interface FinalizeStageInput<T> {
 
 export interface ShadowOrchestrationStore {
   createOrReuseRun(request: ShadowRunRequest): Promise<ShadowRunRecord>;
+  loadSucceededStage(runId: string, stage: ShadowStage): Promise<SucceededStageCheckpoint | null>;
   beginStage(input: BeginStageInput): Promise<BeginStageResult>;
   renewLease(lease: ShadowLease, leaseSeconds?: number): Promise<ShadowLease>;
   markStageRetryable(input: {
@@ -62,7 +70,12 @@ export interface ShadowOrchestrationStore {
 interface MemoryRun extends ShadowRunRecord { terminal: boolean }
 interface MemoryStage extends ShadowStageRecord { attempts: number }
 interface MemoryAttempt extends ShadowAttemptRecord { workerId: string }
-interface MemoryOutput { canonical: string; fingerprint: string }
+interface MemoryOutput {
+  canonical: string;
+  fingerprint: string;
+  output: unknown;
+  provenance: readonly ImmutableReference[];
+}
 
 /** Deterministic local store mirroring migration 034 conflict and fencing semantics. */
 export class InMemoryShadowOrchestrationStore implements ShadowOrchestrationStore {
@@ -96,6 +109,30 @@ export class InMemoryShadowOrchestrationStore implements ShadowOrchestrationStor
     };
     this.runs.set(runKey, run);
     return run;
+  }
+
+  async loadSucceededStage(runId: string, stageName: ShadowStage): Promise<SucceededStageCheckpoint | null> {
+    const run = [...this.runs.values()].find((item) => item.id === runId);
+    if (!run) throw new Error("SHADOW_RUN_NOT_FOUND");
+    const stage = this.stages.get(`${runId}:${stageName}`);
+    if (!stage || !isTerminalShadowState(stage.state)) return null;
+    if (stage.state !== "SUCCEEDED") throw new Error("SHADOW_RESUME_COMPLETED_STAGE_NOT_SUCCEEDED");
+    const persisted = this.outputs.get(stage.id);
+    if (!persisted) throw new Error("SHADOW_RESUME_COMPLETED_STAGE_OUTPUT_MISSING");
+    const expected = fingerprintStageOutput(stageName, persisted.output, persisted.provenance);
+    const canonical = canonicalShadowJson({
+      inputFingerprint: stage.inputFingerprint, output: persisted.output,
+      provenance: persisted.provenance, reasonCode: null,
+    });
+    if (stage.outputFingerprint !== persisted.fingerprint || expected !== persisted.fingerprint ||
+        canonical !== persisted.canonical) {
+      throw new Error("SHADOW_RESUME_COMPLETED_STAGE_OUTPUT_FINGERPRINT_MISMATCH");
+    }
+    return {
+      stage: { ...stage },
+      scope: { practiceId: run.practiceId, clientEntityId: run.clientEntityId, ledgerBookId: run.ledgerBookId },
+      output: persisted.output, provenance: persisted.provenance,
+    };
   }
 
   async beginStage(input: BeginStageInput): Promise<BeginStageResult> {
@@ -204,7 +241,10 @@ export class InMemoryShadowOrchestrationStore implements ShadowOrchestrationStor
     }
     if (stage.state !== "RUNNING" || attempt.state !== "RUNNING") throw new Error("SHADOW_ATTEMPT_NOT_RUNNING");
     assertShadowTransition("RUNNING", input.state);
-    this.outputs.set(stage.id, { canonical, fingerprint: outputFingerprint });
+    this.outputs.set(stage.id, {
+      canonical, fingerprint: outputFingerprint, output: input.output,
+      provenance: input.provenance,
+    });
     stage.outputFingerprint = outputFingerprint;
     stage.state = input.state;
     attempt.state = input.state;
@@ -243,6 +283,45 @@ export class SupabaseShadowOrchestrationStore implements ShadowOrchestrationStor
     return {
       ...request, id: String(value.run_id), runKey, inputFingerprint,
       state: String(value.state) as ShadowState, reused: value.reused === true,
+    };
+  }
+
+  async loadSucceededStage(runId: string, stageName: ShadowStage): Promise<SucceededStageCheckpoint | null> {
+    const stageResult = await this.db.from("shadow_orchestration_stages")
+      .select("id,run_id,practice_id,client_entity_id,ledger_book_id,stage,stage_ordinal,state,input_fingerprint,output_fingerprint")
+      .eq("run_id", runId).eq("stage", stageName).maybeSingle();
+    if (stageResult.error) throw new Error(`SHADOW_RESUME_STAGE_LOOKUP_FAILED:${stageResult.error.message}`);
+    if (!stageResult.data || !isTerminalShadowState(String(stageResult.data.state) as ShadowState)) return null;
+    if (stageResult.data.state !== "SUCCEEDED") throw new Error("SHADOW_RESUME_COMPLETED_STAGE_NOT_SUCCEEDED");
+    const outputResult = await this.db.from("shadow_orchestration_stage_outputs")
+      .select("stage_id,run_id,practice_id,client_entity_id,ledger_book_id,input_fingerprint,output_fingerprint,output_payload,output_canonical_json,provenance,provenance_canonical_json")
+      .eq("stage_id", stageResult.data.id).eq("run_id", runId).maybeSingle();
+    if (outputResult.error) throw new Error(`SHADOW_RESUME_OUTPUT_LOOKUP_FAILED:${outputResult.error.message}`);
+    if (!outputResult.data) throw new Error("SHADOW_RESUME_COMPLETED_STAGE_OUTPUT_MISSING");
+    const stageInput = databaseSha256(stageResult.data.input_fingerprint, "stage input");
+    const stageOutput = databaseSha256(stageResult.data.output_fingerprint, "stage output");
+    const outputInput = databaseSha256(outputResult.data.input_fingerprint, "output input");
+    const outputFingerprint = databaseSha256(outputResult.data.output_fingerprint, "output fingerprint");
+    const provenance = outputResult.data.provenance;
+    if (!Array.isArray(provenance) || canonicalShadowJson(outputResult.data.output_payload) !== outputResult.data.output_canonical_json ||
+        canonicalShadowJson(provenance) !== outputResult.data.provenance_canonical_json ||
+        stageInput !== outputInput || stageOutput !== outputFingerprint ||
+        fingerprintStageOutput(stageName, outputResult.data.output_payload, provenance) !== outputFingerprint ||
+        stageResult.data.stage !== stageName || outputResult.data.stage_id !== stageResult.data.id ||
+        outputResult.data.run_id !== runId || stageResult.data.practice_id !== outputResult.data.practice_id ||
+        stageResult.data.client_entity_id !== outputResult.data.client_entity_id ||
+        stageResult.data.ledger_book_id !== outputResult.data.ledger_book_id) {
+      throw new Error("SHADOW_RESUME_COMPLETED_STAGE_OUTPUT_FINGERPRINT_MISMATCH");
+    }
+    for (const reference of provenance) assertImmutableReference(reference);
+    return {
+      stage: { id: String(stageResult.data.id), runId, stage: stageName,
+        ordinal: Number(stageResult.data.stage_ordinal), state: "SUCCEEDED",
+        inputFingerprint: stageInput, outputFingerprint: stageOutput },
+      scope: { practiceId: String(stageResult.data.practice_id),
+        clientEntityId: String(stageResult.data.client_entity_id),
+        ledgerBookId: String(stageResult.data.ledger_book_id) },
+      output: outputResult.data.output_payload, provenance,
     };
   }
 
@@ -307,5 +386,23 @@ export class SupabaseShadowOrchestrationStore implements ShadowOrchestrationStor
     if (result.error) throw new Error(`SHADOW_STAGE_FINALIZE_FAILED:${result.error.message}`);
     const value = row(result.data, "SHADOW_STAGE_FINALIZE");
     return { outputFingerprint, reused: value.reused === true };
+  }
+}
+
+function databaseSha256(value: unknown, label: string): string {
+  if (typeof value !== "string") throw new Error(`SHADOW_RESUME_${label.toUpperCase().replaceAll(" ", "_")}_MALFORMED`);
+  const normalized = value.startsWith("\\x") ? value.slice(2) : value;
+  if (!/^[0-9a-f]{64}$/.test(normalized)) {
+    throw new Error(`SHADOW_RESUME_${label.toUpperCase().replaceAll(" ", "_")}_MALFORMED`);
+  }
+  return normalized;
+}
+
+function assertImmutableReference(value: unknown): asserts value is ImmutableReference {
+  const reference = value as Partial<ImmutableReference> | null;
+  if (!reference || typeof reference.namespace !== "string" || !reference.namespace ||
+      typeof reference.id !== "string" || !reference.id ||
+      typeof reference.fingerprint !== "string" || !/^[0-9a-f]{64}$/.test(reference.fingerprint)) {
+    throw new Error("SHADOW_RESUME_PROVENANCE_MALFORMED");
   }
 }

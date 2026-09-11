@@ -8,8 +8,8 @@ import {
   type ShadowRunRequest,
   type ShadowStage,
 } from "./shadow-contract";
-import { fingerprintStageInput } from "./shadow-canonicalization";
-import type { ShadowOrchestrationStore } from "./shadow-store";
+import { fingerprintStageInput, fingerprintStageOutput } from "./shadow-canonicalization";
+import type { ShadowOrchestrationStore, SucceededStageCheckpoint } from "./shadow-store";
 import type { ShadowAttemptRecord, ShadowLease, ShadowStageRecord } from "./shadow-contract";
 import { fingerprintShadowRun } from "./shadow-canonicalization";
 
@@ -31,6 +31,8 @@ export interface ShadowStageHandlerResult {
 }
 
 export type ShadowStageHandlers = Partial<Record<ShadowStage, (context: ShadowStageContext) => Promise<ShadowStageHandlerResult>>>;
+export type ShadowResumeHydrators = Partial<Record<ShadowStage,
+  (checkpoint: SucceededStageCheckpoint) => Promise<void> | void>>;
 
 /**
  * Coordination skeleton only. It ends after STEP8_PLANNING/EXCEPTION_OUTPUT and
@@ -41,6 +43,7 @@ export class ShadowOrchestrationWorker {
     private readonly store: ShadowOrchestrationStore,
     private readonly workerId: string,
     private readonly handlers: ShadowStageHandlers,
+    private readonly resumeHydrators: ShadowResumeHydrators = {},
   ) {}
 
   async run(request: ShadowRunRequest): Promise<ShadowRunRecord> {
@@ -63,6 +66,29 @@ export class ShadowOrchestrationWorker {
       }
       const input = { runInputFingerprint: run.inputFingerprint, dependencyFingerprint };
       const inputFingerprint = fingerprintStageInput(stage, dependencyFingerprint, input);
+      if (run.reused) {
+        const checkpoint = await this.store.loadSucceededStage(run.id, stage);
+        if (checkpoint) {
+          if (checkpoint.scope.practiceId !== request.practiceId ||
+              checkpoint.scope.clientEntityId !== request.clientEntityId ||
+              checkpoint.scope.ledgerBookId !== request.ledgerBookId) {
+            throw new Error("SHADOW_RESUME_COMPLETED_STAGE_SCOPE_MISMATCH");
+          }
+          if (checkpoint.stage.runId !== run.id || checkpoint.stage.stage !== stage ||
+              checkpoint.stage.ordinal !== SHADOW_STAGES.indexOf(stage) + 1 ||
+              checkpoint.stage.inputFingerprint !== inputFingerprint) {
+            throw new Error("SHADOW_RESUME_COMPLETED_STAGE_INPUT_FINGERPRINT_MISMATCH");
+          }
+          const outputFingerprint = fingerprintStageOutput(stage, checkpoint.output, checkpoint.provenance);
+          if (checkpoint.stage.outputFingerprint !== outputFingerprint) {
+            throw new Error("SHADOW_RESUME_COMPLETED_STAGE_OUTPUT_FINGERPRINT_MISMATCH");
+          }
+          const hydrate = this.resumeHydrators[stage];
+          if (hydrate) await hydrate(checkpoint);
+          dependencyFingerprint = outputFingerprint;
+          continue;
+        }
+      }
       const claimed = await this.store.beginStage({
         runId: run.id, stage, inputFingerprint, workerId: this.workerId,
       });

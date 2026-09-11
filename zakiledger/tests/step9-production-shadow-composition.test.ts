@@ -80,8 +80,9 @@ function fixture() {
     }),
     planningInput: () => ({}) as never,
   };
+  const store = new InMemoryShadowOrchestrationStore();
   const bindings = {
-    store: new InMemoryShadowOrchestrationStore(), workerId: "manual-worker-a",
+    store, workerId: "manual-worker-a",
     artifactEligibility,
     extractionRuns: new ShadowExtractionRunService(persistence, { verify: async () => true }), extractor,
     canonical: new ExtractionToCanonicalAdapter({
@@ -102,7 +103,7 @@ function fixture() {
       capabilityBundleVersion: "step8-provider-reversibility-v1" as const,
       plannerVersion: "step8-pure-reversibility-planner-v1" as const, grantsExecutionPermission: false as const })),
   };
-  return { plan, bindings, extractor, artifactEligibility, snapshotRecord };
+  return { plan, bindings, store, extractor, artifactEligibility, snapshotRecord };
 }
 
 describe("Step 9 production shadow composition", () => {
@@ -145,5 +146,110 @@ describe("Step 9 production shadow composition", () => {
     await expect(runManualProductionShadow({ ...plan,
       extraction: { ...plan.extraction, ledgerBookId: "wrong-book" } }, bindings))
       .rejects.toThrow("EXTRACTION_SCOPE_INTEGRITY_BLOCKED");
+  });
+
+  it("resumes at CANONICAL_UPDATE with hydrated extraction and no duplicate canonical identity", async () => {
+    const { plan, bindings, store, extractor } = fixture();
+    const beginStage = vi.spyOn(store, "beginStage");
+    const hydrated: unknown[] = [];
+    const canonicalInput = plan.canonicalInput;
+    plan.canonicalInput = (extraction, reference) => {
+      hydrated.push(extraction);
+      const input = canonicalInput(extraction, reference);
+      return { ...input, observations: [
+        ...input.observations,
+        { ...input.observations[0], sourceLocator: "row-2" },
+      ] };
+    };
+    let failFirst = true;
+    const observations = new Map<string, { observationId: string; revisionId: string; eventId: string }>();
+    bindings.canonical = new ExtractionToCanonicalAdapter({
+      startImport: async () => ({ runId: "import-a" }),
+      ingestObservation: async (input) => {
+        if (failFirst && input.sourceLocator === "row-2") {
+          failFirst = false;
+          throw new Error("CANONICAL_OBSERVATION_FAILED");
+        }
+        const existing = observations.get(input.sourceLocator) ?? {
+          observationId: `observation-${input.sourceLocator}`,
+          revisionId: `revision-${input.sourceLocator}`,
+          eventId: `event-${input.sourceLocator}`,
+        };
+        observations.set(input.sourceLocator, existing);
+        return existing;
+      },
+      recordOccurrence: async (input) => ({ occurrenceId: `occurrence-${input.observationId}` }),
+    });
+
+    await expect(runManualProductionShadow(plan, bindings))
+      .rejects.toThrow("CANONICAL_OBSERVATION_FAILED");
+    const failed = await store.createOrReuseRun(plan.request);
+    expect(failed).toMatchObject({ state: "RETRYABLE", reused: true });
+
+    const resumed = await runManualProductionShadow(plan, bindings);
+    expect(resumed).toMatchObject({ id: failed.id, runKey: failed.runKey, state: "SUCCEEDED", reused: true });
+    expect(resumed.inputFingerprint).toBe(failed.inputFingerprint);
+    const stageClaims = beginStage.mock.calls.map(([input]) => input.stage);
+    const claimedAttempts = (await Promise.all(beginStage.mock.results.map((result) => result.value)))
+      .map(({ stage, attempt }) => ({ stage: stage.stage, attemptNumber: attempt.attemptNumber }));
+    expect(stageClaims.filter((stage) => stage === "INGESTION")).toHaveLength(1);
+    expect(stageClaims.filter((stage) => stage === "EXTRACTION")).toHaveLength(1);
+    expect(stageClaims.filter((stage) => stage === "CANONICAL_UPDATE")).toHaveLength(2);
+    expect(claimedAttempts.filter(({ stage }) => stage === "INGESTION"))
+      .toEqual([{ stage: "INGESTION", attemptNumber: 1 }]);
+    expect(claimedAttempts.filter(({ stage }) => stage === "EXTRACTION"))
+      .toEqual([{ stage: "EXTRACTION", attemptNumber: 1 }]);
+    expect(claimedAttempts.filter(({ stage }) => stage === "CANONICAL_UPDATE"))
+      .toEqual([
+        { stage: "CANONICAL_UPDATE", attemptNumber: 1 },
+        { stage: "CANONICAL_UPDATE", attemptNumber: 2 },
+      ]);
+    expect(extractor).toHaveBeenCalledTimes(1);
+    expect(hydrated).toHaveLength(2);
+    // Canonical bytes and parsed semantics survive the persistence round trip.
+    expect(canonicalPolicyJson(hydrated[1])).toBe(canonicalPolicyJson(hydrated[0]));
+    expect(hydrated[1]).toEqual(hydrated[0]);
+    // row-1 was committed before row-2 failed; retry reuses it by source identity.
+    expect(observations.size).toBe(2);
+
+    const terminalReplay = await runManualProductionShadow(plan, bindings);
+    expect(terminalReplay).toMatchObject({ id: failed.id, state: "SUCCEEDED", reused: true });
+    expect(beginStage.mock.calls.map(([input]) => input.stage)).toEqual(stageClaims);
+    expect(observations.size).toBe(2);
+  });
+
+  it.each([
+    ["missing", "SHADOW_RESUME_COMPLETED_STAGE_OUTPUT_MISSING"],
+    ["fingerprint", "SHADOW_RESUME_COMPLETED_STAGE_INPUT_FINGERPRINT_MISMATCH"],
+  ] as const)("fails closed when a completed extraction checkpoint has a %s defect", async (defect, reason) => {
+    const { plan, bindings, store } = fixture();
+    bindings.canonical = new ExtractionToCanonicalAdapter({
+      startImport: async () => ({ runId: "import-a" }),
+      ingestObservation: async () => { throw new Error("CANONICAL_OBSERVATION_FAILED"); },
+      recordOccurrence: async () => ({ occurrenceId: "must-not-run" }),
+    });
+    await expect(runManualProductionShadow(plan, bindings))
+      .rejects.toThrow("CANONICAL_OBSERVATION_FAILED");
+    const load = store.loadSucceededStage.bind(store);
+    vi.spyOn(store, "loadSucceededStage").mockImplementation(async (runId, stage) => {
+      const checkpoint = await load(runId, stage);
+      if (stage !== "EXTRACTION") return checkpoint;
+      if (defect === "missing") throw new Error("SHADOW_RESUME_COMPLETED_STAGE_OUTPUT_MISSING");
+      if (!checkpoint) throw new Error("test checkpoint missing");
+      return { ...checkpoint, stage: { ...checkpoint.stage, inputFingerprint: "f".repeat(64) } };
+    });
+    await expect(runManualProductionShadow(plan, bindings)).rejects.toThrow(reason);
+  });
+
+  it("does not treat changed semantic run input as a resume", async () => {
+    const { plan, store } = fixture();
+    const original = await store.createOrReuseRun(plan.request);
+    const changed = await store.createOrReuseRun({
+      ...plan.request, requestedFor: "2026-09-08T01:00:01.000Z",
+    });
+    expect(changed).toMatchObject({ reused: false });
+    expect(changed.id).not.toBe(original.id);
+    expect(changed.runKey).not.toBe(original.runKey);
+    expect(changed.inputFingerprint).not.toBe(original.inputFingerprint);
   });
 });
