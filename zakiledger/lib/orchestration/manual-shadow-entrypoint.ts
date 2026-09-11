@@ -21,7 +21,10 @@ import {
   normalizeCurrency,
   sha256Hex,
 } from "../financial-identity";
-import { computeAndPersistMatches } from "../reconciliation-store";
+import {
+  computeAndPersistMatches,
+  loadStep4ReconciliationFrontier,
+} from "../reconciliation-store";
 import type { ParsedStatement } from "../reconciliation-schema";
 import { getSupabase } from "../supabase";
 import { resolveTenantContextForUser } from "../tenant-context";
@@ -33,7 +36,12 @@ import {
   runManualProductionShadow,
   type ProductionShadowRunPlan,
 } from "./production-shadow-composition";
-import { ShadowReconciliationAdapter, type ReconciliationDomainPort, type ReconciliationManifestMember } from "./reconciliation-adapter";
+import {
+  ShadowReconciliationAdapter,
+  step4FrontierManifest,
+  type ReconciliationDomainPort,
+  type ReconciliationManifestMember,
+} from "./reconciliation-adapter";
 import { shadowSha256 } from "./shadow-canonicalization";
 import type { ShadowRunRecord, ShadowRunRequest, ShadowScope } from "./shadow-contract";
 
@@ -177,9 +185,7 @@ class SupabaseManualShadowRuntime implements ManualShadowRuntime {
       correlationId: input.correlationId,
     };
     const workerId = `manual-shadow:${actorUserId}`;
-    const reconciliationDomain = new SupabaseReconciliationDomain(
-      this.db, actorUserId, input, statement.periodStart, statement.periodEnd,
-    );
+    const reconciliationDomain = new SupabaseReconciliationDomain(actorUserId, input);
     const balanceExecutor = new BalanceReconciliationShadowExecutor(
       balanceStore,
       new PairedOfxBalanceEvidenceReader(),
@@ -462,35 +468,20 @@ function canonicalObservations(parsed: ParsedStatement, input: ManualShadowReque
 }
 
 class SupabaseReconciliationDomain implements ReconciliationDomainPort<Awaited<ReturnType<typeof computeAndPersistMatches>>> {
-  constructor(private readonly db: SupabaseClient, private readonly actorUserId: string,
-    private readonly input: ManualShadowRequest, private readonly periodStart: string, private readonly periodEnd: string) {}
+  constructor(private readonly actorUserId: string, private readonly input: ManualShadowRequest) {}
 
-  async loadManifest() { return this.manifest(false); }
+  async loadManifest() { return this.manifest(); }
   async computeAndPersist() { return computeAndPersistMatches(this.actorUserId, this.input.reconciliation.statementId); }
-  async loadOutputManifest() { return this.manifest(true); }
+  async loadOutputManifest() { return this.manifest(); }
 
-  private async manifest(includeMatches: boolean): Promise<readonly ReconciliationManifestMember[]> {
-    const [{ data: bank, error: bankError }, { data: accounting, error: accountingError }, matches] = await Promise.all([
-      this.db.from("bank_transactions").select("*").eq("statement_id", this.input.reconciliation.statementId)
-        .eq("user_id", this.actorUserId).eq("client_entity_id", this.input.clientEntityId)
-        .eq("ledger_book_id", this.input.ledgerBookId),
-      this.db.from("qb_transactions").select("*").eq("user_id", this.actorUserId)
-        .eq("client_entity_id", this.input.clientEntityId).eq("ledger_book_id", this.input.ledgerBookId)
-        .gte("posted_date", this.periodStart).lte("posted_date", this.periodEnd),
-      includeMatches ? this.db.from("reconciliation_matches").select("*")
-        .eq("statement_id", this.input.reconciliation.statementId).eq("user_id", this.actorUserId) : Promise.resolve({ data: [], error: null }),
-    ]);
-    if (bankError || accountingError || matches.error) throw new Error("RECONCILIATION_MANIFEST_READ_FAILED");
-    const members: ReconciliationManifestMember[] = [];
-    for (const row of bank ?? []) members.push(manifestMember("bank_transaction", row));
-    for (const row of accounting ?? []) members.push(manifestMember("accounting_transaction", row));
-    for (const row of matches.data ?? []) members.push(manifestMember("reconciliation_match", row));
-    return members;
+  private async manifest(): Promise<readonly ReconciliationManifestMember[]> {
+    const frontier = await loadStep4ReconciliationFrontier(
+      this.actorUserId,
+      this.input.reconciliation.statementId,
+      { clientEntityId: this.input.clientEntityId, ledgerBookId: this.input.ledgerBookId },
+    );
+    return step4FrontierManifest(frontier);
   }
-}
-
-function manifestMember(namespace: ReconciliationManifestMember["namespace"], row: Record<string, unknown>) {
-  return { namespace, id: String(row.id), fingerprint: shadowSha256({ namespace: `step9-${namespace}-v1`, row }) };
 }
 
 class SupabaseReadOnlyPolicyArtifacts implements ReadOnlyPolicyArtifactPort {

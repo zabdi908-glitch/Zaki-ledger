@@ -2,11 +2,39 @@ import type { ShadowScope } from "./shadow-contract";
 import { fingerprintSortedManifest, shadowSha256 } from "./shadow-canonicalization";
 import { canonicalShadowJson } from "./shadow-canonicalization";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import type { Step4ReconciliationFrontier } from "../reconciliation-store";
 
 export interface ReconciliationManifestMember {
-  namespace: "bank_transaction" | "accounting_transaction" | "reconciliation_match";
+  namespace:
+    | "bank_statement"
+    | "bank_transaction"
+    | "accounting_transaction"
+    | "reconciliation_match"
+    | "qb_claim_holder";
   id: string;
   fingerprint: string;
+}
+
+/** Lossless Step 9 fingerprint projection of the Step 4 semantic frontier. */
+export function step4FrontierManifest(
+  frontier: Step4ReconciliationFrontier,
+): readonly ReconciliationManifestMember[] {
+  return [
+    manifestMember("bank_statement", frontier.statement),
+    ...frontier.bankTransactions.map((row) => manifestMember("bank_transaction", row)),
+    ...frontier.qbTransactions.map((row) => manifestMember("accounting_transaction", row)),
+    ...frontier.currentStatementMatches.map((row) => manifestMember("reconciliation_match", row)),
+    ...frontier.liveQbClaimHolders.map((row) => manifestMember("qb_claim_holder", row)),
+  ];
+}
+
+function manifestMember(namespace: ReconciliationManifestMember["namespace"], row: object): ReconciliationManifestMember {
+  const identified = row as { id: string };
+  return {
+    namespace,
+    id: String(identified.id),
+    fingerprint: shadowSha256({ namespace: `step9-${namespace}-v1`, row }),
+  };
 }
 
 export interface FrozenReconciliationInput extends ShadowScope {
@@ -83,11 +111,11 @@ export class ShadowReconciliationAdapter<T> {
     await snapshots.input?.(before);
     const result = await this.domain.computeAndPersist(frozen);
     const after = await this.domain.loadOutputManifest(scope);
-    const afterInputMembers = after.filter((item) => item.namespace !== "reconciliation_match");
+    const afterInputMembers = after.filter(isStableSourceMember);
     const afterInputManifest = fingerprintSortedManifest(
       "step9-reconciliation-frontier-v1", afterInputMembers, memberKey,
     );
-    const beforeInputs = before.filter((item) => item.namespace !== "reconciliation_match");
+    const beforeInputs = before.filter(isStableSourceMember);
     const stableInputManifest = fingerprintSortedManifest(
       "step9-reconciliation-frontier-v1", beforeInputs, memberKey,
     );
@@ -102,4 +130,9 @@ export class ShadowReconciliationAdapter<T> {
 
 function memberKey(member: ReconciliationManifestMember): string {
   return `${member.namespace}:${member.id}`;
+}
+
+function isStableSourceMember(member: ReconciliationManifestMember): boolean {
+  return member.namespace === "bank_statement" || member.namespace === "bank_transaction" ||
+    member.namespace === "accounting_transaction";
 }

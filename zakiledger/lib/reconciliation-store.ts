@@ -660,6 +660,28 @@ export interface QbPeriodScope {
   ledgerBookId: string;
 }
 
+/**
+ * The complete read-only input frontier evaluated by canonical Step 4.
+ *
+ * Scope belongs to the statement (bank transaction rows deliberately do not
+ * carry a ledger_book_id). `liveQbClaimHolders` contains every live match,
+ * including supersedable sub-green auto suggestions, whose QB id is in this
+ * statement's padded candidate pool. Those are exactly the cross-statement
+ * rows that can reserve or otherwise affect a candidate during Step 4.
+ */
+export interface Step4ReconciliationFrontier {
+  statement: BankStatementMeta & {
+    userId: string;
+    clientEntityId: string;
+    ledgerBookId: string;
+  };
+  bankTransactions: BankTransaction[];
+  qbTransactions: QbTransaction[];
+  currentStatementMatches: ReconciliationMatch[];
+  liveQbClaimHolders: ReconciliationMatch[];
+  claimGuardVersion: "pre-013" | "canonical-013";
+}
+
 export async function listQbTransactionsForPeriod(
   userId: string,
   periodStart: string | null,
@@ -698,6 +720,95 @@ function addDays(iso: string, days: number): string {
   const d = new Date(`${iso}T00:00:00Z`);
   d.setUTCDate(d.getUTCDate() + days);
   return d.toISOString().slice(0, 10);
+}
+
+function byId<T extends { id: string }>(left: T, right: T): number {
+  return left.id.localeCompare(right.id);
+}
+
+/**
+ * Load, without scoring or mutation, the authoritative canonical Step 4
+ * reconciliation frontier for one authenticated user and statement.
+ * Client/book input is verified against both canonical tenant context and the
+ * bank statement itself; any mismatch is deliberately indistinguishable from
+ * an unavailable statement.
+ */
+export async function loadStep4ReconciliationFrontier(
+  userId: string,
+  statementId: string,
+  scope: QbPeriodScope,
+): Promise<Step4ReconciliationFrontier> {
+  const db = getSupabase();
+  if (!db) throw new Error("STEP4_RECONCILIATION_FRONTIER_DATABASE_REQUIRED");
+
+  const tenant = await resolveTenantContextForUser(userId);
+  if (tenant.clientEntityId !== scope.clientEntityId || tenant.internalLedgerBookId !== scope.ledgerBookId) {
+    throw new Error("STEP4_RECONCILIATION_FRONTIER_SCOPE_FORBIDDEN");
+  }
+  const claimGuard = await detectReconciliationClaimGuardCapability(db);
+  return loadCanonicalStep4Frontier(userId, statementId, scope, claimGuard.version);
+}
+
+async function loadCanonicalStep4Frontier(
+  userId: string,
+  statementId: string,
+  scope: QbPeriodScope,
+  claimGuardVersion: "pre-013" | "canonical-013",
+): Promise<Step4ReconciliationFrontier> {
+  const db = getSupabase();
+  if (!db) throw new Error("STEP4_RECONCILIATION_FRONTIER_DATABASE_REQUIRED");
+
+  // The ledger-book scope is inherited from bank_statements. Do not add a
+  // ledger_book_id predicate to bank_transactions: that column does not exist.
+  const { data: row, error } = await db
+    .from("bank_statements")
+    .select("id,user_id,client_entity_id,ledger_book_id,file_name,file_format,statement_period_start,statement_period_end,currency,opening_balance,closing_balance,transaction_count,source_provider,source_organisation_id,source_account_id,source_artifact_hash")
+    .eq("id", statementId)
+    .eq("user_id", userId)
+    .eq("client_entity_id", scope.clientEntityId)
+    .eq("ledger_book_id", scope.ledgerBookId)
+    .maybeSingle();
+  if (error) throw new Error(`Failed to load reconciliation frontier statement: ${error.message}`);
+  if (!row) throw new Error("STEP4_RECONCILIATION_FRONTIER_SCOPE_FORBIDDEN");
+
+  const statement = {
+    id: String(row.id),
+    userId: String(row.user_id),
+    clientEntityId: String(row.client_entity_id),
+    ledgerBookId: String(row.ledger_book_id),
+    fileName: (row.file_name as string) ?? null,
+    fileFormat: String(row.file_format),
+    periodStart: (row.statement_period_start as string) ?? null,
+    periodEnd: (row.statement_period_end as string) ?? null,
+    currency: (row.currency as string) ?? null,
+    openingBalance: numOrNull(row.opening_balance),
+    closingBalance: numOrNull(row.closing_balance),
+    transactionCount: Number(row.transaction_count ?? 0),
+    sourceProvider: (row.source_provider as string) ?? null,
+    sourceOrganisationId: (row.source_organisation_id as string) ?? null,
+    sourceAccountId: (row.source_account_id as string) ?? null,
+    sourceArtifactHash: (row.source_artifact_hash as string) ?? null,
+  };
+
+  const [bankTransactions, qbTransactions, currentStatementMatches, allUserMatches] = await Promise.all([
+    listBankTransactions(userId, statementId),
+    listQbTransactionsForPeriod(userId, statement.periodStart, statement.periodEnd, scope),
+    listMatchesForStatement(userId, statementId),
+    listAllMatchesForUser(userId),
+  ]);
+  const candidateQbIds = new Set(qbTransactions.map((transaction) => transaction.id));
+  const liveQbClaimHolders = allUserMatches.filter(
+    (match) => match.supersededAt === null && match.qbTransactionId !== null && candidateQbIds.has(match.qbTransactionId),
+  );
+
+  return {
+    statement,
+    bankTransactions: [...bankTransactions].sort(byId),
+    qbTransactions: [...qbTransactions].sort(byId),
+    currentStatementMatches: [...currentStatementMatches].sort(byId),
+    liveQbClaimHolders: [...liveQbClaimHolders].sort(byId),
+    claimGuardVersion,
+  };
 }
 
 // --- Matches --------------------------------------------------------------
